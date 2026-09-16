@@ -29,10 +29,6 @@ assert.equal(ranked[0].title, 'b/running');
 assert.equal(ranked[0].info, '2 running');
 assert.equal(ranked[2].info, 'not checked');
 assert.equal(model.rows([{repo:'a/b', description:'find this project'}], {}, {}, 'find this', Date.now()).length, 1);
-const transitioned = model.mergeActivity({repo:'a/b', runs:[{id:1,status:'in_progress'},{id:2,status:'completed'}]}, {runs:[],active:0,updated:'now'});
-assert.equal(transitioned.runs.length, 1);
-assert.equal(transitioned.runs[0].id, 2);
-assert.equal(transitioned.active, 0);
 const backing = [];
 let edits = 0;
 const list = {

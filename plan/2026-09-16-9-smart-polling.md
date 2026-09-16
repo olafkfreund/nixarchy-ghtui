@@ -180,3 +180,11 @@ Run existing model and QML lifecycle/navigation checks. After implementation app
 - [GitHub CLI API options](https://cli.github.com/manual/gh_api)
 
 Reviewed 2026-09-16: serial requests, retry/reset handling, and gh response-header support inform this design. Proposed intervals and the plugin request ceiling are our design choices, not GitHub guarantees.
+
+## Implementation record
+
+- Baseline recorded from 0.2.2 behavior: 902 requested pages over 30 idle minutes and 411 seconds for the initial activity pass with 137 repositories and one-second responses.
+- Background activity enqueues its next oldest candidate on demand; pre-enqueuing every unchecked repository delayed catalogue continuation pages. Summary order is recent history, in-progress, then the other active states, so the selected activity deadline is maintained. Both choices preserve the approved per-page fairness and recent-first design.
+- Candidate simulation: 713 idle requests, 168-second initial pass, 9-second selected summary; maximum warmed data ages 8.75/11.75/20.75 seconds for inspected jobs, selected activity and other active activity. Overload retains request limits and background fairness.
+- Real MCP candidate: 137 repositories discovered, search and selection stable through running workflow → jobs → 26 reported steps. Closing left no helper in flight. Completion is verified with a clearly labelled simulated workflow, separately from real GitHub monitoring.
+- Final validation includes 15 Python checks, model checks, deterministic scheduler scenarios and an asynchronous QML fake-API test. Paginated workflow/job snapshots deduplicate overlapping IDs. The labelled MCP completion fixture reached success and retained its final jobs timestamp while later summary polling continued.

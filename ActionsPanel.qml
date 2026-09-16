@@ -6,6 +6,7 @@ import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
 import "ActionsModel.js" as Model
+import "Polling.js" as Polling
 
 Item {
     id: root
@@ -23,20 +24,13 @@ Item {
     readonly property bool filtering: searchField.activeFocus
     property string error: ""
     property string updated: ""
-    property string discoveryError: ""
-    property string scanError: ""
-    property int nextPage: 1
-    property bool discoveryComplete: false
-    property int scanCursor: 0
-    property int scanTurns: 0
-    property int scanFailures: 0
-    property string scanningRepo: ""
-    property double catalogueUpdated: 0
+    property var polling: Polling.create()
+    property var requestInfo: null
+    property bool workerBusy: false
     property double now: Date.now()
-    property int failures: 0
-    property int jobFailures: 0
-    property string jobKey: ""
-    property bool loading: discoveryProc.running || summaryProc.running || jobsProc.running
+    readonly property bool loading: workerBusy
+    readonly property bool discoveryComplete: polling.catalogueComplete
+    readonly property string cooldownText: now < polling.cooldown ? "GitHub paused until " + new Date(polling.cooldown).toLocaleTimeString() : ""
     readonly property int checkedCount: repos.filter(function(repo) { return !!repo.checked || repo.archived || repo.disabled }).length
     readonly property real textScale: 1.5
     readonly property var current: entries[cursor] || null
@@ -44,6 +38,7 @@ Item {
     onFilterTextChanged: {
         expanded = ({})
         rebuild(true)
+        selectionChanged(false)
     }
 
     function open(payload) {
@@ -51,31 +46,23 @@ Item {
         targetScreen = null
         for (var i = 0; i < Quickshell.screens.length; i++)
             if (monitor && Quickshell.screens[i].name === monitor.name) targetScreen = Quickshell.screens[i]
+        if (!opened) Polling.open(polling, Date.now())
         opened = true
-        if (!discoveryComplete || Date.now() - catalogueUpdated > 300000) {
-            nextPage = 1
-            discoveryComplete = false
-            discover()
-        }
-        refresh()
-        scanTimer.restart()
+        selectionChanged(true)
+        pump()
         Qt.callLater(function() { keys.forceActiveFocus() })
     }
     function close() {
         opened = false
-        summaryTimer.stop()
-        jobsTimer.stop()
-        discoveryTimer.stop()
-        scanTimer.stop()
-        summaryProc.running = false
-        jobsProc.running = false
-        discoveryProc.running = false
-        activityProc.running = false
+        Polling.close(polling)
+        requestProc.running = false
     }
     function toggle() { opened ? close() : open("{}") }
     function status() {
         return JSON.stringify({opened: opened, rows: entries.length, repositories: repositories.length,
-            checked: checkedCount, discoveryComplete: discoveryComplete, error: error || discoveryError || scanError, updated: updated,
+            checked: checkedCount, discoveryComplete: discoveryComplete, error: error, updated: updated,
+            requests: polling.requests, inFlight: workerBusy, cooldown: polling.cooldown,
+            lastRequest: polling.lastRequest, lastStarted: polling.lastStarted,
             filter: filterText, editing: filtering, selected: current ? current.key : "", scrollY: list.contentY})
     }
 
@@ -107,7 +94,7 @@ Item {
     function move(delta) {
         cursor = Math.max(0, Math.min(entries.length - 1, cursor + delta))
         list.positionViewAtIndex(cursor, ListView.Contain)
-        jobsTimer.restart()
+        selectionChanged(false)
     }
     function expand(collapse) {
         var row = current
@@ -118,6 +105,7 @@ Item {
             else {
                 cursor = Model.selection(entries, row.parent, cursor)
                 list.positionViewAtIndex(cursor, ListView.Contain)
+                selectionChanged(false)
                 return
             }
         } else if (["repo", "run", "job"].indexOf(row.kind) >= 0) {
@@ -125,146 +113,60 @@ Item {
         }
         expanded = next
         rebuild()
-        if (row.kind === "repo" && next[row.key]) refresh()
-        fetchJobs()
+        selectionChanged(true)
+        pump()
     }
     function configure(text) {
         try {
             var config = JSON.parse(text)
             var entry = (config.plugins || []).filter(function(p) { return p.id === "olafkfreund.github-actions" })[0]
-            // Existing configured repos are initial hints; discovery still lists all access.
             var names = entry && Array.isArray(entry.repositories) ? entry.repositories : []
-            if (!repos.length && names.length) {
-                repositories = names
-                repos = names.filter(function(name) { return typeof name === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(name) }).map(function(name) { return {repo: name} })
-            }
-            error = ""
-            rebuild()
+            if (!polling.repos.length && names.length)
+                polling.repos = names.filter(function(name) { return typeof name === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(name) }).map(function(name) { return {repo:name} })
+            adopt()
         } catch (e) { error = "Configuration: " + e.message }
     }
-    function discover() {
-        if (!opened || discoveryProc.running || discoveryComplete) return
-        discoveryProc.command = ["python3", helper, "repositories", String(nextPage)]
-        discoveryProc.running = true
+    function selectionChanged(immediate) {
+        if (!polling) return
+        Polling.select(polling, current ? current.repo : "", current ? current.run : "", expanded, Date.now(), immediate)
     }
-    function rediscover() {
-        if (discoveryProc.running) return
-        nextPage = 1
-        discoveryComplete = false
-        discover()
-    }
-    function receiveDiscovery(text) {
-        if (!opened) return
-        try {
-            var data = JSON.parse(text)
-            if (data.error) throw new Error(data.error)
-            if (!Array.isArray(data.repos)) throw new Error("Invalid repository response")
-            var old = repos
-            var combined = nextPage === 1 ? [] : repos.slice()
-            data.repos.forEach(function(repo) {
-                var previous = old.filter(function(r) { return r.repo === repo.repo })[0]
-                if (!combined.some(function(r) { return r.repo === repo.repo }))
-                    combined.push(Object.assign({}, previous || {}, repo))
-            })
-            repos = combined
-            repositories = repos.map(function(repo) { return repo.repo })
-            nextPage = data.nextPage
-            discoveryComplete = nextPage === 0
-            if (discoveryComplete) catalogueUpdated = Date.now()
-            discoveryError = ""
-            rebuild()
-            if (!activityProc.running && !scanTimer.running) scanTimer.restart()
-        } catch (e) { discoveryError = e.message }
-    }
-    function scan() {
-        if (!opened || activityProc.running || !repos.length) return
-        // One request per turn, alternating active rechecks with round-robin discovery.
-        var candidates = repos.filter(function(repo) { return !repo.archived && !repo.disabled })
-        if (!candidates.length) return
-        var active = candidates.filter(function(repo) { return repo.active > 0 })
-            .sort(function(a, b) { return Date.parse(a.checked || 0) - Date.parse(b.checked || 0) })
-        var repo
-        if (++scanTurns % 3 === 0 && active.length && Date.now() - Date.parse(active[0].checked) >= 30000) repo = active[0]
-        else { repo = candidates[scanCursor % candidates.length]; scanCursor++ }
-        scanningRepo = repo.repo
-        activityProc.command = ["python3", helper, "activity", repo.repo]
-        activityProc.running = true
-    }
-    function receiveActivity(text) {
-        if (!opened) return
-        try {
-            var data = JSON.parse(text)
-            if (data.error) throw new Error(data.error)
-            if (!Array.isArray(data.runs)) throw new Error("Invalid activity response")
-            repos = repos.map(function(repo) { return repo.repo === data.repo ? Model.mergeActivity(repo, data) : repo })
-            scanFailures = 0
-            scanError = ""
-        } catch (e) {
-            repos = repos.map(function(repo) { return repo.repo === scanningRepo ? Object.assign({}, repo, {error: e.message, checked: new Date().toISOString()}) : repo })
-            var permissionError = e.message.indexOf("permission") >= 0 || e.message.indexOf("Repository unavailable") >= 0
-            scanError = permissionError ? "" : e.message
-            scanFailures = permissionError ? 0 : Math.min(scanFailures + 1, 7)
-        }
+    function adopt() {
+        repos = polling.repos.slice()
+        repositories = repos.map(function(repo) { return repo.repo })
+        details = Object.assign({}, polling.details)
+        error = polling.error
+        // Reassign the state reference to notify bindings after pure-JS mutations.
+        polling = Object.assign({}, polling)
         rebuild()
+        if (!polling.selected || !Polling.repoFor(polling, polling.selected)) selectionChanged(false)
     }
-    function refresh() {
-        if (!opened || summaryProc.running) return
-        if (!current) return
-        summaryTimer.stop()
-        summaryProc.command = ["python3", helper, "summary", current.repo]
-        summaryProc.running = true
+    function refresh(catalogue) {
+        selectionChanged(true)
+        Polling.manual(polling, Date.now(), !!catalogue)
+        pump()
     }
-    function receiveSummary(text) {
-        if (!opened) return
+    function pump() {
+        if (!opened || workerBusy) return
+        var request = Polling.next(polling, Date.now())
+        if (!request) return
+        requestInfo = request
+        workerBusy = true
+        requestProc.command = ["python3", helper, "page", JSON.stringify(request)]
+        requestProc.running = true
+    }
+    function receivePage(text, request) {
+        var reply
         try {
-            var data = JSON.parse(text)
-            if (data.error) throw new Error(data.error)
-            if (!Array.isArray(data.repos)) throw new Error("Invalid workflow response")
-            var failed = false
-            var incoming = data.repos.map(function(repo) {
-                if (repo.error) {
-                    failed = true
-                    var old = repos.filter(function(r) { return r.repo === repo.repo })[0]
-                    return Object.assign({}, old || {}, repo)
-                }
-                return Object.assign({}, repo, {active: repo.runs.filter(function(run) { return run.status === "in_progress" }).length,
-                    checked: data.updated, history: true})
-            })
-            repos = repos.map(function(repo) {
-                var replacement = incoming.filter(function(r) { return r.repo === repo.repo })[0]
-                return replacement ? Object.assign({}, repo, replacement) : repo
-            })
-            error = failed ? "Some repositories unavailable — showing last known data" : ""
-            failures = failed ? Math.min(failures + 1, 4) : 0
-            if (!failed) updated = data.updated
-            rebuild()
-        } catch (e) { error = e.message; failures = Math.min(failures + 1, 4) }
-    }
-    function fetchJobs() {
-        if (!opened || jobsProc.running) return
-        var row = current
-        if (!row || !row.run) return
-        var key = row.repo + ":" + row.run
-        if (!expanded[key]) return
-        jobKey = key
-        jobsProc.command = ["python3", helper, "jobs", row.repo, row.run]
-        jobsProc.running = true
-    }
-    function receiveJobs(text) {
-        if (!opened) return
-        var next = Object.assign({}, details)
-        try {
-            var data = JSON.parse(text)
-            if (data.error) throw new Error(data.error)
-            if (!Array.isArray(data.jobs)) throw new Error("Invalid jobs response")
-            next[jobKey] = data
-            jobFailures = 0
+            reply = JSON.parse(text)
+            if (!reply || reply.requestId !== request.requestId)
+                throw new Error("Workflow helper returned an invalid request identity")
         } catch (e) {
-            next[jobKey] = Object.assign({}, next[jobKey] || {}, {error: e.message})
-            jobFailures = Math.min(jobFailures + 1, 4)
+            reply = {requestId:request.requestId, error:"Workflow helper returned invalid data", errorType:"network"}
         }
-        details = next
-        rebuild()
+        if (Polling.complete(polling, reply, Date.now())) {
+            if (!reply.error) updated = new Date().toISOString()
+            adopt()
+        }
     }
     function statusColor(status) {
         if (["failure", "timed_out", "startup_failure", "error"].indexOf(status) >= 0) return Color.urgent
@@ -285,45 +187,15 @@ Item {
         onLoaded: root.configure(text())
         onFileChanged: reload()
     }
-    Timer { id: summaryTimer; interval: 30000 * Math.pow(2, root.failures); onTriggered: root.refresh() }
-    Timer { id: discoveryTimer; interval: root.discoveryError ? 30000 : 100; onTriggered: root.discover() }
-    Timer { id: scanTimer; interval: 2000 * Math.pow(2, root.scanFailures); onTriggered: root.scan() }
-    Timer { id: jobsTimer; interval: 5000 * Math.pow(2, root.jobFailures); onTriggered: { root.fetchJobs(); if (root.opened) restart() } }
+    Timer { interval: 100; running: root.opened; repeat: true; onTriggered: root.pump() }
     Timer { interval: 1000; running: root.opened; repeat: true; onTriggered: root.now = Date.now() }
     Process {
-        id: discoveryProc
-        stdout: StdioCollector { id: discoveryOutput }
-        stderr: StdioCollector { id: discoveryErrors }
+        id: requestProc
+        stdout: StdioCollector { id: pageOutput }
+        stderr: StdioCollector { id: pageErrors }
         onExited: function(code) {
-            root.receiveDiscovery(Model.reply(discoveryOutput.text, discoveryErrors.text, code))
-            if (root.opened && !root.discoveryComplete) discoveryTimer.restart()
-        }
-    }
-    Process {
-        id: activityProc
-        stdout: StdioCollector { id: activityOutput }
-        stderr: StdioCollector { id: activityErrors }
-        onExited: function(code) {
-            root.receiveActivity(Model.reply(activityOutput.text, activityErrors.text, code))
-            if (root.opened) scanTimer.restart()
-        }
-    }
-    Process {
-        id: summaryProc
-        stdout: StdioCollector { id: summaryOutput }
-        stderr: StdioCollector { id: summaryError }
-        onExited: function(code) {
-            root.receiveSummary(Model.reply(summaryOutput.text, summaryError.text, code))
-            if (root.opened) summaryTimer.restart()
-        }
-    }
-    Process {
-        id: jobsProc
-        stdout: StdioCollector { id: jobsOutput }
-        stderr: StdioCollector { id: jobsError }
-        onExited: function(code) {
-            root.receiveJobs(Model.reply(jobsOutput.text, jobsError.text, code))
-            if (root.opened) jobsTimer.restart()
+            root.receivePage(Model.reply(pageOutput.text, pageErrors.text, code), root.requestInfo)
+            root.workerBusy = false
         }
     }
 
@@ -371,8 +243,7 @@ Item {
                     else if ([Qt.Key_Right, Qt.Key_L, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space].indexOf(event.key) >= 0) root.expand(false)
                     else if (event.key === Qt.Key_Slash) { searchField.forceActiveFocus(); searchField.selectAll() }
                     else if (event.key === Qt.Key_R) {
-                        if (event.modifiers & Qt.ShiftModifier) root.rediscover()
-                        else { root.refresh(); root.fetchJobs(); root.scan(); if (!root.discoveryComplete) root.discover() }
+                        root.refresh(!!(event.modifiers & Qt.ShiftModifier))
                     }
                     else if (event.key === Qt.Key_O) root.openBrowser()
                     else event.accepted = false
@@ -415,9 +286,9 @@ Item {
                         Text {
                             anchors.fill: parent
                             visible: searchField.text.length === 0
-                            text: root.filtering ? "Search repositories…" : root.discoveryError || root.error || root.scanError ||
+                            text: root.filtering ? "Search repositories…" : root.cooldownText || root.error ||
                                 (root.discoveryComplete ? "Activity checked " + root.checkedCount + "/" + root.repositories.length + " · running first · / search repositories" : "Discovering repositories… " + root.repositories.length + " found")
-                            color: root.error || root.discoveryError || root.scanError ? Color.urgent : Color.menu.text
+                            color: root.error || root.cooldownText ? Color.urgent : Color.menu.text
                             opacity: 0.75
                             font: searchField.font
                             elide: Text.ElideRight
@@ -497,7 +368,7 @@ Item {
                     Text {
                         id: footer
                         width: parent.width
-                        text: "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  Esc close"
+                        text: root.cooldownText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  Esc close"
                         color: Color.menu.text
                         opacity: 0.65
                         font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.caption * root.textScale) }
