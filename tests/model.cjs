@@ -15,7 +15,7 @@ assert.equal(rows[2].info.startsWith('1/1 steps'), true);
 assert.equal(model.selection(rows, 'owner/repo:7:8', 0), 2);
 assert.equal(model.selection([], 'missing', 5), 0);
 assert.equal(model.rows(repos, {}, details, '', Date.now()).length, 1);
-assert.equal(model.rows(repos, {}, {}, 'main', Date.now()).length, 2);
+assert.equal(model.rows(repos, {}, {}, 'main', Date.now()).length, 1);
 assert.equal(model.rows(repos, expanded, details, 'missing', Date.now()).length, 0);
 assert.equal(model.rows(repos, expanded, {}, '', Date.now())[2].title, 'Loading jobs…');
 assert.equal(model.duration({started_at:'2026-01-01T00:00:00Z'}, Date.parse('2026-01-01T00:01:15Z')), '1m 15s');
@@ -33,4 +33,27 @@ const transitioned = model.mergeActivity({repo:'a/b', runs:[{id:1,status:'in_pro
 assert.equal(transitioned.runs.length, 1);
 assert.equal(transitioned.runs[0].id, 2);
 assert.equal(transitioned.active, 0);
+const backing = [];
+let edits = 0;
+const list = {
+  get count() { return backing.length; },
+  get(i) { return backing[i]; },
+  insert(i, value) { backing.splice(i, 0, value); edits++; },
+  move(from, to) { backing.splice(to, 0, ...backing.splice(from, 1)); edits++; },
+  remove(i, count) { backing.splice(i, count); edits++; },
+  setProperty(i, role, value) { backing[i][role] = value; edits++; }
+};
+const first = [{key:'a',title:'A',status:'queued'}, {key:'b',title:'B',status:'queued'}];
+assert.equal(model.syncRows(list, first), true);
+const originalA = backing[0];
+edits = 0;
+assert.equal(model.syncRows(list, first), false);
+assert.equal(edits, 0, 'Identical polling result must not reset or update delegates');
+assert.equal(model.syncRows(list, [{...first[0],status:'in_progress'}, first[1]]), false);
+assert.equal(backing[0], originalA, 'Status update preserves existing row');
+assert.equal(model.syncRows(list, [first[1], first[0]]), true);
+assert.equal(backing[1], originalA, 'Reordering moves the row instead of recreating it');
+model.syncRows(list, [first[0]]);
+assert.equal(list.count, 1);
+assert.equal(backing[0].rowKey, 'a');
 console.log('Model: hierarchy, filtering, progress, selection and duration passed');

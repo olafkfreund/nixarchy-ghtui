@@ -19,8 +19,8 @@ Item {
     property var expanded: ({})
     property var entries: []
     property int cursor: 0
-    property string filterText: ""
-    property bool filtering: false
+    property alias filterText: searchField.text
+    readonly property bool filtering: searchField.activeFocus
     property string error: ""
     property string updated: ""
     property string discoveryError: ""
@@ -41,6 +41,10 @@ Item {
     readonly property real textScale: 1.5
     readonly property var current: entries[cursor] || null
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
+    onFilterTextChanged: {
+        expanded = ({})
+        rebuild(true)
+    }
 
     function open(payload) {
         var monitor = Hyprland.focusedMonitor
@@ -71,14 +75,34 @@ Item {
     function toggle() { opened ? close() : open("{}") }
     function status() {
         return JSON.stringify({opened: opened, rows: entries.length, repositories: repositories.length,
-            checked: checkedCount, discoveryComplete: discoveryComplete, error: error || discoveryError || scanError, updated: updated})
+            checked: checkedCount, discoveryComplete: discoveryComplete, error: error || discoveryError || scanError, updated: updated,
+            filter: filterText, editing: filtering, selected: current ? current.key : "", scrollY: list.contentY})
     }
 
-    function rebuild() {
+    function rebuild(resetSelection) {
         var key = current ? current.key : ""
-        entries = Model.rows(repos, expanded, details, filterText, now)
-        cursor = Model.selection(entries, key, cursor)
-        Qt.callLater(function() { list.positionViewAtIndex(root.cursor, ListView.Contain) })
+        var topIndex = list.indexAt(1, list.contentY + 1)
+        var topItem = list.itemAtIndex(topIndex)
+        var topKey = entries[topIndex] ? entries[topIndex].key : ""
+        var topOffset = topItem ? topItem.y - list.contentY : 0
+        var next = Model.rows(repos, expanded, details, filterText, now)
+        var structureChanged = Model.syncRows(visibleRows, next)
+        entries = next
+        cursor = resetSelection ? 0 : Model.selection(entries, key, cursor)
+        if (resetSelection) {
+            list.forceLayout()
+            list.positionViewAtBeginning()
+        } else if (structureChanged && topKey) {
+            var index = entries.findIndex(function(row) { return row.key === topKey })
+            list.forceLayout()
+            if (index >= 0) {
+                list.positionViewAtIndex(index, ListView.Beginning)
+                list.forceLayout()
+                var item = list.itemAtIndex(index)
+                if (item) list.contentY = item.y - topOffset
+                list.returnToBounds()
+            }
+        }
     }
     function move(delta) {
         cursor = Math.max(0, Math.min(entries.length - 1, cursor + delta))
@@ -91,7 +115,11 @@ Item {
         var next = Object.assign({}, expanded)
         if (collapse) {
             if (next[row.key]) delete next[row.key]
-            else { cursor = Model.selection(entries, row.parent, cursor); return }
+            else {
+                cursor = Model.selection(entries, row.parent, cursor)
+                list.positionViewAtIndex(cursor, ListView.Contain)
+                return
+            }
         } else if (["repo", "run", "job"].indexOf(row.kind) >= 0) {
             next[row.key] = !next[row.key]
         }
@@ -249,6 +277,7 @@ Item {
     }
 
     Component.onCompleted: rebuild()
+    ListModel { id: visibleRows; dynamicRoles: true }
     FileView {
         path: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
         watchChanges: true
@@ -329,16 +358,9 @@ Item {
                 focus: true
                 Keys.onPressed: function(event) {
                     event.accepted = true
-                    if (root.filtering) {
-                        if (event.key === Qt.Key_Escape) { root.filtering = false; root.filterText = "" }
-                        else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.filtering = false
-                        else if (event.key === Qt.Key_Backspace) root.filterText = root.filterText.slice(0, -1)
-                        else if (event.text && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) root.filterText += event.text
-                        root.rebuild()
-                        return
-                    }
                     if (event.key === Qt.Key_Escape) {
-                        if (root.filterText) { root.filterText = ""; root.rebuild() } else root.close()
+                        if (root.filterText) root.filterText = ""
+                        else root.close()
                     } else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) root.move(1)
                     else if (event.key === Qt.Key_Up || event.key === Qt.Key_K) root.move(-1)
                     else if (event.key === Qt.Key_PageDown) root.move(8)
@@ -347,7 +369,7 @@ Item {
                     else if (event.key === Qt.Key_End) root.move(root.entries.length)
                     else if (event.key === Qt.Key_Left || event.key === Qt.Key_H) root.expand(true)
                     else if ([Qt.Key_Right, Qt.Key_L, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space].indexOf(event.key) >= 0) root.expand(false)
-                    else if (event.key === Qt.Key_Slash) root.filtering = true
+                    else if (event.key === Qt.Key_Slash) { searchField.forceActiveFocus(); searchField.selectAll() }
                     else if (event.key === Qt.Key_R) {
                         if (event.modifiers & Qt.ShiftModifier) root.rediscover()
                         else { root.refresh(); root.fetchJobs(); root.scan(); if (!root.discoveryComplete) root.discover() }
@@ -366,15 +388,41 @@ Item {
                         font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.title * root.textScale); bold: true }
                         textFormat: Text.PlainText
                     }
-                    Text {
+                    TextInput {
+                        id: searchField
                         width: parent.width
-                        text: root.filtering || root.filterText ? "/ " + root.filterText + (root.filtering ? "▏" : "") : root.discoveryError || root.error || root.scanError ||
-                            (root.discoveryComplete ? "Activity checked " + root.checkedCount + "/" + root.repositories.length + " · running first · / search repositories" : "Discovering repositories… " + root.repositories.length + " found")
-                        color: root.error || root.discoveryError || root.scanError ? Color.urgent : Color.menu.text
-                        opacity: 0.75
+                        height: Math.ceil(font.pixelSize * 1.4)
+                        color: Color.menu.text
                         font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.caption * root.textScale) }
-                        elide: Text.ElideRight
-                        textFormat: Text.PlainText
+                        clip: true
+                        selectByMouse: true
+                        selectionColor: Color.menu.selectedBackground
+                        selectedTextColor: Color.menu.selectedText
+                        Keys.onPressed: function(event) {
+                            if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+                                root.move(event.key === Qt.Key_Up ? -1 : 1)
+                            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                                keys.forceActiveFocus()
+                                root.expand(false)
+                            } else if (event.key === Qt.Key_Escape) {
+                                root.filterText = ""
+                                keys.forceActiveFocus()
+                            } else if (event.key === Qt.Key_Tab) {
+                                keys.forceActiveFocus()
+                            } else return
+                            event.accepted = true
+                        }
+                        Text {
+                            anchors.fill: parent
+                            visible: searchField.text.length === 0
+                            text: root.filtering ? "Search repositories…" : root.discoveryError || root.error || root.scanError ||
+                                (root.discoveryComplete ? "Activity checked " + root.checkedCount + "/" + root.repositories.length + " · running first · / search repositories" : "Discovering repositories… " + root.repositories.length + " found")
+                            color: root.error || root.discoveryError || root.scanError ? Color.urgent : Color.menu.text
+                            opacity: 0.75
+                            font: searchField.font
+                            elide: Text.ElideRight
+                            textFormat: Text.PlainText
+                        }
                     }
                     Rectangle { width: parent.width; height: 1; color: Color.menu.border; opacity: 0.4 }
                     ListView {
@@ -382,10 +430,11 @@ Item {
                         width: parent.width
                         height: Math.max(0, parent.height - y - footer.height - Style.spacing.md)
                         clip: true
-                        model: root.entries
+                        model: visibleRows
                         boundsBehavior: Flickable.StopAtBounds
                         delegate: Rectangle {
-                            required property var modelData
+                            required property var rowData
+                            readonly property var modelData: rowData
                             required property int index
                             width: list.width
                             height: modelData.subtitle ? Math.max(Style.space(64), (Style.font.body + Style.font.caption) * root.textScale + Style.space(16)) : Math.max(Style.space(40), Style.font.body * root.textScale + Style.space(12))

@@ -37,3 +37,14 @@ Disable/remove plugin via omarchy plugin commands and remove its one keybinding.
 Review: scanning all statuses across every repository would consume six requests per repository per pass. One lightweight in-progress query finds running repositories; selected-repository expansion still fetches pending/queued/waiting states. A full activity pass takes minutes for hundreds of repositories; the UI must not pretend unchecked means idle. Nine Python tests, model tests and QML checks pass. Live discovery found 137 repositories and placed running nixarchy first.
 
 Final follow-up validation: live end-to-end discovery → active repository → workflow → jobs → 26 steps passed with 137 repositories and no application error. The expanded QML regression checks also cover discovery pagination, active-first sorting and permission-error handling.
+
+## Authorized interaction fix: #5
+
+The user requested direct MCP desktop testing after repeated refresh jumps and unusable search.
+
+1. Replace the simulated search editor with native Qt TextInput. Arrow keys select results during editing; Enter expands the selected result and returns to navigation; Tab returns without expanding. Search does not automatically expand matching trees.
+2. Update a persistent ListModel by row key, preserving delegates, selected identity and viewport position during background responses. Reset selection and viewport when the query changes.
+3. Verify model updates and QML search/selection across polling, then exercise the visible popup through MCP keyboard input and screenshots. The user confirmed the live candidate works.
+4. Document controls, release 0.2.1, open a PR closing #5 with artifact links, merge after checks, and update the installed plugin.
+
+Rollback: revert this fix and restart the session shell to reload the previous plugin version.
