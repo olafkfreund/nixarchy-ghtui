@@ -40,7 +40,7 @@ function rows(repos, expanded, details, filter, now) {
             subtitle: repo.error || repo.description || "", status: repo.error ? "error" : (active ? "in_progress" : "neutral"),
             info: repo.archived ? "archived" : repo.disabled ? "disabled" : repo.error ? "unavailable" : repo.checked || repo.runs ? active + " running" : "not checked",
             repo: repo.repo, url: "https://github.com/" + repo.repo + "/actions"});
-        if (!expanded[repoKey] && !query) return;
+        if (!expanded[repoKey]) return;
         runs.forEach(function(run) {
             var runKey = repo.repo + ":" + run.id;
             var detail = details[runKey];
@@ -79,4 +79,28 @@ function mergeActivity(repo, data) {
 function selection(rows, key, previous) {
     for (var i = 0; i < rows.length; i++) if (rows[i].key === key) return i;
     return Math.max(0, Math.min(previous, rows.length - 1));
+}
+
+// Keep delegates alive when polling changes a status or inserts a running repo.
+function syncRows(model, rows) {
+    var structureChanged = false;
+    for (var i = 0; i < rows.length; i++) {
+        var found = -1;
+        for (var j = i; j < model.count; j++) {
+            if (model.get(j).rowKey === rows[i].key) { found = j; break; }
+        }
+        if (found < 0) {
+            model.insert(i, {rowKey: rows[i].key, rowData: rows[i]});
+            structureChanged = true;
+        } else {
+            if (found !== i) { model.move(found, i, 1); structureChanged = true; }
+            if (JSON.stringify(model.get(i).rowData) !== JSON.stringify(rows[i]))
+                model.setProperty(i, "rowData", rows[i]);
+        }
+    }
+    if (model.count > rows.length) {
+        model.remove(rows.length, model.count - rows.length);
+        structureChanged = true;
+    }
+    return structureChanged;
 }

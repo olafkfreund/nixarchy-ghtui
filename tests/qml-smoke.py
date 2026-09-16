@@ -44,6 +44,14 @@ ShellRoot {
             check(panel.repositories.length === 2 && panel.discoveryComplete, "complete catalogue")
             panel.receiveActivity('{"repo":"two/repo","runs":[{"id":9,"name":"CI","status":"in_progress"}],"active":1,"updated":"2026-09-16T10:00:00Z"}')
             check(panel.entries[0].repo === "two/repo", "running repository first")
+            panel.filterText = "repo"
+            check(panel.cursor === 0 && panel.entries.length === 2, "search starts at first collapsed result")
+            panel.move(1)
+            var selected = panel.current.key
+            panel.receiveActivity('{"repo":"two/repo","runs":[],"active":0,"updated":"2026-09-16T10:00:05Z"}')
+            check(panel.current.key === selected && panel.filterText === "repo", "poll preserves searched selection")
+            panel.expand(false)
+            check(panel.expanded[selected], "searched result can expand")
             panel.receiveActivity('{"error":"Repository unavailable or Actions read permission missing"}')
             check(panel.scanFailures === 0, "permission error does not back off entire scan")
             panel.close()

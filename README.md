@@ -32,7 +32,7 @@ omarchy-shell shell toggle olafkfreund.github-actions '{}'
 
 No manual repository list is required. Opening the popup fetches every page of GitHub's authenticated `GET /user/repos` endpoint with owner, collaborator and organisation-member affiliations. This covers repositories associated with your account and visible to the current token, not every public repository on GitHub. Archived and disabled repositories remain searchable but are not polled for activity. Currently github.com only; local checkouts are not required.
 
-Press **/** and type an owner, repository name or description. Press **Enter** to finish searching, then expand a repository to inspect its runs. Repositories with running workflows move to the top as activity is discovered; unchecked repositories say **not checked**. The header shows scan progress. Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
+Press **/** and type an owner, repository name or description. Use **↑ / ↓** while typing to select a result, then **Enter** to expand it and resume navigation. **Tab** finishes editing without expanding. Search results stay collapsed until you expand them. Repositories with running workflows move to the top as activity is discovered; unchecked repositories say **not checked**. The header shows scan progress. Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
 
 The catalogue and known activity stay in memory between openings. After five minutes, reopening refreshes the repository catalogue; **Shift + R** refreshes it immediately when you gain access to another repository. Legacy `repositories` settings are startup hints only and do not limit discovery.
 
@@ -49,7 +49,9 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | ← / h | Collapse, or move to parent |
 | Page Up / Down, Home / End | Move through long lists |
 | / | Filter repositories/runs by name, branch or state |
-| Enter while filtering | Keep filter and resume navigation |
+| ↑ / ↓ while filtering | Select a search result |
+| Enter while filtering | Expand selected result and resume navigation |
+| Tab while filtering | Resume navigation without expanding |
 | Esc | Clear filter, then close |
 | r | Refresh summaries and selected expanded run |
 | Shift + R | Rediscover repositories from GitHub |
