@@ -1,3 +1,8 @@
+function reply(stdout, stderr, code) {
+    if (stdout.trim()) return stdout;
+    return JSON.stringify({error: stderr.trim().slice(0, 300) || "Workflow helper returned no data (exit " + code + ")"});
+}
+
 function state(item) {
     return item.conclusion || item.status || "unknown";
 }
@@ -23,22 +28,23 @@ function duration(item, now) {
 function rows(repos, expanded, details, filter, now) {
     var result = [];
     var query = filter.toLowerCase();
-    repos.forEach(function(repo) {
-        var repoMatch = repo.repo.toLowerCase().indexOf(query) >= 0;
+    repos.slice().sort(function(a, b) { return (b.active || 0) - (a.active || 0); }).forEach(function(repo) {
+        var repoMatch = (repo.repo + " " + (repo.description || "")).toLowerCase().indexOf(query) >= 0;
         var runs = (repo.runs || []).filter(function(run) {
             return repoMatch || [run.name, run.display_title, run.head_branch, state(run)].join(" ").toLowerCase().indexOf(query) >= 0;
         });
         if (query && !repoMatch && !runs.length) return;
-        var active = (repo.runs || []).filter(function(run) { return run.status !== "completed"; }).length;
+        var active = repo.active === undefined ? (repo.runs || []).filter(function(run) { return run.status === "in_progress"; }).length : repo.active;
         var repoKey = "repo:" + repo.repo;
         result.push({key: repoKey, parent: "", kind: "repo", depth: 0, title: repo.repo,
-            subtitle: repo.error || (repo.runs ? "" : "Loading workflows…"), status: repo.error ? "error" : (active ? "in_progress" : "neutral"),
-            info: active + " active", repo: repo.repo, url: "https://github.com/" + repo.repo + "/actions"});
+            subtitle: repo.error || repo.description || "", status: repo.error ? "error" : (active ? "in_progress" : "neutral"),
+            info: repo.archived ? "archived" : repo.disabled ? "disabled" : repo.error ? "unavailable" : repo.checked || repo.runs ? active + " running" : "not checked",
+            repo: repo.repo, url: "https://github.com/" + repo.repo + "/actions"});
         if (!expanded[repoKey] && !query) return;
         runs.forEach(function(run) {
             var runKey = repo.repo + ":" + run.id;
             var detail = details[runKey];
-            var stamp = detail && detail.updated ? " · jobs fetched " + new Date(detail.updated).toLocaleTimeString() : "";
+            var stamp = detail && detail.updated ? " · jobs fetched " + detail.updated.slice(11, 19) + " UTC" : "";
             result.push({key: runKey, parent: repoKey, kind: "run", depth: 1, title: run.name || "Workflow",
                 subtitle: (run.head_branch || "") + " · #" + run.run_number + stamp + " · " + (run.display_title || ""),
                 status: state(run), info: duration(run, now), repo: repo.repo, run: String(run.id), url: run.html_url});
@@ -60,6 +66,14 @@ function rows(repos, expanded, details, filter, now) {
         });
     });
     return result;
+}
+
+function mergeActivity(repo, data) {
+    var ids = {};
+    data.runs.forEach(function(run) { ids[run.id] = true; });
+    var completed = (repo.runs || []).filter(function(run) { return run.status !== "in_progress" && !ids[run.id]; });
+    return Object.assign({}, repo, {runs: data.runs.concat(completed), active: data.active,
+        checked: data.updated, error: ""});
 }
 
 function selection(rows, key, previous) {

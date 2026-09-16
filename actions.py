@@ -72,6 +72,26 @@ def runs(repo):
     return sorted(found.values(), key=lambda run: (run["status"] == "completed", -run["id"]))
 
 
+def repositories_page(page):
+    if not page.isdigit() or int(page) < 1:
+        raise ValueError("Repository page must be a positive number")
+    rows = api("user/repos?affiliation=owner,collaborator,organization_member"
+               f"&sort=pushed&direction=desc&per_page=100&page={page}")
+    if not isinstance(rows, list):
+        raise ValueError("Unexpected repository response")
+    return {"repos": [{"repo": repo_name(row["full_name"]),
+                       "description": row.get("description") or "",
+                       "archived": row.get("archived", False),
+                       "disabled": row.get("disabled", False)} for row in rows],
+            "nextPage": int(page) + 1 if len(rows) == 100 else 0}
+
+
+def activity(repo):
+    repo = repo_name(repo)
+    running = list(pages(f"repos/{repo}/actions/runs?status=in_progress", "workflow_runs"))
+    return {"repo": repo, "runs": running, "active": len(running)}
+
+
 def summary(repos):
     result = []
     for repo in dict.fromkeys(repo_name(value) for value in repos):
@@ -85,7 +105,7 @@ def summary(repos):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("summary", "jobs"))
+    parser.add_argument("mode", choices=("summary", "jobs", "repositories", "activity"))
     parser.add_argument("targets", nargs="+")
     args = parser.parse_args()
     # Bound the complete request, including all pages/repositories.
@@ -99,7 +119,15 @@ def main():
     signal.signal(signal.SIGTERM, cancelled)
     signal.alarm(90)
     try:
-        if args.mode == "summary":
+        if args.mode == "repositories":
+            if len(args.targets) != 1:
+                raise ValueError("repositories requires one page number")
+            data = repositories_page(args.targets[0])
+        elif args.mode == "activity":
+            if len(args.targets) != 1:
+                raise ValueError("activity requires one repository")
+            data = activity(args.targets[0])
+        elif args.mode == "summary":
             data = {"repos": summary(args.targets)}
         else:
             if len(args.targets) != 2 or not args.targets[1].isdigit():
