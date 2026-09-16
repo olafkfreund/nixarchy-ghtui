@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "olafkfreund.github-actions",
+  "name": "GitHub Actions",
+  "version": "0.1.0",
+  "author": "olafkfreund",
+  "description": "Keyboard-driven workflow, job and step monitor",
+  "kinds": ["panel"],
+  "entryPoints": {"panel": "Panel.qml"}
+}

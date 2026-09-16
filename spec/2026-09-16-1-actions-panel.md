@@ -8,7 +8,7 @@ intent: intent/2026-09-16-1-actions-panel.md
 ## Design
 A namespaced panel plugin with manifest.json and Panel.qml, hosted by omarchy-shell. Use qs.Commons Color/Style and qs.Ui BorderSurface. Grouped repository/run/job/step rows follow the screenshot, theme radius and spacing. Arrow keys or j/k move; Enter/right expands; left collapses; slash filters; r refreshes; Esc clears filtering or closes. No buttons.
 
-Use a Python standard-library helper invoking gh api through argv for paginated active run summaries and selected-run jobs. Python is already installed. Keep completed runs from the current session and a small recent history. QML Process runs asynchronously; a single request per process, timeouts, errors, backoff, no polling while closed. Repository configuration lives inline in shell.json. Default olafkfreund/nixarchy. No token extraction.
+Use a Python standard-library helper invoking gh api through argv for paginated active run summaries and selected-run jobs. Python is already installed. Include the ten most recent runs alongside active runs. QML Process runs asynchronously; a single request per process, timeouts, errors, backoff, no polling while closed. Repository configuration lives inline in shell.json. Default olafkfreund/nixarchy. No token extraction.
 
 ## Alternatives rejected
 Embedding a terminal TUI cannot provide the native theme/layout contract. A web service, database and extra dependencies are unnecessary. Automatic discovery of every accessible repository would cause surprising API traffic; explicitly configured repositories define the monitored set.

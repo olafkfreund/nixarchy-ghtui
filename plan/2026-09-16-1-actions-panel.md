@@ -18,3 +18,11 @@ python3 -m unittest discover -s tests -v; node tests/model.cjs. Real helper call
 
 ## Rollback
 Disable/remove plugin via omarchy plugin commands and remove its one keybinding. No system rebuild or system service change. Revert source commit to undo development.
+
+## Implementation review
+
+- Recent history is the ten newest runs plus paginated active runs; no session-long history cache. This avoids preserving obsolete active states or adding individual reconciliation requests. Spec wording aligned in the implementation commit.
+- Cached expanded runs show when jobs were fetched; only the selected expanded run refreshes every five seconds. Summary refresh is thirty seconds after completion. Both back off on errors.
+- Elapsed labels rebuild on data refresh; a separate lightweight clock updates the global freshness label without rebuilding the list every second.
+- Six Python checks (including child cancellation), JS tree checks and an isolated QML lifecycle/navigation check pass. Read-only real requests return nixarchy workflows, two jobs and thirteen steps. A temporary populated popup was visually inspected with the current theme.
+- Live installation and shortcut activation remain deferred solely because the running Omarchy tree resolves to 4.0.3 while the installed package is 4.0.4. No user shell configuration has changed.
