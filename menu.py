@@ -20,12 +20,14 @@ def session_tree(instances):
 
 def main():
     try:
+        if sys.argv[1:] not in ([], ["keys"], ["toggle"]):
+            raise ValueError("Usage: menu.py [keys|toggle]")
         instances = json.loads(subprocess.check_output(
             ["quickshell", "list", "--all", "--json"], text=True, timeout=5))
         os.environ["OMARCHY_PATH"] = session_tree(instances)
         command = (["bash", str(Path(__file__).with_name("keybindings.sh"))]
                    if sys.argv[1:] == ["keys"] else
-                   ["omarchy-shell", "shell", "summon", "olafkfreund.github-actions", "{}"])
+                   ["omarchy-shell", "shell", "toggle" if sys.argv[1:] == ["toggle"] else "summon", "olafkfreund.github-actions", "{}"])
         os.execvp(command[0], command)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"GitHub Actions: {error}", file=sys.stderr)
