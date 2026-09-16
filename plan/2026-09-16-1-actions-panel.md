@@ -48,3 +48,16 @@ The user requested direct MCP desktop testing after repeated refresh jumps and u
 4. Document controls, release 0.2.1, open a PR closing #5 with artifact links, merge after checks, and update the installed plugin.
 
 Rollback: revert this fix and restart the session shell to reload the previous plugin version.
+
+## Authorized menu integration: #7
+
+The user requested menu discovery and all keyboard controls in Omarchy’s keyboard UI.
+
+1. Add a main-menu launcher and Learn keyboard-reference entry using the native user JSONC extension; preserve unrelated entries. Ship the mergeable entries with the plugin.
+2. Reuse omarchy-menu-select for a searchable reference covering global launcher/help shortcuts, navigation, expansion, search editing, refresh and GitHub opening. Add the free Super+Ctrl+Alt+A reference shortcut beside Super+Alt+A; both appear in the existing global keyboard menu. Do not register panel-local keys as global actions.
+3. Verify shell syntax, reference content, JSON, binding conflicts and Hyprland config errors; test menu launcher and keyboard reference through MCP. Publish tested 0.2.2 and install the files and user extension. No shell restart is required for menu-only changes.
+
+Rollback: remove the two documented extension entries and help binding, and revert the source commit.
+
+Runtime review: Omarchy executes menu actions in a login shell, which can select a newer NixOS generation than the active desktop. A small menu.py wrapper reads Quickshell’s JSON instance list for the current display and resolves the running Omarchy tree before invoking the existing launcher or key reference. Reject missing or ambiguous trees. This avoids hardcoded store paths; uwsm-app inherited the incorrect login-shell override too. Verify tree detection and failure paths with temporary directories, then retest the real menu.
+The launcher and help bindings use the same session resolver; the launcher retains toggle behavior.

@@ -20,13 +20,19 @@ omarchy plugin add https://github.com/olafkfreund/nixarchy-ghtui.git --enable
 
 This repository is currently private, so Git must have access to clone it.
 
-Check `omarchy menu keybindings --print` for conflicts, then add the line from `bindings.example.lua` to your writable `~/.config/hypr/bindings.lua`. If Home Manager owns the file, change its declarative source instead. Validate with `hyprctl reload` followed by `hyprctl configerrors`.
+Check `omarchy menu keybindings --print` for conflicts, then add the lines from `bindings.example.lua` to your writable `~/.config/hypr/bindings.lua`. If Home Manager owns the file, change its declarative source instead. Validate with `hyprctl reload` followed by `hyprctl configerrors`.
 
 Suggested shortcut: **Super + Alt + A**, installed on this desktop. You can also open directly:
 
 ```sh
 omarchy-shell shell toggle olafkfreund.github-actions '{}'
 ```
+
+## Omarchy menus
+
+Merge the entries from `menu.example.json` into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, preserving existing entries. Omarchy reloads this file automatically. The main menu gets **GitHub Actions** (also searchable as workflows/pipelines); **Learn → GitHub Actions keybindings** opens a searchable native reference for every panel control.
+
+**Super+K** opens Omarchy’s keyboard menu: search **GitHub Actions** to find the launcher and **GitHub Actions keybindings**. The latter also opens directly with **Super+Ctrl+Alt+A**. Panel-local keys are documented in this reference; they only act inside the popup. The two bindings and menu entries are installed on this desktop.
 
 ## Repositories
 
@@ -81,4 +87,4 @@ Node is only used by tests. The QML check requires a graphical session, Quickshe
 
 ## Remove
 
-Remove the keybinding and run `omarchy plugin remove olafkfreund.github-actions`. No NixOS rebuild is required for a user-owned plugin.
+Remove both keybindings and the two entries from `menu.example.json`, then run `omarchy plugin remove olafkfreund.github-actions`. No NixOS rebuild is required for a user-owned plugin.
