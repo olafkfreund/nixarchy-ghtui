@@ -4,7 +4,7 @@ function reply(stdout, stderr, code) {
 }
 
 function state(item) {
-    return item.conclusion || item.status || "unknown";
+    return item.awaitingFinal ? "awaiting final status" : item.lookupError ? "unavailable" : item.conclusion || item.status || "unknown";
 }
 
 function icon(status) {
@@ -66,14 +66,6 @@ function rows(repos, expanded, details, filter, now) {
         });
     });
     return result;
-}
-
-function mergeActivity(repo, data) {
-    var ids = {};
-    data.runs.forEach(function(run) { ids[run.id] = true; });
-    var completed = (repo.runs || []).filter(function(run) { return run.status !== "in_progress" && !ids[run.id]; });
-    return Object.assign({}, repo, {runs: data.runs.concat(completed), active: data.active,
-        checked: data.updated, error: ""});
 }
 
 function selection(rows, key, previous) {

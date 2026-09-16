@@ -87,5 +87,71 @@ class ActionsTest(unittest.TestCase):
             self.assertIn("error", json.loads(result.stdout)["repos"][0])
 
 
+class PageTest(unittest.TestCase):
+    def test_headers_pagination_and_single_call(self):
+        task = {"kind":"activity", "repo":"a/b", "page":1, "requestId":3}
+        output = ('HTTP/1.1 100 Continue\r\n\r\nHTTP/2.0 200 OK\r\n'
+                  'X-RateLimit-Remaining: 42\r\nX-RateLimit-Reset: 1700000000\r\n'
+                  'Authorization: must-not-escape\r\n'
+                  'Link: <https://api.github.com/repos/a/b/actions/runs?status=in_progress&per_page=100&page=2>; rel="next"\r\n\r\n'
+                  '{"workflow_runs":[{"id":7,"status":"in_progress"}]}')
+        with patch.object(actions, "request", return_value=(output, "", 0)) as request:
+            result = actions.read_page(task)
+            self.assertEqual(request.call_count, 1)
+            self.assertTrue(request.call_args.kwargs["include"])
+            self.assertEqual(result["nextPage"], 2)
+            self.assertEqual(result["remaining"], 42)
+            self.assertEqual(result["resetAt"], 1700000000000)
+            self.assertEqual(result["requestId"], 3)
+            self.assertNotIn("must-not-escape", json.dumps(result))
+
+    def test_api_errors_keep_metadata(self):
+        for status, message, extra, expected in [
+            (403, "API rate limit exceeded", "X-RateLimit-Remaining: 0\nX-RateLimit-Reset: 1700000000\n", "rate"),
+            (429, "slow down", "Retry-After: 60\n", "rate"),
+            (403, "secondary rate limit", "", "rate"),
+            (401, "Bad credentials", "", "auth"),
+            (403, "Resource not accessible", "", "permission"),
+            (404, "Not found", "", "permission"),
+            (502, "Unavailable", "", "network")]:
+            with self.subTest(status=status, message=message), patch.object(actions, "request", return_value=(
+                    f"HTTP/2.0 {status} Error\n{extra}\n" + json.dumps({"message":message}), "gh failed", 1)):
+                result = actions.read_page({"kind":"catalogue", "requestId":1})
+                self.assertEqual(result["errorType"], expected)
+                self.assertEqual(result["httpStatus"], status)
+                if "Retry-After" in extra:
+                    self.assertGreater(result["retryAt"], time.time() * 1000)
+                if "Remaining" in extra:
+                    self.assertEqual(result["remaining"], 0)
+
+    def test_validation_and_broken_responses(self):
+        for task in [{"kind":"url"}, {"kind":"catalogue", "page":0, "requestId":1},
+                     {"kind":"activity", "repo":"a/..", "requestId":1},
+                     {"kind":"jobs", "repo":"a/b", "run":"../x", "requestId":1},
+                     {"kind":"summary", "repo":"a/b", "status":"evil", "requestId":1}]:
+            with self.assertRaises(ValueError):
+                actions.page_endpoint(task)
+        for stdout in ["", "garbage", "HTTP/2.0 200 OK\n\ninvalid", "HTTP/2.0 200 OK\n\n{}"]:
+            with patch.object(actions, "request", return_value=(stdout, "", 0)):
+                self.assertEqual(actions.read_page({"kind":"catalogue", "requestId":1})["errorType"], "network")
+        with self.assertRaises(ValueError):
+            actions.next_page("user/repos?per_page=100&page=1", {"link":'<https://evil.test/user/repos?per_page=100&page=2>; rel="next"'})
+
+    def test_missing_auth_and_non_json_rate_error(self):
+        task = {"kind":"catalogue", "requestId":1}
+        with patch.object(actions, "request", return_value=("", "Please run gh auth login", 1)):
+            self.assertEqual(actions.read_page(task)["errorType"], "auth")
+        with patch.object(actions, "request", return_value=("HTTP/2.0 429 Error\nRetry-After: 60\n\n<html>Slow down</html>", "failed", 1)):
+            reply=actions.read_page(task)
+            self.assertEqual(reply["errorType"], "rate")
+            self.assertGreater(reply["retryAt"], time.time()*1000)
+
+    def test_recent_history_does_not_follow_pagination(self):
+        with patch.object(actions, "request", return_value=('HTTP/2.0 200 OK\nLink: <https://evil.test/>; rel="next"\n\n{"workflow_runs":[]}', "", 0)):
+            result = actions.read_page({"kind":"summary", "repo":"a/b", "status":"recent", "requestId":1})
+            self.assertEqual(result["nextPage"], 0)
+            self.assertEqual(result["error"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

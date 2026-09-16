@@ -67,11 +67,34 @@ Icons accompany status text: ✓ success, ✕ failure, ◷ running, ○ queued/w
 
 ## Refresh and errors
 
-While open, one repository's running workflows are checked every two seconds after the preceding check completes. The scan starts with recently pushed repositories, cycles through all repositories, and periodically rechecks known running repositories. Sorting uses running (`in_progress`) workflows; expanding a repository also includes queued, pending and waiting runs, plus ten recent runs. This avoids six status requests per repository on every discovery pass. The API's own filtered-search limits still apply.
+While open, one scheduler fetches a single API page at a time. Selecting a repository settles for 250 ms before prioritizing missing or stale data; rapid navigation coalesces requests. Moving among a run’s jobs and steps does not restart its refresh deadline.
 
-The selected repository's full summary refreshes after 30 seconds; selected expanded run details refresh after 5 seconds. Responses stay associated with the requested repository/run even when selection changes. Other expanded runs retain their last fetched details and show the fetch time.
+| Data | Refresh target |
+| --- | --- |
+| Inspected unfinished run’s jobs/steps | 5 seconds |
+| Selected repository activity | 10 seconds |
+| Other known running repositories | 15 seconds |
+| Selected full workflow summary | 60 seconds |
+| Previously checked idle repositories | 10 minutes |
 
-Requests are sequential within each helper, with at most one discovery, activity, summary and job helper. Each request has a 25-second timeout and each helper operation a 90-second timeout. Failures back off exponentially, retaining old data with an error indication. Individual permission failures do not block scanning other repositories. Closing cancels helpers and their `gh` children. No requests run while closed. Manual refresh bypasses backoff. Empty helper output now reports the process failure instead of a JSON parsing error.
+Unchecked repositories are scanned first in catalogue order. Three request slots serve selected data, one serves known running workflows, and one serves background discovery; spare slots serve other due work. Pagination yields between requests. All paths, including manual refresh, share a maximum of 60 requested pages per rolling minute, at least one second between starts, and one request in flight. These are ceilings: missing work, slow responses and cooldowns reduce request frequency.
+
+Cached data remains usable during refresh. Recent history arrives first; full summaries include all five active states and ten recent runs. Only complete snapshots reconcile removals or mark activity checked. When a running workflow disappears, the panel fetches its final status rather than assuming success. Inspected completed runs receive a final jobs fetch, then reuse the result until refresh or a detected rerun.
+
+GitHub retry/reset headers pause all work. Secondary rate limits without a deadline start with a one-minute wait and back off up to fifteen minutes. Network/server errors back off the affected resource from five seconds up to five minutes; permission failures leave that repository unavailable until catalogue/manual refresh. Authentication failures pause polling until retry/reopen. Manual refresh never bypasses a server cooldown. Closing cancels the helper and its gh child; reopening retains cached data, local request history and cooldowns. A shell restart clears local memory; GitHub’s quota remains authoritative.
+
+A request can take up to 25 seconds before timeout, and shares the account’s GitHub quota with other tools. Refresh targets can therefore stretch under load, network failures or rate limits. No polling occurs while closed, and no token is extracted or stored by the plugin.
+
+### Measured polling comparison
+
+Deterministic simulation with 137 repositories and one-second responses (not a live-network speed guarantee):
+
+| Measure | 0.2.2 baseline | 0.3.0 |
+| --- | --- | --- |
+| API requests over 30 idle minutes | 902 | 713 |
+| Initial activity pass | 411 seconds | 168 seconds |
+
+With four active repositories and one inspected run, the simulation completes the selected summary in 9 seconds. Maximum data ages after warm-up are 8.75 seconds for jobs, 11.75 seconds for selected activity and 20.75 seconds for other active activity. The reproducible workload is in `tests/polling.cjs`; overload tests verify fairness and limits when those freshness targets cannot be met.
 
 ## Checks
 
@@ -80,10 +103,11 @@ Run from the repository root:
 ```sh
 python3 -m unittest discover -s tests -v
 node tests/model.cjs
+node tests/polling.cjs
 python3 tests/qml-smoke.py
 ```
 
-Node is only used by tests. The QML check requires a graphical session, Quickshell and `OMARCHY_PATH`; it loads shared components in a temporary configuration without opening a window or installing the plugin.
+Node is only used by tests. The QML check requires a graphical session, Quickshell and `OMARCHY_PATH`; it uses shared components and a fake API in a temporary configuration, briefly exercising the panel window without installing the plugin or requesting live GitHub data.
 
 ## Remove
 
