@@ -29,6 +29,12 @@ class ActionsTest(unittest.TestCase):
             data = actions.summary(["a/one", "b/two", "b/two"])
             self.assertEqual(data, [{"repo": "a/one", "error": "offline"}, {"repo": "b/two", "runs": [], "error": ""}])
 
+    def test_deadline_stops_entire_scan(self):
+        with patch.object(actions, "runs", side_effect=actions.DeadlineExceeded) as runs:
+            with self.assertRaises(actions.DeadlineExceeded):
+                actions.summary(["a/one", "b/two"])
+            self.assertEqual(runs.call_count, 1)
+
     def test_validation(self):
         for value in ["../x", "a/..", "-R", "a/b/c", "a/b?x", "a/b;touch x"]:
             with self.assertRaises(ValueError):

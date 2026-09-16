@@ -11,6 +11,10 @@ from datetime import datetime, timezone
 ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
 
 
+class DeadlineExceeded(Exception):
+    pass
+
+
 def repo_name(value):
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
         raise ValueError("Repository must be owner/name")
@@ -86,7 +90,7 @@ def main():
     args = parser.parse_args()
     # Bound the complete request, including all pages/repositories.
     def timed_out(*_):
-        raise TimeoutError()
+        raise DeadlineExceeded()
 
     def cancelled(*_):
         raise SystemExit(0)
@@ -104,7 +108,7 @@ def main():
             data = {"jobs": list(pages(f"repos/{repo}/actions/runs/{run}/jobs?filter=latest", "jobs"))}
         data["updated"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(data))
-    except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as exc:
+    except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired, DeadlineExceeded) as exc:
         message = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else "GitHub request timed out or returned invalid data"
         print(json.dumps({"error": message}))
         return 1
