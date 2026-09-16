@@ -17,6 +17,23 @@ class ActionsTest(unittest.TestCase):
             self.assertEqual(list(actions.pages("endpoint?filter=latest", "jobs")), list(range(101)))
             self.assertIn("&per_page=100&page=2", api.call_args.args[0])
 
+    def test_repository_discovery_pages_and_affiliations(self):
+        rows = [{"full_name": f"org/repo{i}", "description": None} for i in range(100)]
+        with patch.object(actions, "api", side_effect=[rows, []]) as api:
+            first = actions.repositories_page("1")
+            self.assertEqual(first["nextPage"], 2)
+            self.assertEqual(first["repos"][0]["repo"], "org/repo0")
+            self.assertEqual(first["repos"][0]["description"], "")
+            self.assertIn("affiliation=owner,collaborator,organization_member", api.call_args.args[0])
+            self.assertEqual(actions.repositories_page("2")["nextPage"], 0)
+        with self.assertRaises(ValueError):
+            actions.repositories_page("0")
+
+    def test_activity_uses_paginated_running_filter(self):
+        with patch.object(actions, "pages", return_value=iter([{"id": 1}])) as pages:
+            self.assertEqual(actions.activity("owner/repo"), {"repo": "owner/repo", "runs": [{"id": 1}], "active": 1})
+            self.assertEqual(pages.call_args.args, ("repos/owner/repo/actions/runs?status=in_progress", "workflow_runs"))
+
     def test_active_runs_and_completion_race(self):
         active = {"id": 1, "status": "in_progress"}
         completed = {"id": 1, "status": "completed"}

@@ -1,6 +1,6 @@
 # GitHub Actions for Omarchy
 
-A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. No buttons, background daemon, database or token storage.
+A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with running workflows first. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text uses 1.5× theme font sizes with matching row heights. No buttons, background daemon, database or token storage.
 
 ## Requirements
 
@@ -22,7 +22,7 @@ This repository is currently private, so Git must have access to clone it.
 
 Check `omarchy menu keybindings --print` for conflicts, then add the line from `bindings.example.lua` to your writable `~/.config/hypr/bindings.lua`. If Home Manager owns the file, change its declarative source instead. Validate with `hyprctl reload` followed by `hyprctl configerrors`.
 
-Suggested shortcut: **Super + Ctrl + Shift + A**. You can also open directly:
+Suggested shortcut: **Super + Alt + A**, installed on this desktop. You can also open directly:
 
 ```sh
 omarchy-shell shell toggle olafkfreund.github-actions '{}'
@@ -30,16 +30,15 @@ omarchy-shell shell toggle olafkfreund.github-actions '{}'
 
 ## Repositories
 
-The default is `olafkfreund/nixarchy`. Merge this entry into the existing `plugins` array in `~/.config/omarchy/shell.json`; preserve your other settings and plugins:
+No manual repository list is required. Opening the popup fetches every page of GitHub's authenticated `GET /user/repos` endpoint with owner, collaborator and organisation-member affiliations. This covers repositories associated with your account and visible to the current token, not every public repository on GitHub. Archived and disabled repositories remain searchable but are not polled for activity. Currently github.com only; local checkouts are not required.
 
-```json
-{
-  "id": "olafkfreund.github-actions",
-  "repositories": ["olafkfreund/nixarchy", "owner/another-repo"]
-}
-```
+Press **/** and type an owner, repository name or description. Press **Enter** to finish searching, then expand a repository to inspect its runs. Repositories with running workflows move to the top as activity is discovered; unchecked repositories say **not checked**. The header shows scan progress. Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
 
-All configured repositories appear in one grouped list. The list defines the monitored scope; the plugin does not scan every repository accessible to your account. Currently github.com only. Local checkouts are not required.
+The catalogue and known activity stay in memory between openings. After five minutes, reopening refreshes the repository catalogue; **Shift + R** refreshes it immediately when you gain access to another repository. Legacy `repositories` settings are startup hints only and do not limit discovery.
+
+### Authentication / PAT
+
+The plugin uses your existing **`gh auth login`** authentication. It never extracts or stores the token itself. A PAT configured through GitHub CLI works too. Token restrictions still apply: fine-grained PATs need repository Metadata read and Actions read permission for the repositories you select; organisation access may require SSO authorization or approval. If a repository is missing, confirm that the same `gh` login can list it before refreshing the catalogue.
 
 ## Keyboard
 
@@ -53,15 +52,18 @@ All configured repositories appear in one grouped list. The list defines the mon
 | Enter while filtering | Keep filter and resume navigation |
 | Esc | Clear filter, then close |
 | r | Refresh summaries and selected expanded run |
+| Shift + R | Rediscover repositories from GitHub |
 | o | Open selected repository/run/job on GitHub |
 
 Icons accompany status text: ✓ success, ✕ failure, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Job rows show completed/reported step counts. These are not estimates of remaining execution time. Open GitHub for full logs.
 
 ## Refresh and errors
 
-While open, summaries refresh 30 seconds after a request completes; selected expanded run details refresh after 5 seconds. Changing selection never redirects a response to another run. Other expanded runs retain their last fetched details. Completed runs are included in the ten most recent runs per repository, alongside all returned active runs. The API's own filtered-search limits still apply.
+While open, one repository's running workflows are checked every two seconds after the preceding check completes. The scan starts with recently pushed repositories, cycles through all repositories, and periodically rechecks known running repositories. Sorting uses running (`in_progress`) workflows; expanding a repository also includes queued, pending and waiting runs, plus ten recent runs. This avoids six status requests per repository on every discovery pass. The API's own filtered-search limits still apply.
 
-Requests are sequential within each helper, with at most one summary helper and one job helper. Each request has a 25-second timeout and the whole operation a 90-second timeout. Failures back off exponentially, retaining old data with an error indication. Closing cancels helpers and their `gh` children. No requests run while closed. Manual refresh bypasses the backoff.
+The selected repository's full summary refreshes after 30 seconds; selected expanded run details refresh after 5 seconds. Responses stay associated with the requested repository/run even when selection changes. Other expanded runs retain their last fetched details and show the fetch time.
+
+Requests are sequential within each helper, with at most one discovery, activity, summary and job helper. Each request has a 25-second timeout and each helper operation a 90-second timeout. Failures back off exponentially, retaining old data with an error indication. Individual permission failures do not block scanning other repositories. Closing cancels helpers and their `gh` children. No requests run while closed. Manual refresh bypasses backoff. Empty helper output now reports the process failure instead of a JSON parsing error.
 
 ## Checks
 

@@ -10,13 +10,13 @@ with tempfile.TemporaryDirectory(prefix="actions-qml-") as directory:
     root = Path(directory)
     for name in ("Commons", "Ui"):
         (root / name).symlink_to(shell / name)
-    for name in ("Panel.qml", "Model.js", "actions.py"):
+    for name in ("ActionsPanel.qml", "ActionsModel.js", "actions.py"):
         (root / name).symlink_to(source / name)
     (root / "shell.qml").write_text('''
 import QtQuick
 import Quickshell
 ShellRoot {
-    Panel { id: panel }
+    ActionsPanel { id: panel }
     function check(value, label) { if (!value) throw new Error("CHECK FAILED: " + label) }
     Timer {
         interval: 1000; running: true
@@ -35,6 +35,17 @@ ShellRoot {
             panel.filterText = "no-match"
             panel.rebuild()
             check(panel.entries.length === 0, "filter")
+            panel.filterText = ""
+            panel.opened = true
+            panel.nextPage = 1
+            panel.receiveDiscovery('{"repos":[{"repo":"one/repo"}],"nextPage":2}')
+            check(panel.nextPage === 2 && !panel.discoveryComplete, "repository pagination")
+            panel.receiveDiscovery('{"repos":[{"repo":"two/repo"}],"nextPage":0}')
+            check(panel.repositories.length === 2 && panel.discoveryComplete, "complete catalogue")
+            panel.receiveActivity('{"repo":"two/repo","runs":[{"id":9,"name":"CI","status":"in_progress"}],"active":1,"updated":"2026-09-16T10:00:00Z"}')
+            check(panel.entries[0].repo === "two/repo", "running repository first")
+            panel.receiveActivity('{"error":"Repository unavailable or Actions read permission missing"}')
+            check(panel.scanFailures === 0, "permission error does not back off entire scan")
             panel.close()
             check(!panel.opened && !panel.loading, "close stops processes")
             console.log("QML_CHECKS_PASSED")
