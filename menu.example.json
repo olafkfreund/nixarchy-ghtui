@@ -7,12 +7,12 @@
       "workflows",
       "pipelines"
     ],
-    "action": "omarchy-shell shell summon olafkfreund.github-actions '{}'"
+    "action": "python3 ~/.config/omarchy/plugins/olafkfreund.github-actions/menu.py"
   },
   "learn.github-actions-keybindings": {
     "icon": "",
     "label": "GitHub Actions keybindings",
     "description": "All workflow panel controls · Super+Ctrl+Alt+A",
-    "action": "bash ~/.config/omarchy/plugins/olafkfreund.github-actions/keybindings.sh"
+    "action": "python3 ~/.config/omarchy/plugins/olafkfreund.github-actions/menu.py keys"
   }
 }

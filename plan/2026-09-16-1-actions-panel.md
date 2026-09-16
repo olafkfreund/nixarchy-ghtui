@@ -58,3 +58,5 @@ The user requested menu discovery and all keyboard controls in Omarchy’s keybo
 3. Verify shell syntax, reference content, JSON, binding conflicts and Hyprland config errors; test menu launcher and keyboard reference through MCP. Publish tested 0.2.2 and install the files and user extension. No shell restart is required for menu-only changes.
 
 Rollback: remove the two documented extension entries and help binding, and revert the source commit.
+
+Runtime review: Omarchy executes menu actions in a login shell, which can select a newer NixOS generation than the active desktop. A small menu.py wrapper reads Quickshell’s JSON instance list for the current display and resolves the running Omarchy tree before invoking the existing launcher or key reference. Reject missing or ambiguous trees. This avoids hardcoded store paths; uwsm-app inherited the incorrect login-shell override too. Verify tree detection and failure paths with temporary directories, then retest the real menu.
