@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 13
 spec: spec/2026-09-17-13-flake-install.md
 ---
