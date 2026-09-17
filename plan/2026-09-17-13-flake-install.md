@@ -149,3 +149,75 @@ their previous input lock and rebuild. To return from a managed installation to
 Git, remove its declarative plugin entry and rebuild before restoring the saved
 checkout; preserve user changes, enablement, authentication, and menu settings.
 No P620/Razer migration or system activation is performed by this repository task.
+
+
+## Implementation record
+
+- Baseline: `a584b03` (0.3.1 runtime), with artifact approvals on this task branch.
+  All 21 Python tests, model/polling checks, and both themed QML scenarios passed.
+- Added the single-input flake and lock, with a copied eight-file package and
+  version 0.4.0 taken from the manifest. No runtime implementation changed.
+- Native `nix build .#default --no-link --print-out-paths` succeeded, producing
+  `/nix/store/kqz0qp30807x907pbwvhg85xhipjdcbm-nixarchy-ghtui-0.4.0`.
+  Both source and built output passed `omarchy plugin validate`.
+- `nix flake check -L` passed: exact runtime contents, no internal symlinks,
+  manifest/version checks, all 21 Python tests, model/polling checks, temporary
+  HOME registration, keybindings output, and smoke-test invalid-directory
+  rejection. These tests use a copy of the packaged runtime files.
+- `nix flake check --all-systems --no-build` passed for both declared systems.
+  x86_64-linux was built and tested; aarch64-linux was evaluated only.
+- `python3 tests/qml-smoke.py` and the same command with the built output path
+  passed fresh and managed-menu scenarios, lifecycle/navigation, and the active
+  Omarchy theme assertion. No live GitHub API requests or real menu writes.
+- `nix-instantiate --parse flake.nix`, `nixfmt --check flake.nix`, and
+  `git diff --check` passed. Existing graphical DRI_PRIME/portal/GTK warnings also
+  occurred in the baseline and did not cause test failures.
+- Read-only consumer evaluation extended the existing P620 and Razer NixOS
+  configurations with the README module and the plugin output using their
+  nixpkgs input. Both resolved the same built plugin and included gh, python3,
+  xdg-utils, and bash-interactive. The initial test incorrectly expected the
+  literal package name `bash`; corrected it to compare actual store paths,
+  respecting the hosts' `pkgs.bash` override. No host files were edited and no
+  host configuration was activated.
+
+### Reproduce the consumer evaluation on this workstation
+
+Copy the README's NixOS module block to `/tmp/ghtui-consumer-module.nix`, replacing
+`YOUR_USER` with `olafkfreund`. Save the following as
+`/tmp/ghtui-consumer-eval.nix`, then run:
+
+```sh
+nix eval --impure --json --file /tmp/ghtui-consumer-eval.nix
+```
+
+The source paths below record the actual local test environment, not public
+flake defaults:
+
+```nix
+let
+  consumer = builtins.getFlake "/home/olafkfreund/.config/nixos";
+  githubActions = (import /mnt/data/Source-home/GitHub/nixarchy-ghtui/flake.nix).outputs {
+    self = githubActions;
+    nixpkgs = consumer.inputs.nixpkgs;
+  };
+  inputs = consumer.inputs // { github-actions = githubActions; };
+  inspect = host:
+    let
+      configured = consumer.nixosConfigurations.${host}.extendModules {
+        specialArgs = { inherit inputs; };
+        modules = [ /tmp/ghtui-consumer-module.nix ];
+      };
+      home = configured.config.home-manager.users.olafkfreund;
+      pkgs = configured.pkgs;
+      installed = map toString home.home.packages;
+      required = [ pkgs.gh pkgs.python3 pkgs.xdg-utils pkgs.bash ];
+    in
+    assert home.programs.nixarchy.enable;
+    assert builtins.all (package: builtins.elem (toString package) installed) required;
+    {
+      plugin = toString home.programs.nixarchy.plugins."olafkfreund.github-actions".src;
+      dependencies = map consumer.inputs.nixpkgs.lib.getName required;
+      enabledDesktop = home.programs.nixarchy.enable;
+    };
+in { p620 = inspect "p620"; razer = inspect "razer"; }
+```
