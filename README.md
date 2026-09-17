@@ -30,7 +30,11 @@ omarchy-shell shell toggle olafkfreund.github-actions '{}'
 
 ## Omarchy menus
 
-Merge the entries from `menu.example.json` into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, preserving existing entries. Omarchy reloads this file automatically. The main menu gets **GitHub Actions** (also searchable as workflows/pipelines); **Learn → GitHub Actions keybindings** opens a searchable native reference for every panel control.
+Enabling the plugin automatically registers **Apps → GitHub Actions** (also searchable as workflows/pipelines) and **Learn → GitHub Actions keybindings**. The latter opens a searchable native reference for every panel control. Installation with `--enable` performs the same setup; a disabled installation registers when enabled in a running shell.
+
+Registration runs once when the enabled panel loads, including session starts. It preserves menu comments and customizations, moves this plugin’s old root/System entries into Apps, and avoids duplicates or rewriting an unchanged file. Existing installations receive this behavior after updating the plugin. Omarchy hot-reloads the menu file.
+
+For a symlink-managed or read-only `~/.config/omarchy/extensions/omarchy-menu.jsonc`, declare the entries from `menu.example.json` in the host configuration instead. Automatic registration leaves managed or malformed files untouched and reports an error in the shell log; the panel remains usable through its shortcut. To retry registration after correcting a writable file, run `python3 ~/.config/omarchy/plugins/olafkfreund.github-actions/menu.py register`.
 
 **Super+K** opens Omarchy’s keyboard menu: search **GitHub Actions** to find the launcher and **GitHub Actions keybindings**. The latter also opens directly with **Super+Ctrl+Alt+A**. Panel-local keys are documented in this reference; they only act inside the popup. The two bindings and menu entries are installed on this desktop.
 
@@ -111,4 +115,4 @@ Node is only used by tests. The QML check requires a graphical session, Quickshe
 
 ## Remove
 
-Remove both keybindings and the two entries from `menu.example.json`, then run `omarchy plugin remove olafkfreund.github-actions`. No NixOS rebuild is required for a user-owned plugin.
+Run `omarchy plugin remove olafkfreund.github-actions`, then remove both keybindings and the `apps.github-actions` and `learn.github-actions-keybindings` entries from your menu configuration. Remove any remaining legacy `github-actions` or `system.github-actions` entry belonging to this plugin as well. No NixOS rebuild is required for a user-owned plugin.

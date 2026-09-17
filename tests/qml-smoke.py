@@ -3,16 +3,19 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 
 source = Path(__file__).resolve().parents[1]
 shell = Path(os.environ['OMARCHY_PATH']) / 'shell'
-with tempfile.TemporaryDirectory(prefix='actions-qml-') as directory:
-    root = Path(directory)
-    for name in ('Commons', 'Ui'):
-        (root / name).symlink_to(shell / name)
-    for name in ('ActionsPanel.qml', 'ActionsModel.js', 'Polling.js'):
-        (root / name).symlink_to(source / name)
-    (root / 'actions.py').write_text('''import json, sys, time
+colors = tomllib.loads((Path.home() / '.local/state/omarchy/current/theme/colors.toml').read_text())
+for scenario in ('fresh', 'managed'):
+    with tempfile.TemporaryDirectory(prefix='actions-qml-') as directory:
+        root = Path(directory)
+        for name in ('Commons', 'Ui'):
+            (root / name).symlink_to(shell / name)
+        for name in ('ActionsPanel.qml', 'ActionsModel.js', 'Polling.js', 'menu.py', 'menu.example.json'):
+            (root / name).symlink_to(source / name)
+        (root / 'actions.py').write_text('''import json, sys, time
 request=json.loads(sys.argv[2]); kind=request['kind']
 time.sleep(0.1)
 run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1}
@@ -22,12 +25,40 @@ elif kind=='run': data=run
 else: data=[run] if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
 print(json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':'','errorType':'','remaining':4000}))
 ''')
-    (root / 'shell.qml').write_text('''
+        home = root / 'home'
+        home.mkdir()
+        theme = home / '.local/state/omarchy/current/theme'
+        theme.parent.mkdir(parents=True)
+        theme.symlink_to(Path.home() / '.local/state/omarchy/current/theme')
+        (home / '.config').mkdir()
+        (home / '.config/fontconfig').symlink_to(Path.home() / '.config/fontconfig')
+        (home / '.config/omarchy').mkdir()
+        (home / '.config/omarchy/shell.toml').symlink_to(Path.home() / '.config/omarchy/shell.toml')
+        menu_path = home / '.config/omarchy/extensions/omarchy-menu.jsonc'
+        if scenario == 'managed':
+            menu_path.parent.mkdir(parents=True)
+            (home / 'managed-menu').write_text('{}\n')
+            menu_path.symlink_to(home / 'managed-menu')
+        (root / 'shell.qml').write_text('''
 import QtQuick
 import Quickshell
+import Quickshell.Io
+import qs.Commons
 import "Polling.js" as Polling
 ShellRoot {
     ActionsPanel { id: panel }
+    FileView {
+        id: menuFile
+        path: Quickshell.env("HOME") + "/.config/omarchy/extensions/omarchy-menu.jsonc"
+        watchChanges: true
+        blockLoading: true
+        printErrors: false
+        onFileChanged: reload()
+    }
+    Timer {
+        interval: 18000; running: true
+        onTriggered: { console.error("CHECK FAILED: timeout stage=" + stage + " " + panel.status()); Qt.quit() }
+    }
     property int stage: 0
     property string selected: ""
     property double closedAt: 0
@@ -36,6 +67,11 @@ ShellRoot {
     Timer {
         interval: 1000; running: true
         onTriggered: {
+            check(Color.background.toString()===Quickshell.env("EXPECTED_BACKGROUND"),"active Omarchy theme")
+            menuFile.reload()
+            check(!panel.opened && panel.polling.requests===0,"registration does not open or poll")
+            if (Quickshell.env("MENU_SCENARIO") === "fresh")
+                check(menuFile.text().indexOf('"apps.github-actions"') >= 0,"registered while closed")
             panel.polling=Polling.create()
             panel.configure('{"plugins":[{"id":"olafkfreund.github-actions","repositories":["one/repo","two/repo"]}]}')
             check(panel.entries.length===2,"configured repositories")
@@ -88,8 +124,19 @@ ShellRoot {
     }
 }
 ''')
-    result=subprocess.run(['quickshell','-p',str(root),'--no-color'],capture_output=True,text=True,timeout=25)
-    output=result.stdout+result.stderr
-    print(output)
-    if result.returncode or 'QML_CHECKS_PASSED' not in output or any(term in output for term in ('ERROR:', 'ReferenceError','TypeError','CHECK FAILED')):
-        raise SystemExit('QML smoke check failed')
+        try:
+            result=subprocess.run(['quickshell','-p',str(root),'--no-color'],capture_output=True,text=True,timeout=25,
+                                  env={**os.environ, 'HOME':str(home), 'MENU_SCENARIO':scenario, 'EXPECTED_BACKGROUND':colors['background'].lower()})
+        except subprocess.TimeoutExpired as error:
+            print(error.stdout, error.stderr)
+            raise
+        output=result.stdout+result.stderr
+        print(output)
+        if result.returncode or 'QML_CHECKS_PASSED' not in output or any(term in output for term in ('ERROR:', 'ReferenceError','TypeError','CHECK FAILED')):
+            raise SystemExit('QML smoke check failed')
+        if scenario == 'managed':
+            assert 'GitHub Actions menu registration failed:' in output and 'Menu is managed:' in output
+            assert menu_path.is_symlink() and menu_path.read_text() == '{}\n'
+        else:
+            assert 'menu registration failed' not in output
+            assert '"apps.github-actions"' in menu_path.read_text()

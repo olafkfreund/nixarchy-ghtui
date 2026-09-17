@@ -1,5 +1,5 @@
 {
-  "github-actions": {
+  "apps.github-actions": {
     "icon": "",
     "label": "GitHub Actions",
     "description": "Repository workflows, pipelines, jobs and steps · Super+Alt+A",

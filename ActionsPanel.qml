@@ -178,7 +178,18 @@ Item {
             Quickshell.execDetached(["xdg-open", current.url])
     }
 
-    Component.onCompleted: rebuild()
+    Component.onCompleted: {
+        rebuild()
+        registrationProc.running = true
+    }
+    Process {
+        id: registrationProc
+        command: ["python3", decodeURIComponent(Qt.resolvedUrl("menu.py").toString().replace(/^file:\/\//, "")), "register"]
+        stderr: StdioCollector { id: registrationErrors }
+        onExited: function(code) {
+            if (code !== 0) console.warn("GitHub Actions menu registration failed: " + registrationErrors.text.trim())
+        }
+    }
     ListModel { id: visibleRows; dynamicRoles: true }
     FileView {
         path: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
