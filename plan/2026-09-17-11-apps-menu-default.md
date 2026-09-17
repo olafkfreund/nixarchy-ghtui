@@ -73,7 +73,9 @@ do not meet the approved requirements.
    failure result for logging without affecting the API worker or panel opening.
    Update `tests/qml-smoke.py` to include the real menu helper/example and isolate
    HOME/menu files in its temporary test environment, preserving required display
-   and runtime environment. Exercise successful registration while closed and a
+   and runtime environment. Read the active Omarchy theme, font settings, and
+   shell appearance overrides through the temporary home; assert the shared
+   theme background matches the active theme, as requested during implementation. Exercise successful registration while closed and a
    deliberate registration failure; retain navigation/polling checks. → Verify
    automatic registration precedes popup use, failure leaves the panel usable,
    and no real user menu is written by tests.
@@ -129,3 +131,26 @@ implementation through a corrective branch/PR rather than rewriting shared
 history; preserve intent/spec/plan approval commits. Verify the restored launcher
 works and report the failed checkpoint. No NixOS rebuild or data migration is
 required.
+
+
+## Implementation record
+
+- Source baseline and clean installed checkout: `ec7b31a` (0.3.0). Initial 15
+  Python tests, model/polling checks, and QML smoke check passed.
+- Registration uses the existing panel completion hook and `menu.py register`.
+  JSONC token offsets preserve comments and unrelated text while stdlib JSON
+  validation rejects malformed input and duplicate keys. No dependencies added.
+- Final validation: 21 Python tests passed; model and deterministic polling
+  checks passed; fresh and managed-menu QML scenarios passed; manifest validation
+  and whitespace checks passed. Managed-file failure is expected and asserted.
+- The first QML fixture edit accidentally indented its embedded Python helper;
+  corrected before release. Explicit file reload avoids a missing-parent watcher
+  issue in the fresh-menu assertion. Tests now report panel state on timeout.
+- The isolated test HOME initially hid the desktop theme. It now reads the active
+  Omarchy theme/fonts/appearance overrides and asserts the active background
+  colour. Production continues using shared `Color` and `Style`, with no custom
+  palette. Existing DRI_PRIME/portal/GTK environment warnings also occur in the
+  baseline and are unrelated to this change.
+- Desktop MCP status is unavailable because its server lacks
+  `HYPRLAND_INSTANCE_SIGNATURE`; no desktop control was acquired. Installed
+  verification will use the running shell's supported IPC and menu state.
