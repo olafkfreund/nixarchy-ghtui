@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 13
 intent: intent/2026-09-17-13-flake-install.md
 ---
