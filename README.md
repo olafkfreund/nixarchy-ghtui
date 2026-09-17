@@ -14,11 +14,75 @@ On NixOS, missing dependencies belong in your declarative configuration. Do not 
 
 Ensure your running session matches the installed Omarchy generation first. If you rebuilt since login, log out and back in.
 
+### Git installation
+
 ```sh
 omarchy plugin add https://github.com/olafkfreund/nixarchy-ghtui.git --enable
 ```
 
 This repository is currently private, so Git must have access to clone it.
+
+### Nix flake installation
+
+For an existing NixOS configuration with Nixarchy and its Home Manager module already enabled for your user, add this input to your `flake.nix`:
+
+```nix
+inputs.github-actions = {
+  url = "github:olafkfreund/nixarchy-ghtui";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+In your existing flake's `outputs = inputs@{ ... }: ...`, include `inputs` in the `specialArgs` passed to `nixpkgs.lib.nixosSystem` (preserve any other arguments):
+
+```nix
+specialArgs = { inherit inputs; };
+```
+
+Import a NixOS module with the following content, replacing `YOUR_USER` with your username:
+
+```nix
+{ inputs, ... }:
+{
+  home-manager.users.YOUR_USER = { pkgs, ... }: {
+    programs.nixarchy.plugins."olafkfreund.github-actions".src =
+      inputs.github-actions.packages.${pkgs.stdenv.hostPlatform.system}.default;
+    home.packages = [ pkgs.gh pkgs.python3 pkgs.xdg-utils pkgs.bash ];
+  };
+}
+```
+
+The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. No second desktop stack or standalone Home Manager installation is needed.
+
+Nix must have permission to fetch this repository. Your `gh auth login` is for runtime API access and does not automatically configure Nix's fetch credentials. An SSH input URL such as `git+ssh://git@github.com/olafkfreund/nixarchy-ghtui.git` is another option when your SSH access is configured. Never put tokens in `flake.nix` or `flake.lock`.
+
+Run your configuration's validation checks, build, and then activate through NixOS, replacing `HOST` with your configuration name:
+
+```sh
+nixos-rebuild build --flake .#HOST
+sudo nixos-rebuild switch --flake .#HOST
+omarchy plugin enable olafkfreund.github-actions
+```
+
+Installation and enablement are separate: enable once in the running Omarchy session, or use **Setup → Plugins**. Existing enablement in `shell.json` persists. Use `nixos-rebuild`, not `home-manager switch`, with this integration. On enablement, both installation routes register **Apps → GitHub Actions** and the Learn keybindings reference and use the current Omarchy theme.
+
+### Migrating an existing Git checkout
+
+Nixarchy deliberately refuses to replace an existing real plugin directory. Before activating the declarative installation, check `git status` in `~/.config/omarchy/plugins/olafkfreund.github-actions`. Preserve any local work, close the panel, and move the entire checkout to a backup **outside** `~/.config/omarchy/plugins/`. Keep the backup until the managed plugin has been verified. Then rebuild to install the managed link and confirm it opens. Keep your `shell.json`, menu customizations, keybindings, and GitHub authentication.
+
+### Updates and rollback
+
+For a Git installation, use `omarchy plugin update olafkfreund.github-actions`. For a Nix-managed installation, update only the consumer's `github-actions` input and rebuild:
+
+```sh
+nix flake update github-actions
+nixos-rebuild build --flake .#HOST
+sudo nixos-rebuild switch --flake .#HOST
+```
+
+Hosts using the same consumer lock and package set receive the same version. To roll back, restore the previous consumer `flake.lock` and rebuild. To return to Git, remove the declarative plugin entry and rebuild before restoring the saved checkout. Do not use Git pull or the plugin updater on a store-managed link.
+
+### Keyboard shortcuts
 
 Check `omarchy menu keybindings --print` for conflicts, then add the lines from `bindings.example.lua` to your writable `~/.config/hypr/bindings.lua`. If Home Manager owns the file, change its declarative source instead. Validate with `hyprctl reload` followed by `hyprctl configerrors`.
 
@@ -111,8 +175,19 @@ node tests/polling.cjs
 python3 tests/qml-smoke.py
 ```
 
+The flake checks the built runtime files and runs the Python/model/polling suites without a graphical session or live GitHub requests:
+
+```sh
+nix flake check
+nix build .#default
+omarchy plugin validate ./result
+python3 tests/qml-smoke.py ./result
+```
+
+The QML test accepts an optional plugin directory; without one it tests this source checkout. The `result` link is only a build output and does not install the plugin into your desktop.
+
 Node is only used by tests. The QML check requires a graphical session, Quickshell and `OMARCHY_PATH`; it uses shared components and a fake API in a temporary configuration, briefly exercising the panel window without installing the plugin or requesting live GitHub data.
 
 ## Remove
 
-Run `omarchy plugin remove olafkfreund.github-actions`, then remove both keybindings and the `apps.github-actions` and `learn.github-actions-keybindings` entries from your menu configuration. Remove any remaining legacy `github-actions` or `system.github-actions` entry belonging to this plugin as well. No NixOS rebuild is required for a user-owned plugin.
+For Git installations, run `omarchy plugin remove olafkfreund.github-actions`. For Nix-managed installations, remove the declarative plugin entry and rebuild. Then remove both keybindings and the `apps.github-actions` and `learn.github-actions-keybindings` entries from your menu configuration. Remove any remaining legacy `github-actions` or `system.github-actions` entry belonging to this plugin as well. No NixOS rebuild is required for a user-owned plugin.

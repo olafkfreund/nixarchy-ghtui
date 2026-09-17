@@ -1,11 +1,18 @@
 """Exercise the real QML worker with a temporary fake API; no live GitHub requests."""
+import argparse
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import tomllib
 
-source = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('plugin_dir', nargs='?', type=Path, default=Path(__file__).resolve().parents[1])
+source = parser.parse_args().plugin_dir.resolve()
+required = ('manifest.json', 'ActionsPanel.qml', 'ActionsModel.js', 'Polling.js',
+            'actions.py', 'menu.py', 'menu.example.json', 'keybindings.sh')
+if not source.is_dir() or any(not (source / name).is_file() for name in required):
+    parser.error('plugin_dir must contain the complete GitHub Actions plugin')
 shell = Path(os.environ['OMARCHY_PATH']) / 'shell'
 colors = tomllib.loads((Path.home() / '.local/state/omarchy/current/theme/colors.toml').read_text())
 for scenario in ('fresh', 'managed'):
