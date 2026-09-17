@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 11
 spec: spec/2026-09-17-11-apps-menu-default.md
 ---
