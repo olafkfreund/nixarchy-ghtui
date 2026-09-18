@@ -180,11 +180,11 @@ The flake checks the built runtime files and runs the Python/model/polling suite
 ```sh
 nix flake check
 nix build .#default
-omarchy plugin validate ./result
+omarchy plugin validate "$(readlink -f result)"
 python3 tests/qml-smoke.py ./result
 ```
 
-The QML test accepts an optional plugin directory; without one it tests this source checkout. The `result` link is only a build output and does not install the plugin into your desktop.
+The validator rejects a symlinked plugin folder, so it is given the resolved store path rather than the `result` link. The QML test accepts an optional plugin directory; without one it tests this source checkout. The `result` link is only a build output and does not install the plugin into your desktop.
 
 Node is only used by tests. The QML check requires a graphical session, Quickshell and `OMARCHY_PATH`; it uses shared components and a fake API in a temporary configuration, briefly exercising the panel window without installing the plugin or requesting live GitHub data.
 
