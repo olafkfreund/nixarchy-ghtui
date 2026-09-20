@@ -98,6 +98,8 @@ Enabling the plugin automatically registers **Apps → GitHub Actions** (also se
 
 Registration runs once when the enabled panel loads, including session starts. It preserves menu comments and customizations, moves this plugin’s old root/System entries into Apps, and avoids duplicates or rewriting an unchanged file. Existing installations receive this behavior after updating the plugin. Omarchy hot-reloads the menu file.
 
+A `menu.managed` file beside `menu.py` turns registration off entirely: the panel then leaves the menu alone and writes nothing, so a row you deleted stays deleted. nixarchy ships that marker, because it declares both rows itself.
+
 For a symlink-managed or read-only `~/.config/omarchy/extensions/omarchy-menu.jsonc`, declare the entries from `menu.example.json` in the host configuration instead. Automatic registration leaves managed or malformed files untouched and reports an error in the shell log; the panel remains usable through its shortcut. To retry registration after correcting a writable file, run `python3 ~/.config/omarchy/plugins/olafkfreund.github-actions/menu.py register`.
 
 **Super+K** opens Omarchy’s keyboard menu: search **GitHub Actions** to find the launcher and **GitHub Actions keybindings**. The latter also opens directly with **Super+Ctrl+Alt+A**. Panel-local keys are documented in this reference; they only act inside the popup. The two bindings and menu entries are installed on this desktop.
