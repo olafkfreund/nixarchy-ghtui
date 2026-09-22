@@ -146,6 +146,13 @@ class PageTest(unittest.TestCase):
             self.assertEqual(reply["errorType"], "rate")
             self.assertGreater(reply["retryAt"], time.time()*1000)
 
+    def test_connection_failure_before_any_reply(self):
+        refused = 'Get "https://api.github.com/user/repos": dial tcp: connect: connection refused'
+        with patch.object(actions, "request", return_value=("", refused, 1)):
+            reply = actions.read_page({"kind":"catalogue", "requestId":1})
+        self.assertEqual(reply["errorType"], "network")
+        self.assertEqual(reply["error"], "GitHub request failed; check connection and gh auth status")
+
     def test_recent_history_does_not_follow_pagination(self):
         with patch.object(actions, "request", return_value=('HTTP/2.0 200 OK\nLink: <https://evil.test/>; rel="next"\n\n{"workflow_runs":[]}', "", 0)):
             result = actions.read_page({"kind":"summary", "repo":"a/b", "status":"recent", "requestId":1})

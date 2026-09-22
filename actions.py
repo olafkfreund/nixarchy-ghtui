@@ -130,6 +130,10 @@ def read_page(task):
         if not stdout.strip() and "auth login" in stderr.lower():
             result.update(errorType="auth", error="Authenticate with gh auth login")
             return result
+        if not stdout.strip() and code:
+            # gh failed before any HTTP reply: offline, DNS or proxy.
+            result.update(errorType="network", error="GitHub request failed; check connection and gh auth status")
+            return result
         status, headers, raw_body = http_reply(stdout)
         result["httpStatus"] = status
         if headers.get("x-ratelimit-remaining", "").isdigit():

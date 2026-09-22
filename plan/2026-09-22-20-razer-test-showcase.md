@@ -48,18 +48,26 @@ spec: spec/2026-09-22-20-razer-test-showcase.md
 ### A. Prepare razer
 
 1. razer checkout: `git status` is clean, then `git pull --ff-only`, which
-   moves it to `main` (`dfba799`) → verify with `git log -1`.
+   moves it to `main` (`5176a79`; this branch was rebased onto it, since
+   local `main` was stale) → verify with `git log -1`.
 2. Reload the running panel so it loads the new files. The method is found
    empirically: first `omarchy plugin disable` then `enable`, and if that
    doesn't reload a `keepLoaded` panel, restart the Omarchy shell. The method
    is recorded here → verify that the `Apps ▸ GitHub Actions` entry from #11
-   exists, since only the new code has it.
+   exists, since only the new code has it. **Recorded:** disable/enable does
+   not re-instantiate a `keepLoaded` panel; `omarchy-restart-shell` does, and
+   registration then migrated `github-actions` → `apps.github-actions`.
 3. Write a helper `$SCRATCH/razer.sh` that runs a command on razer inside the
    session environment → verify that `razer.sh hyprctl monitors` lists
    monitors.
 4. Request control with `razer.sh ai-mirror control agent` and wait for you
    to approve it on razer → verify that `ai-mirror status` reports
-   `owner: agent`. If it reports `off`, stop and tell you.
+   `owner: agent`. If it reports `off`, stop and tell you. **Recorded:**
+   ai-mirror sends keys only to a named window, and while the panel is open
+   it wrongly treats the window behind as focused (olafkfreund/ai-mirror#29).
+   So a throwaway `foot` window is opened on the empty workspace, and
+   keys are addressed to it; the panel's `status()` IPC confirms they land
+   in the panel.
 5. Silence notifications, move to an empty workspace on one monitor, and
    note the silencing state so it can be restored.
 
@@ -137,6 +145,12 @@ Plus the razer matrix recorded on #20, and the OCR allow-list check from step
 ## Bugs found
 
 (Filled in as fixes land, one line per fix: symptom → root cause → test.)
+
+1. Offline shows "timed out or returned invalid data" → `read_page` passed
+   the empty stdout of a `gh` that failed before any HTTP reply to
+   `http_reply`, whose `ValueError` hit the catch-all → guard in `read_page`
+   reports "GitHub request failed; check connection and gh auth status";
+   `test_connection_failure_before_any_reply`.
 
 ## Rollback
 
