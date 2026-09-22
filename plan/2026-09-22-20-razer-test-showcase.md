@@ -107,14 +107,25 @@ spec: spec/2026-09-22-20-razer-test-showcase.md
 15. Stills with `grim` at the panel region, converted to WebP at 1280 px
     wide (`nix shell nixpkgs#libwebp` or `ffmpeg`): list with a search
     applied, run expanded to its steps, search in progress, and the
-    keybindings sheet.
+    keybindings sheet. **Deviation:** kept at the card's native size (900 px;
+    the keybindings sheet 1000 px) rather than 1280. A wider frame means the
+    desktop, whose calendar and tasks widget shows personal entries, and
+    upscaling adds nothing.
 16. GIF: `nix shell nixpkgs#wf-recorder` with a region recording of open →
     `/nixarchy` → expand run → job → steps → collapse → close, then encode
     with ffmpeg palettegen/paletteuse → verify that it's under about 1 MB.
+    **Recorded:** the recording is trimmed to the span the card is on screen
+    (its border pixel, sampled at 10 fps) plus a margin, and cropped to the
+    card, because the frames around it show the calendar widget. At 1.8×
+    speed, 7 fps, 680 px and 32 colours it's 1.06 MB. The filter survives a
+    close with Super+Alt+A, so the take opens already filtered; it closes the
+    same way, since Esc would clear the filter and show every repository.
 17. Privacy gate: run `tesseract` on the stills and a GIF frame every 0.5 s,
     then diff every `owner/name` found against the allow-list → verify that
     nothing falls outside the list and no notification is visible, and check
-    each file by eye.
+    each file by eye. **Result:** every `owner/name` found is one of the 14
+    public repositories matching `nixarchy`; no calendar, task or
+    notification text.
 18. Restore razer: notification silencing as before, the checkout back to
     `main` (or to the merged commit), and control released.
 

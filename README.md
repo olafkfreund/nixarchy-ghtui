@@ -2,6 +2,20 @@
 
 A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with running workflows first. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text uses 1.5× theme font sizes with matching row heights. No buttons, background daemon, database or token storage.
 
+## Screenshots
+
+![The panel opening on a search for nixarchy, narrowing it, then drilling into a running workflow down to the steps of its install job and back out](docs/img/github-actions.gif)
+
+Press **Super+Alt+A**. Running workflows sort first; `/` searches repositories and workflows. `l` or Enter opens a repository to its runs, a run to its jobs, and a job to its steps, with live status and timers. `h` goes back up, `o` opens the selected row on GitHub, and Esc closes.
+
+| Repositories, running first | A running job's steps | Search |
+| --- | --- | --- |
+| ![Repositories matching nixarchy, the one with two running workflows first](docs/img/github-actions-list.webp) | ![A running install check expanded to its jobs, and the install job to its eight steps](docs/img/github-actions-steps.webp) | ![The search narrowed to nixarchy-p, leaving two repositories](docs/img/github-actions-search.webp) |
+
+**Super+Ctrl+Alt+A** lists every key:
+
+![The GitHub Actions keybindings sheet in the Omarchy menu](docs/img/github-actions-keys.webp)
+
 ## Requirements
 
 - Omarchy shell with the panel plugin contract and `qs.Commons` / `qs.Ui` components.
@@ -19,8 +33,6 @@ Ensure your running session matches the installed Omarchy generation first. If y
 ```sh
 omarchy plugin add https://github.com/olafkfreund/nixarchy-ghtui.git --enable
 ```
-
-This repository is currently private, so Git must have access to clone it.
 
 ### Nix flake installation
 
