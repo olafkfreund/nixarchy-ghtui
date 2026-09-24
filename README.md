@@ -122,7 +122,7 @@ No manual repository list is required. Opening the popup fetches every page of G
 
 Press **/** and type an owner, repository name or description. Use **↑ / ↓** while typing to select a result, then **Enter** to expand it and resume navigation. **Tab** finishes editing without expanding. Search results stay collapsed until you expand them. Repositories with running workflows move to the top as activity is discovered; unchecked repositories say **not checked**. The header shows scan progress. Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
 
-The catalogue and known activity stay in memory between openings. After five minutes, reopening refreshes the repository catalogue; **Shift + R** refreshes it immediately when you gain access to another repository. Legacy `repositories` settings are startup hints only and do not limit discovery.
+The catalogue and known activity stay in memory between openings. After `TIMING.catalogue`, reopening refreshes the repository catalogue; **Shift + R** refreshes it immediately when you gain access to another repository.
 
 ### Authentication / PAT
 
@@ -149,21 +149,23 @@ Icons accompany status text: ✓ success, ✕ failure, ◷ running, ○ queued/w
 
 ## Refresh and errors
 
-While open, one scheduler fetches a single API page at a time. Selecting a repository settles for 250 ms before prioritizing missing or stale data; rapid navigation coalesces requests. Moving among a run’s jobs and steps does not restart its refresh deadline.
+While open, one scheduler fetches a single API page at a time. Selecting a repository settles for `TIMING.settle` before prioritizing missing or stale data; rapid navigation coalesces requests. Moving among a run’s jobs and steps does not restart its refresh deadline.
 
 | Data | Refresh target |
 | --- | --- |
-| Inspected unfinished run’s jobs/steps | 5 seconds |
-| Selected repository activity | 10 seconds |
-| Other known running repositories | 15 seconds |
-| Selected full workflow summary | 60 seconds |
-| Previously checked idle repositories | 10 minutes |
+| Inspected unfinished run’s jobs/steps | `TIMING.jobs` |
+| Selected repository activity | `TIMING.selected` |
+| Other known running repositories | `TIMING.active` |
+| Selected full workflow summary | `TIMING.summary` |
+| Previously checked idle repositories | `TIMING.idle` |
 
-Unchecked repositories are scanned first in catalogue order. Three request slots serve selected data, one serves known running workflows, and one serves background discovery; spare slots serve other due work. Pagination yields between requests. All paths, including manual refresh, share a maximum of 60 requested pages per rolling minute, at least one second between starts, and one request in flight. These are ceilings: missing work, slow responses and cooldowns reduce request frequency.
+The values are the `TIMING` block at the top of `Polling.js`.
+
+Unchecked repositories are scanned first in catalogue order. Three request slots serve selected data, one serves known running workflows, and one serves background discovery; spare slots serve other due work. Pagination yields between requests. All paths, including manual refresh, share a maximum of `TIMING.perWindow` requested pages per rolling `TIMING.window`, at least `TIMING.gap` between starts, and one request in flight. These are ceilings: missing work, slow responses and cooldowns reduce request frequency.
 
 Cached data remains usable during refresh. Recent history arrives first; full summaries include all five active states and ten recent runs. Only complete snapshots reconcile removals or mark activity checked. When a running workflow disappears, the panel fetches its final status rather than assuming success. Inspected completed runs receive a final jobs fetch, then reuse the result until refresh or a detected rerun.
 
-GitHub retry/reset headers pause all work. Secondary rate limits without a deadline start with a one-minute wait and back off up to fifteen minutes. Network/server errors back off the affected resource from five seconds up to five minutes; permission failures leave that repository unavailable until catalogue/manual refresh. Authentication failures pause polling until retry/reopen. Manual refresh never bypasses a server cooldown. Closing cancels the helper and its gh child; reopening retains cached data, local request history and cooldowns. A shell restart clears local memory; GitHub’s quota remains authoritative.
+GitHub retry/reset headers pause all work. Secondary rate limits without a deadline start with a `TIMING.rateBase` wait and back off up to `TIMING.rateMax`. Network/server errors back off the affected resource from `TIMING.retryBase` up to `TIMING.retryMax`; permission failures leave that repository unavailable until catalogue/manual refresh. Authentication failures pause polling until retry/reopen. Manual refresh never bypasses a server cooldown. Closing cancels the helper and its gh child; reopening retains cached data, local request history and cooldowns. A shell restart clears local memory; GitHub’s quota remains authoritative.
 
 A request can take up to 25 seconds before timeout, and shares the account’s GitHub quota with other tools. Refresh targets can therefore stretch under load, network failures or rate limits. No polling occurs while closed, and no token is extracted or stored by the plugin.
 
