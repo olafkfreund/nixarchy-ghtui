@@ -32,11 +32,7 @@ Item {
     readonly property bool discoveryComplete: polling.catalogueComplete
     readonly property string cooldownText: now < polling.cooldown ? "GitHub paused until " + new Date(polling.cooldown).toLocaleTimeString() : ""
     readonly property int checkedCount: repos.filter(function(repo) { return !!repo.checked || repo.archived || repo.disabled }).length
-    // ponytail: one factor for the card, text and spacing; the reference is today's 900×680 card
-    readonly property real fit: Math.max(1, Math.min(2,
-        window.width * 0.6 / 900,
-        window.height * 0.7 / 680))
-    readonly property real textScale: 1.5 * fit
+    readonly property real textScale: 1.5
     readonly property var current: entries[cursor] || null
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
     onFilterTextChanged: {
@@ -228,12 +224,12 @@ Item {
         BorderSurface {
             id: card
             anchors.centerIn: parent
-            width: Math.min(Style.space(900) * root.fit, window.width - Style.gapsOut * 2)
-            height: Math.min(Style.space(680) * root.fit, window.height - Style.gapsOut * 2)
+            width: Math.min(Style.space(900), window.width - Style.gapsOut * 2)
+            height: Math.min(Style.space(680), window.height - Style.gapsOut * 2)
             color: Color.menu.background
             radius: Style.cornerRadius
             borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
-            padding: Math.round(Style.spacing.panelPadding * root.fit)
+            padding: Style.spacing.panelPadding
 
             Item {
                 id: keys
@@ -266,7 +262,7 @@ Item {
 
                 Column {
                     anchors.fill: parent
-                    spacing: Math.round(Style.spacing.md * root.fit)
+                    spacing: Style.spacing.md
                     Text {
                         width: parent.width
                         text: "GitHub Actions  ·  " + root.repositories.length + (root.repositories.length === 1 ? " repository" : " repositories")
@@ -310,11 +306,11 @@ Item {
                             textFormat: Text.PlainText
                         }
                     }
-                    Rectangle { width: parent.width; height: Style.space(root.fit); color: Color.menu.border; opacity: 0.4 }
+                    Rectangle { width: parent.width; height: 1; color: Color.menu.border; opacity: 0.4 }
                     ListView {
                         id: list
                         width: parent.width
-                        height: Math.max(0, parent.height - y - footer.height - Math.round(Style.spacing.md * root.fit))
+                        height: Math.max(0, parent.height - y - footer.height - Style.spacing.md)
                         clip: true
                         model: visibleRows
                         boundsBehavior: Flickable.StopAtBounds
@@ -323,23 +319,23 @@ Item {
                             readonly property var modelData: rowData
                             required property int index
                             width: list.width
-                            height: modelData.subtitle ? Math.max(Style.space(64 * root.fit), (Style.font.body + Style.font.caption) * root.textScale + Style.space(16 * root.fit)) : Math.max(Style.space(40 * root.fit), Style.font.body * root.textScale + Style.space(12 * root.fit))
+                            height: modelData.subtitle ? Math.max(Style.space(64), (Style.font.body + Style.font.caption) * root.textScale + Style.space(16)) : Math.max(Style.space(40), Style.font.body * root.textScale + Style.space(12))
                             color: index === root.cursor ? Color.menu.selectedBackground : "transparent"
                             radius: 0
                             Row {
                                 anchors.fill: parent
-                                anchors.leftMargin: Style.space(8 * root.fit) + modelData.depth * Style.space(18 * root.fit)
-                                anchors.rightMargin: Style.space(8 * root.fit)
-                                spacing: Math.round(Style.spacing.sm * root.fit)
+                                anchors.leftMargin: Style.space(8) + modelData.depth * Style.space(18)
+                                anchors.rightMargin: Style.space(8)
+                                spacing: Style.spacing.sm
                                 Text {
-                                    width: Style.space(18 * root.fit)
+                                    width: Style.space(18)
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: Model.icon(modelData.status)
                                     color: root.statusColor(modelData.status)
                                     font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.body * root.textScale) }
                                 }
                                 Column {
-                                    width: Math.max(0, parent.width - Style.space(26 * root.fit) - info.width - parent.spacing * 2)
+                                    width: Math.max(0, parent.width - Style.space(26) - info.width - parent.spacing * 2)
                                     anchors.verticalCenter: parent.verticalCenter
                                     Text {
                                         width: parent.width

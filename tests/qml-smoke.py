@@ -110,7 +110,6 @@ ShellRoot {
                 check(panel.error==="","async API has no error")
                 check(panel.current.key===selected && panel.filterText==="repo","poll preserves searched selection")
                 check(panel.details["one/repo:7"].jobs[0].steps.length===1,"jobs and steps arrive")
-                check(panel.fit>=1 && panel.fit<=2 && panel.textScale===1.5*panel.fit,"screen fit bounded")
                 check(panel.polling.catalogueComplete,"catalogue completed")
                 panel.close()
                 closedRequests=panel.polling.requests
