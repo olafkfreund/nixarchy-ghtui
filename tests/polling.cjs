@@ -16,7 +16,11 @@ if (!fs.existsSync('Polling.js')) process.exit(0);
 const polling = {};
 vm.createContext(polling);
 vm.runInContext(fs.readFileSync('Polling.js', 'utf8'), polling);
-function response(request, data=[], nextPage=0) { return {requestId:request.requestId,data,nextPage,error:'',errorType:'',remaining:4000}; }
+function response(request, data=[], nextPage=0, total) {
+  const reply={requestId:request.requestId,data,nextPage,error:'',errorType:'',remaining:4000};
+  if (total!==undefined) reply.total=total;
+  return reply;
+}
 function simulation(activeCount=0, duration=1800000) {
   const s=polling.create(), repos=Array.from({length:137},(_,i)=>({repo:`org/r${i}`}));
   polling.open(s,0); polling.select(s,'org/r0',activeCount ? '1' : '',activeCount ? {'org/r0:1':true} : {},0,false);
@@ -202,3 +206,56 @@ polling.close(setup); polling.open(setup,2000);
 assert.equal(polling.complete(setup,{...response(setupReq),error:'x',errorType:'setup'},2000),false);
 assert.equal(setup.auth,false,'stale setup or malformed replies change nothing');
 console.log('Polling: setup errors and malformed data stop until manual refresh');
+
+// #30: one page per unfinished status; the rest is counted, never fetched.
+function selectedRepo(runs=[]) {
+  const c=polling.create(); polling.open(c,0); c.discover=false; c.catalogueComplete=true;
+  c.repos=[{repo:'a/b',runs}]; return c;
+}
+const queued=Array.from({length:100},(_,i)=>({id:1000+i,status:'queued'}));
+const big=selectedRepo([{id:5,status:'queued'}]);
+polling.select(big,'a/b','5',{},0,true);
+let starts=0, clock=0;
+for (const phase of ['recent','in_progress','queued','waiting','pending','requested']) {
+  req=polling.next(big,clock); starts++;
+  assert.equal(req.kind,'summary'); assert.equal(req.status,phase); assert.equal(req.page,1);
+  assert.equal((big.repos[0].hidden || {}).queued,undefined,'hidden counts wait for the whole snapshot');
+  polling.complete(big,response(req,phase==='queued' ? queued : [],0,phase==='recent' ? undefined : phase==='queued' ? 2000 : 0),clock+100);
+  clock+=1000;
+}
+assert.equal(starts,6);
+assert.equal(big.repos[0].hidden.queued,1900);
+assert.ok(polling.runFor(big,'a/b',5),'the inspected run survives a snapshot that did not return it');
+assert.equal(big.repos[0].runs.filter(r=>r.status==='queued').length,101);
+
+const act=selectedRepo([]);
+polling.ensure(act,'activity','a/b','','active',0); req=polling.next(act,0);
+assert.equal(req.kind,'activity');
+polling.complete(act,response(req,Array.from({length:100},(_,i)=>({id:i+1,status:'in_progress'})),0,250),100);
+assert.equal(act.repos[0].active,250); assert.equal(act.repos[0].hidden.in_progress,150);
+assert.equal(act.requests,1);
+
+function partialActivity(total) {
+  const p=selectedRepo([1,2,3].map(id=>({id,status:'in_progress'})));
+  polling.select(p,'a/b','2',{'a/b:1':true},0,true);
+  polling.activity(p,p.repos[0],[{id:4,status:'in_progress'}],1000,total);
+  return id=>polling.runFor(p,'a/b',id);
+}
+let run=partialActivity(50);
+assert.equal(run(1).awaitingFinal,true,'expanded run is looked up');
+assert.equal(run(2).awaitingFinal,true,'inspected run is looked up');
+assert.equal(run(3),undefined,'a plain run past the first page is counted, not looked up');
+run=partialActivity(1);
+assert.deepEqual([1,2,3].map(id=>run(id).awaitingFinal),[true,true,true],'a complete page keeps today\'s behaviour');
+
+const keep=selectedRepo(Array.from({length:12},(_,i)=>({id:i+1,status:'completed'})));
+polling.select(keep,'a/b','1',{},0,true);
+polling.mergeRuns(keep,keep.repos[0],[]);
+assert.ok(polling.runFor(keep,'a/b',1),'recent() keeps the inspected run past the ten completed');
+assert.equal(keep.repos[0].runs.length,11);
+
+const plain=selectedRepo([]);
+polling.ensure(plain,'activity','a/b','','active',0); req=polling.next(plain,0);
+polling.complete(plain,response(req,[{id:1,status:'in_progress'}]),100);
+assert.deepEqual(plain.repos[0].hidden || {},{}); assert.equal(plain.repos[0].active,1);
+console.log('Polling: one page per unfinished status, hidden counts and kept runs');
