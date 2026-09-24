@@ -1,6 +1,6 @@
 # GitHub Actions for Omarchy
 
-A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with running workflows first. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text uses 1.5× theme font sizes with matching row heights. No buttons, background daemon, database or token storage.
+A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with running workflows first. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. The panel takes up to 60% of the screen's width and 70% of its height, never smaller than 900×680 theme units where the screen allows; text, rows and spacing grow with it, from 1.5× up to 3× the theme font sizes. No buttons, background daemon, database or token storage.
 
 ## Screenshots
 
