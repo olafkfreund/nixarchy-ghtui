@@ -206,7 +206,8 @@ Item {
         stdout: StdioCollector { id: pageOutput }
         stderr: StdioCollector { id: pageErrors }
         onExited: function(code) {
-            root.receivePage(Model.reply(pageOutput.text, pageErrors.text, code), root.requestInfo)
+            if (pageErrors.text.trim()) console.warn("GitHub Actions helper (exit " + code + "): " + pageErrors.text.trim())
+            root.receivePage(Model.reply(pageOutput.text, code, root.requestInfo.requestId), root.requestInfo)
             root.workerBusy = false
         }
     }

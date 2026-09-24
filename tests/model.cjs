@@ -21,9 +21,9 @@ assert.equal(model.rows(repos, expanded, {}, '', Date.now())[2].title, 'Loading 
 assert.equal(model.duration({started_at:'2026-01-01T00:00:00Z'}, Date.parse('2026-01-01T00:01:15Z')), '1m 15s');
 assert.equal(model.icon('cancelled'), '⊘');
 assert.equal(model.icon('failure'), '✕');
-assert.equal(model.reply('{"repos":[]}', '', 0), '{"repos":[]}');
-assert.equal(JSON.parse(model.reply('', 'python3: cannot open helper', 2)).error, 'python3: cannot open helper');
-assert.equal(JSON.parse(model.reply('', '', 1)).error, 'Workflow helper returned no data (exit 1)');
+assert.equal(model.reply('{"repos":[]}', 0, 5), '{"repos":[]}');
+assert.deepEqual(JSON.parse(model.reply('', 2, 5)), {requestId:5, errorType:'setup', error:'Workflow helper failed (exit 2); see the shell log'});
+assert.equal(JSON.parse(model.reply('', 127, 5)).error, 'python3 not found');
 const ranked = model.rows([{repo:'z/idle', checked:'now', active:0}, {repo:'a/unchecked'}, {repo:'b/running', active:2, checked:'now'}], {}, {}, '', Date.now());
 assert.equal(ranked[0].title, 'b/running');
 assert.equal(ranked[0].info, '2 running');
