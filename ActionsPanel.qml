@@ -169,7 +169,7 @@ Item {
         return Color.menu.text
     }
     function openBrowser() {
-        if (current && /^https:\/\/github\.com\//.test(current.url || ""))
+        if (current && Model.browsable(current.url))
             Quickshell.execDetached(["xdg-open", current.url])
     }
 
