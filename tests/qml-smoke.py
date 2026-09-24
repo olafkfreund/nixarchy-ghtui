@@ -68,7 +68,16 @@ ShellRoot {
     }
     Timer {
         interval: 18000; running: true
-        onTriggered: { console.error("CHECK FAILED: timeout stage=" + stage + " " + panel.status()); Qt.quit() }
+        onTriggered: {
+            var missing = stage === 1 ? [panel.polling.requests>=6 ? "" : "requests>=6", panel.details["one/repo:7"] ? "" : "jobs one/repo:7",
+                panel.polling.catalogueComplete ? "" : "catalogueComplete"].filter(Boolean).join(",") : ""
+            console.error("CHECK FAILED: timeout stage=" + stage + (missing ? " missing=" + missing : "") + " " + panel.status()); Qt.quit()
+        }
+    }
+    function stopped() {
+        if (!panel.polling.auth) return false
+        console.error("CHECK FAILED: polling stopped: " + panel.error + " " + panel.status()); Qt.quit()
+        return true
     }
     property int stage: 0
     property string selected: ""
@@ -118,6 +127,7 @@ ShellRoot {
     Timer {
         interval: 250; running: true; repeat: true
         onTriggered: {
+            if(stopped()) return
             if(stage===1 && panel.polling.requests>=6 && panel.details["one/repo:7"] && panel.polling.catalogueComplete) {
                 check(panel.error==="","async API has no error")
                 check(panel.current.key===selected && panel.filterText==="repo","poll preserves searched selection")
