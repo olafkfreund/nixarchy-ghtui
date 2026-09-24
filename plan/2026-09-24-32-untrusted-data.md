@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 32
 spec: spec/2026-09-24-32-untrusted-data.md
 ---
