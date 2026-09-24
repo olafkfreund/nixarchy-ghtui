@@ -170,3 +170,35 @@ assert.equal(overlap.repos[0].checked,undefined);
 req=polling.next(overlap,1000); polling.complete(overlap,response(req,[{id:7,status:'in_progress'}]),1100);
 assert.equal(overlap.repos[0].active,1,'overlapping pages cannot double-count active workflows');
 console.log('Polling: overlapping pages deduplicate workflow IDs');
+
+// Setup errors and malformed data stop polling until a manual refresh; stale ones are ignored.
+function flight(kind) {
+  const f=polling.create(); polling.open(f,0); f.discover=false; f.catalogueComplete=true;
+  f.repos=[{repo:'a/b',runs:[{id:7,status:'in_progress',run_attempt:1}]}]; f.selected='a/b';
+  polling.ensure(f,kind,kind==='catalogue' ? '' : 'a/b',kind==='run' ? '7' : '','interactive',0);
+  const r=polling.next(f,0); assert.equal(r.kind,kind); return {f,r};
+}
+let {f:setup,r:setupReq}=flight('catalogue');
+assert.equal(polling.complete(setup,{...response(setupReq),error:'python3 not found',errorType:'setup'},1000),true);
+assert.equal(setup.error,'python3 not found');
+assert.equal(polling.next(setup,100000),null,'setup error stops polling');
+polling.manual(setup,100000,false); assert.ok(polling.next(setup,100000),'manual refresh resumes');
+for(const kind of ['catalogue','summary']) for(const data of [null,{},[null]]) {
+  const {f,r}=flight(kind);
+  assert.equal(polling.complete(f,response(r,data),1000),true);
+  assert.equal(f.error,'Workflow helper returned invalid data');
+  assert.equal(f.auth,true);
+}
+let {f:runOk,r:runReq}=flight('run');
+polling.complete(runOk,response(runReq,{id:7,status:'completed',run_attempt:1}),1000);
+assert.equal(runOk.error,''); assert.equal(polling.runFor(runOk,'a/b',7).status,'completed');
+({f:runOk,r:runReq}=flight('run'));
+polling.complete(runOk,response(runReq,[]),1000);
+assert.equal(runOk.error,'Workflow helper returned invalid data'); assert.equal(runOk.auth,true);
+({f:setup,r:setupReq}=flight('catalogue'));
+assert.equal(polling.complete(setup,{...response(setupReq),requestId:setupReq.requestId+1,error:'x',errorType:'setup'},1000),false);
+assert.equal(polling.complete(setup,{...response(setupReq,null),requestId:setupReq.requestId+1},1000),false);
+polling.close(setup); polling.open(setup,2000);
+assert.equal(polling.complete(setup,{...response(setupReq),error:'x',errorType:'setup'},2000),false);
+assert.equal(setup.auth,false,'stale setup or malformed replies change nothing');
+console.log('Polling: setup errors and malformed data stop until manual refresh');
