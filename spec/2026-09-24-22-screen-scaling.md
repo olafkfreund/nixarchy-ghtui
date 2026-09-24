@@ -26,8 +26,8 @@ monitor at scale 2 is sized like a 1080p one, and Hyprland renders it sharp.
 ```qml
 // ponytail: one factor for the card, text and spacing; the reference is today's 900×680 card
 readonly property real fit: Math.max(1, Math.min(2,
-    window.width * 0.6 / Style.space(900),
-    window.height * 0.7 / Style.space(680)))
+    window.width * 0.6 / 900,
+    window.height * 0.7 / 680))
 readonly property real textScale: 1.5 * fit
 ```
 
@@ -45,14 +45,15 @@ readonly property real textScale: 1.5 * fit
   monitor at scale 1 gets a 1800×1360 card, 47% × 63% of the screen, the same
   proportion 1080p has today. Past 2× only the empty space would grow. The
   body text would already be 36 px on the default 12 px base.
-- **The theme font size still applies underneath.** `Style.space()` includes
-  `Style.fontScale`, so a larger `base-size` gives a larger reference, a
-  smaller `fit`, and the same share of the screen. Text stays at
-  `Style.font.* × 1.5 × fit`. The card is never smaller than it is today and
-  never larger than the bigger of today's size and the 60/70 share. The two
-  scales never multiply past the share of the screen.
+- **The theme font size and the screen scale multiply.** `fit` is measured
+  against the raw logical 900×680, not `Style.space()`, so it depends only on
+  the screen. Text is `Style.font.* × 1.5 × fit` and the card is
+  `Style.space(900|680) × fit`. Both follow `base-size` exactly as they do
+  today, and `fit` multiplies on top. The card is never smaller than it is
+  today. The clamp to the screen minus `Style.gapsOut * 2` bounds the card
+  when a large theme font and a large screen together would overflow it.
 
-| Logical screen (default font) | `fit` | Card |
+| Logical screen (default 12 px `base-size`; a larger base grows the card and clamps it to the screen) | `fit` | Card |
 | --- | --- | --- |
 | 1366×768 | 1 (clamped) | 900×680, clamped to the screen minus gaps as today |
 | 1920×1080 (or 4K at scale 2) | 1.11 | 1000×756 |
@@ -116,8 +117,12 @@ text, rows and spacing grow with it, from 1.5× up to 3× the theme font sizes."
   ultra-wide screens, and text can only follow one factor. The smaller of the
   two keeps the proportions and caps the width at the same time.
 - **Scaling against a fixed reference resolution such as 1920×1080.** That is
-  the same ratio with an arbitrary constant. Deriving it from today's
-  900×680 in `Style.space()` keeps the theme font size in the calculation.
+  the same ratio with an arbitrary constant. Today's 900×680 card is the
+  natural reference.
+- **Measuring `fit` against `Style.space(900|680)`.** `Style.space()`
+  includes `Style.fontScale`, so a larger `base-size` would lower `fit` by
+  the same amount and cancel out. For 1 < `fit` < 2 the text would not change
+  with the theme font size, which breaks an intent constraint.
 - **Scaling the border and corner radius as well.** These are theme tokens
   shared with the other Omarchy menus. Scaling them would make this panel
   look different from its siblings.
@@ -127,8 +132,12 @@ text, rows and spacing grow with it, from 1.5× up to 3× the theme font sizes."
 - **Text layout.** Longer workflow names are elided sooner relative to the
   card, because text and card grow by the same factor. That is no worse than
   today. The `info` column is still capped at 35% of the list (`:361`).
-- **Custom themes with very large fonts.** `fit` falls to 1, so behaviour is
-  exactly today's, including the clamp to the screen.
+- **A large theme font on a large screen.** The theme font and `fit`
+  multiply, so the card reaches the screen clamp sooner than it does today.
+  Nothing clips. Row heights are computed from the text size, so rows grow
+  with the text. The list scrolls, and the header, search hint and footer
+  elide. There are fewer rows on screen. With the default font, `fit` alone
+  never reaches the clamp.
 - **Rounding.** `Math.round` on tokens and `space()` can differ by 1 px from
   an exact product. That is invisible.
 - **Screenshots.** At 1080p the panel is 11% larger, so `docs/img/` probably
