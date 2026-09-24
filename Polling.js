@@ -1,5 +1,8 @@
 // One page at a time; all time is injected so scheduling can be tested without Qt.
 var phases = ["recent", "in_progress", "queued", "waiting", "pending", "requested"];
+var TIMING = {settle:250, catalogue:300000, summary:60000, selected:10000, active:15000,
+    idle:600000, followup:15000, jobs:5000, window:60000, perWindow:60, gap:1000,
+    rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000};
 function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
@@ -24,14 +27,14 @@ function ensure(s, kind, repo, run, group, due) {
 }
 function open(s, now) {
     s.opened = true; s.generation++; s.auth = false;
-    if (!s.catalogueComplete || now - s.catalogueAt >= 300000) s.discover = true;
+    if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue) s.discover = true;
     s.stableAt = now;
 }
 function close(s) {
     s.opened = false; s.generation++; s.tasks = {}; s.flight = null;
 }
 function select(s, repo, run, expanded, now, immediate) {
-    if (s.selected !== repo) s.stableAt = now + (immediate ? 0 : 250);
+    if (s.selected !== repo) s.stableAt = now + (immediate ? 0 : TIMING.settle);
     else if (immediate) s.stableAt = now;
     s.selected = repo || ""; s.inspected = String(run || ""); s.expanded = expanded || {};
 }
@@ -63,12 +66,12 @@ function seed(s, now) {
     s.repos.slice().sort(function(a,b) { return (a.activityAt === undefined ? -Infinity : a.activityAt) - (b.activityAt === undefined ? -Infinity : b.activityAt) }).forEach(function(r) {
         if (r.archived || r.disabled || r.blocked) return;
         var selected = r.repo === s.selected && now >= s.stableAt;
-        if (selected && now >= age(r.summaryAt, 60000)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,60000));
+        if (selected && now >= age(r.summaryAt, TIMING.summary)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,TIMING.summary));
         var summary = s.tasks[key("summary",r.repo)];
         var activityKey = key("activity",r.repo);
         if (summary && !(s.flight && s.flight.key === activityKey)) delete s.tasks[activityKey];
         if (!summary) {
-            var interval = selected ? 10000 : r.active > 0 ? 15000 : 600000;
+            var interval = selected ? TIMING.selected : r.active > 0 ? TIMING.active : TIMING.idle;
             var group = selected ? "interactive" : r.active > 0 ? "active" : "background";
             if (now >= age(r.activityAt, interval) && (group!=="background" || !backgroundQueued || s.tasks[activityKey])) {
                 ensure(s, "activity",r.repo,"",group,age(r.activityAt,interval));
@@ -80,21 +83,21 @@ function seed(s, now) {
         }
         (r.runs || []).forEach(function(run) {
             if (run.awaitingFinal || run.followupAt !== undefined && run.status !== "completed" && run.status !== "in_progress")
-                if (now >= age(run.followupAt,15000)) ensure(s,"run",r.repo,run.id,selected ? "interactive" : "active",age(run.followupAt,15000));
+                if (now >= age(run.followupAt,TIMING.followup)) ensure(s,"run",r.repo,run.id,selected ? "interactive" : "active",age(run.followupAt,TIMING.followup));
         });
         if (selected && s.inspected && s.expanded[r.repo + ":" + s.inspected]) {
             var run = runFor(s,r.repo,s.inspected), detail = s.details[r.repo + ":" + s.inspected];
             var attempt = run && (run.run_attempt || 1);
             if (detail && detail.unavailable) return;
             var final = run && run.status === "completed" && detail && detail.finalAttempt === attempt;
-            if (!final && now >= age(detail && detail.jobsAt,5000)) ensure(s,"jobs",r.repo,s.inspected,"interactive",age(detail && detail.jobsAt,5000));
+            if (!final && now >= age(detail && detail.jobsAt,TIMING.jobs)) ensure(s,"jobs",r.repo,s.inspected,"interactive",age(detail && detail.jobsAt,TIMING.jobs));
         }
     });
 }
 function next(s, now) {
     if (!s.opened || s.flight || s.auth || now < s.cooldown) return null;
-    s.starts = s.starts.filter(function(at) { return now - at < 60000 });
-    if (s.starts.length >= 60 || s.starts.length && now - s.starts[s.starts.length-1] < 1000) return null;
+    s.starts = s.starts.filter(function(at) { return now - at < TIMING.window });
+    if (s.starts.length >= TIMING.perWindow || s.starts.length && now - s.starts[s.starts.length-1] < TIMING.gap) return null;
     s.clock=now;
     seed(s,now);
     var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now });
@@ -133,9 +136,12 @@ function mergeRuns(s,r,incoming) {
             ensure(s,"jobs",r.repo,run.id,"interactive",s.clock || 0);
     });
     invalidateJobs(s,r,incoming);
-    r.runs=union(r.runs || [], incoming).sort(function(a,b) { return (a.status==="completed")-(b.status==="completed") || b.id-a.id });
+    r.runs=recent(s,r,union(r.runs || [], incoming));
+}
+function recent(s,r,runs) {
     var completed=0;
-    r.runs=r.runs.filter(function(run) { return run.status!=="completed" || ++completed<=10 || s.expanded[r.repo+":"+run.id] });
+    return runs.sort(function(a,b) { return (a.status==="completed")-(b.status==="completed") || b.id-a.id })
+        .filter(function(run) { return run.status!=="completed" || ++completed<=10 || s.expanded[r.repo+":"+run.id] });
 }
 function activity(s,r,items,now) {
     var ids={}; items.forEach(function(run) { ids[run.id]=true });
@@ -162,7 +168,7 @@ function complete(s,reply,now) {
         reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
     if (reply.errorType==="rate" || reply.remaining===0 || reply.retryAt>now) {
         var deadline=Math.max(reply.retryAt || 0,reply.remaining===0 ? reply.resetAt || 0 : 0);
-        if (deadline<=now) deadline=now+Math.min(900000,60000*Math.pow(2,s.rateFailures));
+        if (deadline<=now) deadline=now+Math.min(TIMING.rateMax,TIMING.rateBase*Math.pow(2,s.rateFailures));
         s.cooldown=Math.max(s.cooldown,deadline);
         if (reply.errorType==="rate") s.rateFailures++;
     }
@@ -177,7 +183,7 @@ function complete(s,reply,now) {
             else if (r) { var failed=runFor(s,t.repo,t.run); if(failed){ failed.awaitingFinal=false; delete failed.followupAt; failed.lookupError=s.error; } }
             delete s.tasks[t.key];
         } else {
-            t.failures++; t.due=reply.errorType==="rate" ? s.cooldown : now+Math.min(300000,5000*Math.pow(2,t.failures-1));
+            t.failures++; t.due=reply.errorType==="rate" ? s.cooldown : now+Math.min(TIMING.retryMax,TIMING.retryBase*Math.pow(2,t.failures-1));
             // Retry a failed snapshot from page one; keep already published cache data.
             t.page=1; t.phase=0; t.items=[]; t.all=[];
             if (r) r.error=s.error;
@@ -219,10 +225,8 @@ function complete(s,reply,now) {
         t.phase++; t.items=[]; t.page=1;
         if (t.phase<phases.length) { t.due=now; t.order=++s.order; return true; }
         var keep=(r.runs || []).filter(function(run) { return run.awaitingFinal || s.expanded[r.repo+":"+run.id] });
-        r.runs=union(t.all,keep).sort(function(a,b) { return (a.status==="completed")-(b.status==="completed") || b.id-a.id });
-        var completed=0;
-        r.runs=r.runs.filter(function(run) { return run.status!=="completed" || ++completed<=10 || s.expanded[r.repo+":"+run.id] });
-        r.summaryAt=now; r.history=true;
+        r.runs=recent(s,r,union(t.all,keep));
+        r.summaryAt=now;
     } else if (r && t.kind==="jobs") {
         var run=runFor(s,t.repo,t.run);
         s.details[t.repo+":"+t.run]={jobs:t.items,updated:new Date(now).toISOString(),jobsAt:now,
