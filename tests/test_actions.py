@@ -153,6 +153,19 @@ class PageTest(unittest.TestCase):
         self.assertEqual(reply["errorType"], "network")
         self.assertEqual(reply["error"], "GitHub request failed; check connection and gh auth status")
 
+    def test_missing_gh_is_setup_error(self):
+        with patch.object(actions, "request", side_effect=FileNotFoundError("gh")):
+            reply = actions.read_page({"kind":"catalogue", "requestId":1})
+        self.assertEqual(reply["errorType"], "setup")
+        self.assertEqual(reply["error"], "Install gh (GitHub CLI)")
+
+    def test_page_missing_gh_end_to_end(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([sys.executable, "actions.py", "page", '{"kind":"catalogue","requestId":3}'], env={**os.environ, "PATH": directory}, capture_output=True, text=True)
+        reply = json.loads(result.stdout)
+        self.assertEqual(reply["requestId"], 3)
+        self.assertEqual(reply["errorType"], "setup")
+
     def test_recent_history_does_not_follow_pagination(self):
         with patch.object(actions, "request", return_value=('HTTP/2.0 200 OK\nLink: <https://evil.test/>; rel="next"\n\n{"workflow_runs":[]}', "", 0)):
             result = actions.read_page({"kind":"summary", "repo":"a/b", "status":"recent", "requestId":1})

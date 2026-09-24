@@ -187,6 +187,9 @@ def read_page(task):
             result["data"] = body[key]
         if kind != "run" and not (kind == "summary" and task.get("status", "recent") == "recent"):
             result["nextPage"] = next_page(endpoint, headers)
+    except FileNotFoundError:
+        # ponytail: only Popen(["gh", ...]) raises this; PermissionError stays "network"
+        result.update(errorType="setup", error="Install gh (GitHub CLI)")
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
         result.update(errorType="network", error="GitHub request timed out or returned invalid data")
     return result
