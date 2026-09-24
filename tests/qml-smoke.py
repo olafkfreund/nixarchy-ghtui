@@ -88,6 +88,13 @@ ShellRoot {
             panel.adopt()
             panel.move(1)
             check(panel.current.kind==="run","keyboard selection")
+            panel.polling.repos[0].runs[0].run_started_at=new Date(panel.now-5000).toISOString()
+            panel.adopt()
+            var tickKey=panel.current.key, tickCursor=panel.cursor, tickScroll=JSON.parse(panel.status()).scrollY
+            panel.now=panel.now+3000
+            check(panel.current.info==="8s","running duration ticks with now")
+            check(panel.current.key===tickKey && panel.cursor===tickCursor,"tick keeps selection")
+            check(JSON.parse(panel.status()).scrollY===tickScroll,"tick keeps scroll")
             panel.expand(false)
             check(panel.entries[2].title==="Loading jobs…","expand run")
             panel.expand(true)
