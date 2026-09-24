@@ -53,3 +53,53 @@ model.syncRows(list, [first[0]]);
 assert.equal(list.count, 1);
 assert.equal(backing[0].rowKey, 'a');
 console.log('Model: hierarchy, filtering, progress, selection and duration passed');
+
+// #30: runs past the first page per status show as one "more" row.
+const busy = {repo:'a/b', checked:'now', active:0, hidden:{queued:900, waiting:12, pending:0},
+  runs:[{id:11, status:'queued', name:'CI', head_branch:'fork-x'}, {id:10, status:'queued', name:'CI'}, {id:1, status:'completed', conclusion:'success', name:'CI'}]};
+const open = {'repo:a/b': true};
+let shown = model.rows([busy], open, {}, '', Date.now());
+assert.deepEqual(Array.from(shown, row => row.key), ['repo:a/b', 'a/b:11', 'a/b:10', 'repo:a/b:more', 'a/b:1']);
+const more = shown[3];
+assert.equal(more.title, '+900 more queued · +12 more waiting');
+assert.deepEqual([more.kind, more.parent, more.depth, more.url, more.run, more.repo],
+  ['more', 'repo:a/b', 1, 'https://github.com/a/b/actions', undefined, 'a/b']);
+assert.equal(model.rows([{...busy, hidden:{queued:4000}}], open, {}, '', Date.now())[3].title, '+about 4000 more queued');
+assert.equal(model.rows([{...busy, hidden:{queued:1000}}], open, {}, '', Date.now())[3].title, '+1000 more queued');
+assert.equal(model.rows([{...busy, runs:[busy.runs[2]]}], open, {}, '', Date.now())[1].key, 'repo:a/b:more', 'before completed runs even with no unfinished run shown');
+assert.equal(model.rows([busy], {}, {}, '', Date.now()).length, 1, 'collapsed repository has no more row');
+assert.ok(!model.rows([{...busy, hidden:{queued:0}}], open, {}, '', Date.now()).some(row => row.kind === 'more'));
+assert.ok(!model.rows([busy], open, {}, 'fork-x', Date.now()).some(row => row.kind === 'more'), 'search covers visible runs only');
+assert.ok(model.rows([busy], open, {}, 'a/b', Date.now()).some(row => row.kind === 'more'));
+
+function counted() {
+  const store = [], stub = {ops: 0, store,
+    get count() { return store.length; }, get(i) { return store[i]; },
+    insert(i, v) { store.splice(i, 0, v); this.ops++; }, move(f, t) { store.splice(t, 0, ...store.splice(f, 1)); this.ops++; },
+    remove(i, n) { store.splice(i, n); this.ops++; }, setProperty(i, k, v) { store[i][k] = v; this.ops++; }};
+  return stub;
+}
+const many = {repo:'o/r', checked:'x', active:0, runs:Array.from({length:5000}, (_, i) => ({id:100000 + i, status:'queued', name:'CI', run_number:i}))
+  .concat(Array.from({length:10}, (_, i) => ({id:i + 1, status:'completed', name:'CI'})))};
+const big = model.rows([many, {repo:'o/other', checked:'x', active:0}], {'repo:o/r': true}, {}, '', 0);
+assert.equal(big.length, 5012);
+function opsFor(next) { const l = counted(); model.syncRows(l, big); l.ops = 0; model.syncRows(l, next); return l; }
+assert.equal(opsFor(big.slice()).ops, 0);
+const withoutOne = big.slice(); withoutOne.splice(2, 1);
+assert.equal(opsFor(withoutOne).ops, 1, 'one removed row is one remove, not a cascade of moves');
+const jumped = big.slice(); jumped.splice(1, 0, ...jumped.splice(big.length - 11, 1));
+assert.equal(opsFor(jumped).ops, 1);
+assert.equal(opsFor(big.map((row, i) => i === 5 ? {...row, info:'1m 0s'} : row)).ops, 1, 'a changed field updates the row');
+assert.equal(opsFor(big.map((row, i) => i === 5 ? {...row, url:'https://github.com/x'} : row)).ops, 0, 'fields the delegate does not read are ignored');
+
+let seed = 30;
+function random(n) { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; }
+const pool = Array.from({length:60}, (_, i) => 'k' + i), synced = counted();
+for (let round = 0; round < 200; round++) {
+  const next = pool.filter(() => random(3)).map(key => ({key, title:key, subtitle:'', status:['queued', 'in_progress'][random(2)], info:String(random(4))}));
+  for (let i = next.length - 1; i > 0; i--) { if (random(4)) continue; const j = random(i + 1); [next[i], next[j]] = [next[j], next[i]]; }
+  model.syncRows(synced, next);
+  assert.deepEqual(synced.store.map(x => x.rowKey), next.map(row => row.key));
+  assert.deepEqual(synced.store.map(x => [x.rowData.status, x.rowData.info]), next.map(row => [row.status, row.info]));
+}
+console.log('Model: more row, linear syncRows and random-order equivalence passed');

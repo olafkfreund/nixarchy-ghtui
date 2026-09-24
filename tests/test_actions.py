@@ -46,12 +46,13 @@ class ActionsTest(unittest.TestCase):
 
 class PageTest(unittest.TestCase):
     def test_headers_pagination_and_single_call(self):
-        task = {"kind":"activity", "repo":"a/b", "page":1, "requestId":3}
+        # Jobs pages still follow pagination; unfinished-status pages don't (#30).
+        task = {"kind":"jobs", "repo":"a/b", "run":"5", "page":1, "requestId":3}
         output = ('HTTP/1.1 100 Continue\r\n\r\nHTTP/2.0 200 OK\r\n'
                   'X-RateLimit-Remaining: 42\r\nX-RateLimit-Reset: 1700000000\r\n'
                   'Authorization: must-not-escape\r\n'
-                  'Link: <https://api.github.com/repos/a/b/actions/runs?status=in_progress&per_page=100&page=2>; rel="next"\r\n\r\n'
-                  '{"workflow_runs":[{"id":7,"status":"in_progress"}]}')
+                  'Link: <https://api.github.com/repos/a/b/actions/runs/5/jobs?filter=latest&per_page=100&page=2>; rel="next"\r\n\r\n'
+                  '{"jobs":[{"id":7,"status":"in_progress"}]}')
         with patch.object(actions, "request", return_value=(output, "", 0)) as request:
             result = actions.read_page(task)
             self.assertEqual(request.call_count, 1)
@@ -144,6 +145,34 @@ class PageTest(unittest.TestCase):
             result = actions.read_page({"kind":"summary", "repo":"a/b", "status":"recent", "requestId":1})
             self.assertEqual(result["nextPage"], 0)
             self.assertEqual(result["error"], "")
+
+    def status_page(self, task, body):
+        status = task.get("status", "in_progress")
+        link = f'Link: <https://api.github.com/repos/a/b/actions/runs?status={status}&per_page=100&page=2>; rel="next"\n'
+        with patch.object(actions, "request", return_value=("HTTP/2.0 200 OK\n" + link + "\n" + json.dumps(body), "", 0)):
+            return actions.read_page(task)
+
+    def test_summary_status_page_does_not_follow_next(self):
+        result = self.status_page({"kind":"summary", "repo":"a/b", "status":"queued", "requestId":1},
+                                  {"total_count":2000, "workflow_runs":[{"id":7,"status":"queued"}]})
+        self.assertEqual((result["errorType"], result["nextPage"], result.get("total")), ("", 0, 2000))
+
+    def test_activity_page_does_not_follow_next(self):
+        result = self.status_page({"kind":"activity", "repo":"a/b", "requestId":1},
+                                  {"total_count":250, "workflow_runs":[{"id":7,"status":"in_progress"}]})
+        self.assertEqual((result["errorType"], result["nextPage"], result.get("total")), ("", 0, 250))
+
+    def test_missing_total_count_is_network_error(self):
+        for body in [{"workflow_runs":[]}, {"total_count":-1, "workflow_runs":[]}, {"total_count":"9", "workflow_runs":[]}]:
+            with self.subTest(body=body):
+                result = self.status_page({"kind":"summary", "repo":"a/b", "status":"queued", "requestId":1}, body)
+                self.assertEqual(result["errorType"], "network")
+
+    def test_recent_has_no_total(self):
+        result = self.status_page({"kind":"summary", "repo":"a/b", "status":"recent", "requestId":1},
+                                  {"total_count":90000, "workflow_runs":[]})
+        self.assertEqual(result["errorType"], "")
+        self.assertNotIn("total", result)
 
 
 if __name__ == "__main__":
