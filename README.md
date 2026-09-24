@@ -64,7 +64,7 @@ Import a NixOS module with the following content, replacing `YOUR_USER` with you
 }
 ```
 
-The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. No second desktop stack or standalone Home Manager installation is needed.
+The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. The package lists these as `passthru.runtimeDeps` (`gh`, `python3`, `xdg-utils`). No second desktop stack or standalone Home Manager installation is needed.
 
 Nix must have permission to fetch this repository. Your `gh auth login` is for runtime API access and does not automatically configure Nix's fetch credentials. An SSH input URL such as `git+ssh://git@github.com/olafkfreund/nixarchy-ghtui.git` is another option when your SSH access is configured. Never put tokens in `flake.nix` or `flake.lock`.
 

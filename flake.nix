@@ -26,12 +26,23 @@
     in
     {
       packages = forAllSystems (pkgs: {
-        default = pkgs.runCommand "nixarchy-ghtui-${version}" { inherit version; } ''
-          mkdir -p "$out"
-          ${nixpkgs.lib.concatMapStringsSep "\n" (file: ''
-            cp ${./. + "/${file}"} "$out/${file}"
-          '') runtimeFiles}
-        '';
+        default =
+          pkgs.runCommand "nixarchy-ghtui-${version}"
+            {
+              inherit version;
+              # Found on PATH at run time, not substituted, so Git installs keep working (#32).
+              passthru.runtimeDeps = [
+                pkgs.gh
+                pkgs.python3
+                pkgs.xdg-utils
+              ];
+            }
+            ''
+              mkdir -p "$out"
+              ${nixpkgs.lib.concatMapStringsSep "\n" (file: ''
+                cp ${./. + "/${file}"} "$out/${file}"
+              '') runtimeFiles}
+            '';
       });
 
       checks = forAllSystems (pkgs: {
