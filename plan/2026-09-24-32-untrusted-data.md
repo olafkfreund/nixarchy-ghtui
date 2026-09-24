@@ -194,6 +194,37 @@ spec: spec/2026-09-24-32-untrusted-data.md
 
     Record the result on the PR. Verify by the lead's comment on the PR.
 
+## Deviations
+
+1. **Host (user rule).** All desktop testing happens on razer, never on
+   p620. The step 5 `tests/qml-smoke.py` run with a real plugin directory
+   takes place on razer:
+   - from a scratch `/tmp` clone of this branch
+   - inside razer's session environment, by importing the whole `environ`
+     of the `.quickshell-wrapped_ -n` process, including `OMARCHY_PATH`
+   - after checking `#agents` for claims and posting a CLAIM, with "done"
+     posted afterwards
+
+   razer's shell is never restarted, and its `~/.config/omarchy/plugins` is
+   never touched. `nix flake check` on p620 still runs the sandboxed
+   invalid-directory smoke case, which needs no desktop.
+2. **#30 landed before this work.** Status pages (`activity`, and `summary`
+   with an unfinished status) now return `total` and never follow next
+   links. Only `catalogue` and `jobs` still do. Cleaning is independent of
+   this. The step 1 test covers `activity`, `summary`/`queued` and
+   `summary`/`recent` pages, each carrying `total_count`.
+3. **#31 landed before this work.** `main()` accepts only `page`. Step 0's
+   check is therefore `grep -n 'choices=("page",)' actions.py`, which should
+   match.
+4. **Implementation detail.** A small `plain_fields(row, fields)` and
+   `RUN_TEXT = ("name", "display_title", "head_branch")` avoid repeating
+   the field list for run rows and the run dict. Steps that aren't dicts are
+   skipped. The step 1 test includes one such step, because `read_page`
+   checks only that `steps` is a list.
+5. **Commits.** There are three commits, not one: steps 1–2 (with this plan
+   update), steps 3–5, and step 6. This keeps red/green evidence per
+   change. The PR is the same.
+
 ## Tests
 
 ```sh

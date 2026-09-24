@@ -5,12 +5,15 @@ import re
 import signal
 import subprocess
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit, parse_qs
 
 
 ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
+# ZWNJ and ZWJ are Cf but kept: emoji sequences and several scripts need them, and they cannot reorder text (#32).
+JOINERS = "\u200c\u200d"
 
 
 def repo_name(value):
@@ -19,6 +22,24 @@ def repo_name(value):
     if any(part in (".", "..") for part in value.split("/")):
         raise ValueError("Invalid repository")
     return value
+
+
+def plain(value):
+    """Display text from GitHub: line breaks and tabs become spaces, other Cc/Cf characters go (#32)."""
+    if not isinstance(value, str):
+        return value
+    text = " ".join(value.replace("\t", " ").splitlines())
+    return "".join(c for c in text if c in JOINERS or unicodedata.category(c) not in ("Cc", "Cf"))
+
+
+def plain_fields(row, fields):
+    for field in fields:
+        if field in row:
+            row[field] = plain(row[field])
+    return row
+
+
+RUN_TEXT = ("name", "display_title", "head_branch")
 
 
 def request(endpoint, include=False):
@@ -153,11 +174,12 @@ def read_page(task):
                 raise ValueError("Invalid repository response")
             if any(not isinstance(row, dict) for row in body):
                 raise ValueError("Invalid repository entry")
-            result["data"] = [{"repo": repo_name(row["full_name"]), "description": row.get("description") or "",
+            result["data"] = [{"repo": repo_name(row["full_name"]), "description": plain(row.get("description") or ""),
                                "archived": bool(row.get("archived")), "disabled": bool(row.get("disabled"))} for row in body]
         elif kind == "run":
             if not isinstance(body, dict) or str(body.get("id")) != str(task["run"]) or "status" not in body:
                 raise ValueError("Invalid run response")
+            plain_fields(body, RUN_TEXT)
         else:
             key = "jobs" if kind == "jobs" else "workflow_runs"
             if not isinstance(body, dict) or not isinstance(body.get(key), list):
@@ -166,6 +188,11 @@ def read_page(task):
                 raise ValueError("Invalid workflow entry")
             if kind == "jobs" and any(not isinstance(row.get("steps", []), list) for row in body[key]):
                 raise ValueError("Invalid job steps")
+            for row in body[key]:
+                plain_fields(row, ("name",) if kind == "jobs" else RUN_TEXT)
+                for step in row.get("steps", []) if kind == "jobs" else []:
+                    if isinstance(step, dict):
+                        plain_fields(step, ("name",))
             result["data"] = body[key]
             if kind == "activity" or task.get("status") in ACTIVE:
                 # One page per unfinished status (#30); total_count says how many runs were left out.
