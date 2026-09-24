@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "olafkfreund.github-actions",
   "name": "GitHub Actions",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "keepLoaded": true,
   "author": "olafkfreund",
   "description": "Keyboard-driven workflow, job and step monitor",
