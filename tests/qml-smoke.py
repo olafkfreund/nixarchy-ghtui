@@ -22,7 +22,9 @@ for scenario in ('fresh', 'managed'):
             (root / name).symlink_to(shell / name)
         for name in ('ActionsPanel.qml', 'ActionsModel.js', 'Polling.js', 'menu.py', 'menu.example.json'):
             (root / name).symlink_to(source / name)
-        (root / 'actions.py').write_text('''import json, sys, time
+        # The fake replies with ~200 KiB (over the 64 KiB pipe buffer) in 4 KiB chunks and exits at once,
+        # so every run checks that a reply written right before exit reaches the panel whole (#36).
+        (root / 'actions.py').write_text('''import json, os, sys, time
 request=json.loads(sys.argv[2]); kind=request['kind']
 time.sleep(0.1)
 run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1}
@@ -30,7 +32,9 @@ if kind=='catalogue': data=[{'repo':'one/repo'},{'repo':'two/repo'}]
 elif kind=='jobs': data=[{'id':8,'name':'build','status':'in_progress','steps':[{'number':1,'name':'Checkout','status':'completed','conclusion':'success'}]}]
 elif kind=='run': data=run
 else: data=[run] if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
-print(json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':'','errorType':'','remaining':4000}))
+reply=json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':'','errorType':'','remaining':4000,'padding':'x'*200000}).encode()+b'\\n'
+for i in range(0,len(reply),4096): os.write(1,reply[i:i+4096])
+os._exit(0)
 ''')
         home = root / 'home'
         home.mkdir()
@@ -64,7 +68,16 @@ ShellRoot {
     }
     Timer {
         interval: 18000; running: true
-        onTriggered: { console.error("CHECK FAILED: timeout stage=" + stage + " " + panel.status()); Qt.quit() }
+        onTriggered: {
+            var missing = stage === 1 ? [panel.polling.requests>=6 ? "" : "requests>=6", panel.details["one/repo:7"] ? "" : "jobs one/repo:7",
+                panel.polling.catalogueComplete ? "" : "catalogueComplete"].filter(Boolean).join(",") : ""
+            console.error("CHECK FAILED: timeout stage=" + stage + (missing ? " missing=" + missing : "") + " " + panel.status()); Qt.quit()
+        }
+    }
+    function stopped() {
+        if (!panel.polling.auth) return false
+        console.error("CHECK FAILED: polling stopped: " + panel.error + " " + panel.status()); Qt.quit()
+        return true
     }
     property int stage: 0
     property string selected: ""
@@ -114,6 +127,7 @@ ShellRoot {
     Timer {
         interval: 250; running: true; repeat: true
         onTriggered: {
+            if(stopped()) return
             if(stage===1 && panel.polling.requests>=6 && panel.details["one/repo:7"] && panel.polling.catalogueComplete) {
                 check(panel.error==="","async API has no error")
                 check(panel.current.key===selected && panel.filterText==="repo","poll preserves searched selection")
