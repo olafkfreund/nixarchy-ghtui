@@ -167,7 +167,13 @@ def read_page(task):
             if kind == "jobs" and any(not isinstance(row.get("steps", []), list) for row in body[key]):
                 raise ValueError("Invalid job steps")
             result["data"] = body[key]
-        if kind != "run" and not (kind == "summary" and task.get("status", "recent") == "recent"):
+            if kind == "activity" or task.get("status") in ACTIVE:
+                # One page per unfinished status (#30); total_count says how many runs were left out.
+                total = body.get("total_count")
+                if type(total) is not int or total < 0:
+                    raise ValueError("Invalid workflow total")
+                result["total"] = total
+        if kind in ("catalogue", "jobs"):
             result["nextPage"] = next_page(endpoint, headers)
     except FileNotFoundError:
         # ponytail: only Popen(["gh", ...]) raises this; PermissionError stays "network"
