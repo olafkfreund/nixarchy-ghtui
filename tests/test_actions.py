@@ -174,6 +174,36 @@ class PageTest(unittest.TestCase):
         self.assertEqual(result["errorType"], "")
         self.assertNotIn("total", result)
 
+    def test_page_text_is_plain(self):
+        # #32: fork PRs control these strings; bidi overrides, controls and line breaks must not reach QML.
+        emoji, persian = "👨‍👩‍👧", "می‌خواهم"
+        run = {"id": 7, "status": "completed", "conclusion": "failure", "html_url": "https://github.com/a/b/actions/runs/7",
+               "name": "a\tb", "display_title": "fix‮ sseccus\ntwo", "head_branch": "ma​in\x07"}
+        plain_run = {"name": "a b", "display_title": "fix sseccus two", "head_branch": "main"}
+
+        def page(task, body):
+            with patch.object(actions, "request", return_value=("HTTP/2.0 200 OK\n\n" + json.dumps(body), "", 0)):
+                result = actions.read_page(dict(task, requestId=1))
+            self.assertEqual(result["errorType"], "", task)
+            return result["data"]
+
+        for task in [{"kind": "activity", "repo": "a/b"}, {"kind": "summary", "repo": "a/b", "status": "queued"},
+                     {"kind": "summary", "repo": "a/b", "status": "recent"}]:
+            with self.subTest(task=task):
+                row = page(task, {"total_count": 1, "workflow_runs": [dict(run)]})[0]
+                self.assertEqual(row, dict(run, **plain_run))
+        self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run)), dict(run, **plain_run))
+        self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run, display_title=emoji))["display_title"], emoji)
+
+        job = {"id": 8, "status": "completed", "conclusion": "success", "html_url": "https://github.com/a/b/actions/runs/7/job/8",
+               "name": "x\x1b[31my", "steps": [{"number": 1, "status": "completed", "name": "s t"}, "not-a-step"]}
+        self.assertEqual(page({"kind": "jobs", "repo": "a/b", "run": "7"}, {"jobs": [job]})[0],
+                         dict(job, name="x[31my", steps=[{"number": 1, "status": "completed", "name": "s t"}, "not-a-step"]))
+
+        repos = page({"kind": "catalogue"}, [{"full_name": "o/r", "description": "d⁦e\r\nf"},
+                                              {"full_name": "o/s", "description": persian}])
+        self.assertEqual([(r["repo"], r["description"]) for r in repos], [("o/r", "de f"), ("o/s", persian)])
+
 
 if __name__ == "__main__":
     unittest.main()

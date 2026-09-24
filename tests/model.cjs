@@ -102,4 +102,10 @@ for (let round = 0; round < 200; round++) {
   assert.deepEqual(synced.store.map(x => x.rowKey), next.map(row => row.key));
   assert.deepEqual(synced.store.map(x => [x.rowData.status, x.rowData.info]), next.map(row => [row.status, row.info]));
 }
+// #32: only a plain github.com URL reaches xdg-open.
+assert.equal(model.browsable('https://github.com/o/r/actions/runs/1'), true);
+for (const url of ['https://github.com.evil.example/', 'https://github.com@evil.example', 'https://github.com/',
+                   'https://github.com/o/r x', 'https://github.com/o/r\n', 'https://github.com/o r',
+                   'https://github.com/o\x85r', 'http://github.com/o', undefined, 5])
+    assert.equal(model.browsable(url), false, JSON.stringify(url));
 console.log('Model: more row, linear syncRows and random-order equivalence passed');
