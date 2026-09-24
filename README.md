@@ -202,6 +202,8 @@ The validator rejects a symlinked plugin folder, so it is given the resolved sto
 
 Node is only used by tests. The QML check requires a graphical session, Quickshell and `OMARCHY_PATH`; it uses shared components and a fake API in a temporary configuration, briefly exercising the panel window without installing the plugin or requesting live GitHub data.
 
+CI runs `nix flake check` on every push and pull request; the QML check runs only locally.
+
 ## Remove
 
 For Git installations, run `omarchy plugin remove olafkfreund.github-actions`. For Nix-managed installations, remove the declarative plugin entry and rebuild. Then remove both keybindings and the `apps.github-actions` and `learn.github-actions-keybindings` entries from your menu configuration. Remove any remaining legacy `github-actions` or `system.github-actions` entry belonging to this plugin as well. No NixOS rebuild is required for a user-owned plugin.
