@@ -267,11 +267,13 @@ def main():
     signal.signal(signal.SIGALRM, timed_out)
     signal.signal(signal.SIGTERM, cancelled)
     signal.alarm(90)
+    task = None
     try:
         if args.mode == "page":
             if len(args.targets) != 1:
                 raise ValueError("page requires one JSON request")
-            data = read_page(json.loads(args.targets[0]))
+            task = json.loads(args.targets[0])
+            data = read_page(task)
         elif args.mode == "repositories":
             if len(args.targets) != 1:
                 raise ValueError("repositories requires one page number")
@@ -291,7 +293,12 @@ def main():
         print(json.dumps(data))
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired, DeadlineExceeded) as exc:
         message = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else "GitHub request timed out or returned invalid data"
-        print(json.dumps({"error": message}))
+        error = {"error": message}
+        if args.mode == "page":
+            error["errorType"] = "network" if isinstance(exc, (DeadlineExceeded, subprocess.TimeoutExpired, OSError)) else "setup"
+            if isinstance(task, dict) and type(task.get("requestId")) is int and task["requestId"] > 0:
+                error["requestId"] = task["requestId"]
+        print(json.dumps(error))
         return 1
     finally:
         signal.alarm(0)

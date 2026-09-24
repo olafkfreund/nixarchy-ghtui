@@ -1,4 +1,6 @@
 import unittest
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -165,6 +167,25 @@ class PageTest(unittest.TestCase):
         reply = json.loads(result.stdout)
         self.assertEqual(reply["requestId"], 3)
         self.assertEqual(reply["errorType"], "setup")
+
+    def run_main(self, *argv):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["actions.py", *argv]), contextlib.redirect_stdout(output):
+            code = actions.main()
+        return code, json.loads(output.getvalue())
+
+    def test_page_error_echoes_request_id(self):
+        self.assertEqual(self.run_main("page", '{"kind":"url","requestId":7}'),
+                         (1, {"error": "Invalid page operation", "errorType": "setup", "requestId": 7}))
+
+    def test_page_unparseable_request_has_no_id(self):
+        code, reply = self.run_main("page", "not-json")
+        self.assertEqual(code, 1)
+        self.assertNotIn("requestId", reply)
+        self.assertEqual(reply["errorType"], "setup")
+
+    def test_old_mode_error_unchanged(self):
+        self.assertEqual(self.run_main("jobs", "a/b", "x"), (1, {"error": "jobs requires owner/repo and numeric run ID"}))
 
     def test_recent_history_does_not_follow_pagination(self):
         with patch.object(actions, "request", return_value=('HTTP/2.0 200 OK\nLink: <https://evil.test/>; rel="next"\n\n{"workflow_runs":[]}', "", 0)):
