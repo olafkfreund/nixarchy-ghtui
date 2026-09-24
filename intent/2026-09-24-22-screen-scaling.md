@@ -54,6 +54,10 @@ monitor scale itself, because layer-shell surfaces use logical pixels.
 
 ## Constraints
 
+- Scale always follows the Omarchy theme and desktop: the theme font and
+  spacing sizes (`Style` tokens) and the Hyprland monitor scale. The panel
+  adds no scale factor of its own. As the request put it: "keep the scale
+  always as the omarchy theme or omarchy desktop scale".
 - Must keep using Omarchy's `Style` tokens and theme colours, fonts, border
   and corner radius. No hard-coded pixel sizes or fonts.
 - Must still work on small screens and on multi-monitor setups with
