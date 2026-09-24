@@ -13,10 +13,6 @@ from urllib.parse import urlsplit, parse_qs
 ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
 
 
-class DeadlineExceeded(Exception):
-    pass
-
-
 def repo_name(value):
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
         raise ValueError("Repository must be owner/name")
@@ -37,20 +33,6 @@ def request(endpoint, include=False):
             child.kill()
             child.wait()
     return stdout, stderr, child.returncode
-
-
-def api(endpoint):
-    stdout, stderr, code = request(endpoint)
-    if code:
-        error = stderr.lower()
-        if "rate limit" in error or "http 429" in error:
-            raise RuntimeError("GitHub rate limit; refresh will back off")
-        if "auth login" in error or "http 401" in error:
-            raise RuntimeError("Authenticate with gh auth login")
-        if "http 403" in error or "http 404" in error:
-            raise RuntimeError("Repository unavailable or Actions read permission missing")
-        raise RuntimeError("GitHub request failed; check connection and gh auth status")
-    return json.loads(stdout)
 
 
 def page_endpoint(task):
@@ -195,113 +177,32 @@ def read_page(task):
     return result
 
 
-def pages(endpoint, key):
-    page = 1
-    while True:
-        separator = "&" if "?" in endpoint else "?"
-        data = api(f"{endpoint}{separator}per_page=100&page={page}")
-        rows = data[key]
-        if not isinstance(rows, list):
-            raise ValueError("Unexpected GitHub response")
-        yield from rows
-        if len(rows) < 100:
-            break
-        page += 1
-
-
-def runs(repo):
-    base = f"repos/{repo_name(repo)}/actions/runs"
-    found = {}
-    for status in ACTIVE:
-        for run in pages(f"{base}?status={status}", "workflow_runs"):
-            found[run["id"]] = run
-    # Include recent completions; querying them last resolves completion races.
-    for run in api(f"{base}?per_page=10")["workflow_runs"]:
-        found[run["id"]] = run
-    return sorted(found.values(), key=lambda run: (run["status"] == "completed", -run["id"]))
-
-
-def repositories_page(page):
-    if not page.isdigit() or int(page) < 1:
-        raise ValueError("Repository page must be a positive number")
-    rows = api("user/repos?affiliation=owner,collaborator,organization_member"
-               f"&sort=pushed&direction=desc&per_page=100&page={page}")
-    if not isinstance(rows, list):
-        raise ValueError("Unexpected repository response")
-    return {"repos": [{"repo": repo_name(row["full_name"]),
-                       "description": row.get("description") or "",
-                       "archived": row.get("archived", False),
-                       "disabled": row.get("disabled", False)} for row in rows],
-            "nextPage": int(page) + 1 if len(rows) == 100 else 0}
-
-
-def activity(repo):
-    repo = repo_name(repo)
-    running = list(pages(f"repos/{repo}/actions/runs?status=in_progress", "workflow_runs"))
-    return {"repo": repo, "runs": running, "active": len(running)}
-
-
-def summary(repos):
-    result = []
-    for repo in dict.fromkeys(repo_name(value) for value in repos):
-        try:
-            result.append({"repo": repo, "runs": runs(repo), "error": ""})
-        except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as exc:
-            message = str(exc) if isinstance(exc, RuntimeError) else "Unable to read GitHub workflow data"
-            result.append({"repo": repo, "error": message})
-    return result
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("summary", "jobs", "repositories", "activity", "page"))
+    parser.add_argument("mode", choices=("page",))
     parser.add_argument("targets", nargs="+")
     args = parser.parse_args()
-    # Bound the complete request, including all pages/repositories.
-    def timed_out(*_):
-        raise DeadlineExceeded()
 
     def cancelled(*_):
         raise SystemExit(0)
 
-    signal.signal(signal.SIGALRM, timed_out)
     signal.signal(signal.SIGTERM, cancelled)
-    signal.alarm(90)
     task = None
     try:
-        if args.mode == "page":
-            if len(args.targets) != 1:
-                raise ValueError("page requires one JSON request")
-            task = json.loads(args.targets[0])
-            data = read_page(task)
-        elif args.mode == "repositories":
-            if len(args.targets) != 1:
-                raise ValueError("repositories requires one page number")
-            data = repositories_page(args.targets[0])
-        elif args.mode == "activity":
-            if len(args.targets) != 1:
-                raise ValueError("activity requires one repository")
-            data = activity(args.targets[0])
-        elif args.mode == "summary":
-            data = {"repos": summary(args.targets)}
-        else:
-            if len(args.targets) != 2 or not args.targets[1].isdigit():
-                raise ValueError("jobs requires owner/repo and numeric run ID")
-            repo, run = repo_name(args.targets[0]), args.targets[1]
-            data = {"jobs": list(pages(f"repos/{repo}/actions/runs/{run}/jobs?filter=latest", "jobs"))}
+        if len(args.targets) != 1:
+            raise ValueError("page requires one JSON request")
+        task = json.loads(args.targets[0])
+        data = read_page(task)
         data["updated"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(data))
-    except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired, DeadlineExceeded) as exc:
+    except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as exc:
         message = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else "GitHub request timed out or returned invalid data"
         error = {"error": message}
-        if args.mode == "page":
-            error["errorType"] = "network" if isinstance(exc, (DeadlineExceeded, subprocess.TimeoutExpired, OSError)) else "setup"
-            if isinstance(task, dict) and type(task.get("requestId")) is int and task["requestId"] > 0:
-                error["requestId"] = task["requestId"]
+        error["errorType"] = "network" if isinstance(exc, (subprocess.TimeoutExpired, OSError)) else "setup"
+        if isinstance(task, dict) and type(task.get("requestId")) is int and task["requestId"] > 0:
+            error["requestId"] = task["requestId"]
         print(json.dumps(error))
         return 1
-    finally:
-        signal.alarm(0)
     return 0
 
 
