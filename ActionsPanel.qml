@@ -162,7 +162,8 @@ Item {
             if (!reply || reply.requestId !== request.requestId)
                 throw new Error("Workflow helper returned an invalid request identity")
         } catch (e) {
-            reply = {requestId:request.requestId, error:"Workflow helper returned invalid data", errorType:"network"}
+            console.warn("GitHub Actions helper reply rejected: " + String(text).slice(0, 300))
+            reply = {requestId:request.requestId, error:"Workflow helper returned invalid data; see the shell log", errorType:"setup"}
         }
         if (Polling.complete(polling, reply, Date.now())) {
             if (!reply.error) updated = new Date().toISOString()
