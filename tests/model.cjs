@@ -53,4 +53,3 @@ model.syncRows(list, [first[0]]);
 assert.equal(list.count, 1);
 assert.equal(backing[0].rowKey, 'a');
 console.log('Model: hierarchy, filtering, progress, selection and duration passed');
-throw new Error('ci red check (#29), reverted next commit');
