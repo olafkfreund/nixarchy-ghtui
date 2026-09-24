@@ -24,15 +24,17 @@ class ActionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / "gh"
             pidfile = Path(directory) / "pid"
-            fake.write_text(f"#!{sys.executable}\nimport os,time\nopen({str(pidfile)!r},'w').write(str(os.getpid()))\ntime.sleep(30)\n")
+            # The rename is the readiness signal: the pid file is never seen half-written.
+            fake.write_text(f"#!{sys.executable}\nimport os,time\nopen({str(pidfile)!r}+'.tmp','w').write(str(os.getpid()))\n"
+                            f"os.replace({str(pidfile)!r}+'.tmp',{str(pidfile)!r})\ntime.sleep(30)\n")
             fake.chmod(0o700)
             process = subprocess.Popen([sys.executable, "actions.py", "page", '{"kind":"catalogue","requestId":1}'], env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]}, stdout=subprocess.PIPE)
             try:
-                for _ in range(100):
-                    if pidfile.exists() and pidfile.read_text():
-                        break
+                # ponytail: 30 s is a hang guard matching the fake's sleep, not a start-up budget
+                deadline = time.monotonic() + 30
+                while not pidfile.exists() and process.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.02)
-                self.assertTrue(pidfile.exists(), "Fake gh did not start")
+                self.assertTrue(pidfile.exists(), "actions.py exited before starting gh" if process.poll() is not None else "Fake gh did not start")
                 child = int(pidfile.read_text())
                 process.send_signal(signal.SIGTERM)
                 process.wait(timeout=3)
