@@ -39,6 +39,8 @@ Item {
         rebuild(true)
         selectionChanged(false)
     }
+    // ponytail: full rebuild at 1 Hz (~7 ms at 1650 rows in Node); skip when no entry has an open-ended duration if it ever shows in a profile
+    onNowChanged: rebuild()
 
     function open(payload) {
         var monitor = Hyprland.focusedMonitor
@@ -198,7 +200,7 @@ Item {
         onFileChanged: reload()
     }
     Timer { interval: 100; running: root.opened; repeat: true; onTriggered: root.pump() }
-    Timer { interval: 1000; running: root.opened; repeat: true; onTriggered: root.now = Date.now() }
+    Timer { interval: 1000; running: root.opened; repeat: true; triggeredOnStart: true; onTriggered: root.now = Date.now() }
     Process {
         id: requestProc
         stdout: StdioCollector { id: pageOutput }
