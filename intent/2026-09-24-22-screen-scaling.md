@@ -1,51 +1,56 @@
 ---
-status: approved
+status: draft
 issue: 22
 author: olafkfreund
 ---
 
-# Intent: The panel follows the screen size, not only the theme font size
+# Intent: The panel uses the theme's text size and fits the screen like the rest of the shell
 
 ## Problem
 
-The panel's size and text do not change with the screen they open on. As the
-request put it: "the text and the windows needs to follow the desktop size and
+The panel does not look like the rest of the Omarchy shell. As the request
+put it: "the text and the windows needs to follow the desktop size and
 scale".
 
-- `ActionsPanel.qml` caps the card at `Style.space(900)` × `Style.space(680)`
-  and only shrinks it when the screen is smaller than that.
-- Text uses a fixed `textScale: 1.5` on top of the theme font sizes.
-- The divider under the header is a fixed `height: 1`.
+- Text uses a fixed `textScale: 1.5` on top of the theme font sizes
+  (`ActionsPanel.qml:35`). The row heights follow it, so the panel looks
+  oversized next to the other Omarchy menus, which use the theme sizes as
+  they are.
+- The divider under the header is a fixed `height: 1` rather than the
+  theme's hairline.
+
+Growing the panel and its text with the screen size was tried and rejected
+in a live check. On a 2560×1440 screen the card was about 1330 px wide with
+about 27 px body text, and the verdict was "way too big". The extra
+multiplier is the problem, not a missing link to screen size.
 
 Two things already carry through. Omarchy's `Style.space()` and
-`Style.font.*` scale with the theme's base font size, and Hyprland applies
-the monitor scale itself, because layer-shell surfaces use logical pixels.
-Only the screen's size is ignored. On a large or high-resolution display the
-panel stays 900 × 680 units in the middle of the screen, and the text never
-grows with it. The README says the same: "Text uses 1.5× theme font sizes
-with matching row heights".
+`Style.font.*` scale with the theme's base font size. Hyprland applies the
+monitor scale itself, because layer-shell surfaces use logical pixels.
 
 ## Proposed outcome
 
-- On a large display the panel takes up a similar share of the screen as it
-  does on a laptop, instead of a small fixed box in the middle.
-- Text, row heights, padding and the divider grow and shrink with the panel,
-  so the proportions look the same on every screen.
-- On a small screen the panel still fits, with its gaps, and stays readable.
-- Opened on a different monitor, the panel sizes itself to that monitor.
-- Changing the theme's font size or the monitor scale still has the effect it
-  has today.
-- The README describes how the panel sizes itself.
+- Text is exactly the Omarchy theme size, like the other menus. There is no
+  extra 1.5× and no growth with screen size.
+- Row heights follow the theme text size.
+- The card is at most `Style.space(900)` × `Style.space(680)`. On smaller
+  screens it shrinks to fit, keeping the existing gap to the screen edges
+  (`Style.gapsOut`).
+- The divider uses the theme's hairline (`Style.spacing.hairline`).
+- Changing the theme's font size or the monitor scale still has the effect
+  it has today.
+- The README describes the panel's sizing as theme-sized text.
 
 ## Affected users and systems
 
-- Anyone running the panel, most visibly on large or high-resolution
-  monitors and on multi-monitor desktops with different sizes.
-- `ActionsPanel.qml`: card size, `textScale`, row heights and the divider.
+- Everyone running the panel. The text and rows get smaller, down to the
+  theme size.
+- `ActionsPanel.qml`: `textScale`, row heights, the card size and the
+  divider.
 - `README.md`: the sizing sentence on line 3.
 - `tests/qml-smoke.py`, which loads the panel.
-- The screenshots and GIF in `docs/img/` may need retaking if the panel looks
-  noticeably different.
+- The screenshots and GIF in `docs/img/` show 1.5× text and will need
+  retaking.
 
 ## Constraints
 
@@ -59,14 +64,4 @@ with matching row heights".
 
 ## Open questions
 
-1. How much of the screen should the panel take: a fixed share such as about
-   half the width and two thirds of the height, or the current size scaled by
-   screen size against a reference screen?
-2. Should text scale with the panel, stay tied to the theme font size as now,
-   or become a user setting, for example an environment variable or a menu
-   option?
-3. Are there minimum and maximum sizes? For example, never smaller than
-   today's panel where the screen allows it, and never larger than a certain
-   share on ultra-wide monitors.
-4. Which size counts on a scaled monitor: the logical size Hyprland reports
-   after scaling, or the physical resolution?
+None.
