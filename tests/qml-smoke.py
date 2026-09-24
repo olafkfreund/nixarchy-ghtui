@@ -75,6 +75,7 @@ ShellRoot {
         interval: 1000; running: true
         onTriggered: {
             check(Color.background.toString()===Quickshell.env("EXPECTED_BACKGROUND"),"active Omarchy theme")
+            check(panel.textScale===undefined,"no panel scale factor")
             menuFile.reload()
             check(!panel.opened && panel.polling.requests===0,"registration does not open or poll")
             if (Quickshell.env("MENU_SCENARIO") === "fresh")

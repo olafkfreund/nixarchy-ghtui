@@ -32,7 +32,6 @@ Item {
     readonly property bool discoveryComplete: polling.catalogueComplete
     readonly property string cooldownText: now < polling.cooldown ? "GitHub paused until " + new Date(polling.cooldown).toLocaleTimeString() : ""
     readonly property int checkedCount: repos.filter(function(repo) { return !!repo.checked || repo.archived || repo.disabled }).length
-    readonly property real textScale: 1.5
     readonly property var current: entries[cursor] || null
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
     onFilterTextChanged: {
@@ -267,7 +266,7 @@ Item {
                         width: parent.width
                         text: "GitHub Actions  ·  " + root.repositories.length + (root.repositories.length === 1 ? " repository" : " repositories")
                         color: Color.menu.text
-                        font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.title * root.textScale); bold: true }
+                        font { family: Style.font.menuFamily; pixelSize: Style.font.title; bold: true }
                         textFormat: Text.PlainText
                     }
                     TextInput {
@@ -275,7 +274,7 @@ Item {
                         width: parent.width
                         height: Math.ceil(font.pixelSize * 1.4)
                         color: Color.menu.text
-                        font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.caption * root.textScale) }
+                        font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
                         clip: true
                         selectByMouse: true
                         selectionColor: Color.menu.selectedBackground
@@ -306,7 +305,7 @@ Item {
                             textFormat: Text.PlainText
                         }
                     }
-                    Rectangle { width: parent.width; height: 1; color: Color.menu.border; opacity: 0.4 }
+                    Rectangle { width: parent.width; height: Style.spacing.hairline; color: Color.menu.border; opacity: 0.4 }
                     ListView {
                         id: list
                         width: parent.width
@@ -319,7 +318,7 @@ Item {
                             readonly property var modelData: rowData
                             required property int index
                             width: list.width
-                            height: modelData.subtitle ? Math.max(Style.space(64), (Style.font.body + Style.font.caption) * root.textScale + Style.space(16)) : Math.max(Style.space(40), Style.font.body * root.textScale + Style.space(12))
+                            height: modelData.subtitle ? Math.max(Style.space(64), Style.font.body + Style.font.caption + Style.space(16)) : Math.max(Style.space(40), Style.font.body + Style.space(12))
                             color: index === root.cursor ? Color.menu.selectedBackground : "transparent"
                             radius: 0
                             Row {
@@ -332,7 +331,7 @@ Item {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: Model.icon(modelData.status)
                                     color: root.statusColor(modelData.status)
-                                    font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.body * root.textScale) }
+                                    font { family: Style.font.menuFamily; pixelSize: Style.font.body }
                                 }
                                 Column {
                                     width: Math.max(0, parent.width - Style.space(26) - info.width - parent.spacing * 2)
@@ -341,7 +340,7 @@ Item {
                                         width: parent.width
                                         text: (["repo", "run", "job"].indexOf(modelData.kind) >= 0 ? (root.expanded[modelData.key] ? "▾ " : "▸ ") : "") + modelData.title
                                         color: index === root.cursor ? Color.menu.selectedText : Color.menu.text
-                                        font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.body * root.textScale); bold: modelData.kind === "repo" }
+                                        font { family: Style.font.menuFamily; pixelSize: Style.font.body; bold: modelData.kind === "repo" }
                                         elide: Text.ElideRight
                                         textFormat: Text.PlainText
                                     }
@@ -351,7 +350,7 @@ Item {
                                         text: modelData.subtitle || ""
                                         color: index === root.cursor ? Color.menu.selectedText : Color.menu.text
                                         opacity: 0.65
-                                        font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.caption * root.textScale) }
+                                        font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
                                         elide: Text.ElideRight
                                         textFormat: Text.PlainText
                                     }
@@ -362,7 +361,7 @@ Item {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: modelData.kind === "repo" ? modelData.info : modelData.status + (modelData.info ? " · " + modelData.info : "")
                                     color: root.statusColor(modelData.status)
-                                    font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.caption * root.textScale) }
+                                    font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
                                     elide: Text.ElideRight
                                     textFormat: Text.PlainText
                                 }
@@ -373,7 +372,7 @@ Item {
                             visible: root.entries.length === 0
                             text: "No matching repositories or workflows"
                             color: Color.menu.text
-                            font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.body * root.textScale) }
+                            font { family: Style.font.menuFamily; pixelSize: Style.font.body }
                         }
                     }
                     Text {
@@ -382,7 +381,7 @@ Item {
                         text: root.cooldownText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  Esc close"
                         color: Color.menu.text
                         opacity: 0.65
-                        font { family: Style.font.menuFamily; pixelSize: Math.round(Style.font.caption * root.textScale) }
+                        font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
                         elide: Text.ElideRight
                         textFormat: Text.PlainText
                     }
