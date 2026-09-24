@@ -11,10 +11,8 @@ import "Polling.js" as Polling
 Item {
     id: root
     property var shell: null
-    property var manifest: null
     property bool opened: false
     property var targetScreen: null
-    property var repositories: []
     property var repos: []
     property var details: ({})
     property var expanded: ({})
@@ -29,7 +27,6 @@ Item {
     property bool workerBusy: false
     property bool helperStarted: false
     property double now: Date.now()
-    readonly property bool loading: workerBusy
     readonly property bool discoveryComplete: polling.catalogueComplete
     readonly property string cooldownText: now < polling.cooldown ? "GitHub paused until " + new Date(polling.cooldown).toLocaleTimeString() : ""
     readonly property int checkedCount: repos.filter(function(repo) { return !!repo.checked || repo.archived || repo.disabled }).length
@@ -43,7 +40,7 @@ Item {
     // ponytail: full rebuild at 1 Hz (~7 ms at 1650 rows in Node); skip when no entry has an open-ended duration if it ever shows in a profile
     onNowChanged: rebuild()
 
-    function open(payload) {
+    function open() {
         var monitor = Hyprland.focusedMonitor
         targetScreen = null
         for (var i = 0; i < Quickshell.screens.length; i++)
@@ -59,9 +56,9 @@ Item {
         Polling.close(polling)
         requestProc.running = false
     }
-    function toggle() { opened ? close() : open("{}") }
+    function toggle() { opened ? close() : open() }
     function status() {
-        return JSON.stringify({opened: opened, rows: entries.length, repositories: repositories.length,
+        return JSON.stringify({opened: opened, rows: entries.length, repositories: repos.length,
             checked: checkedCount, discoveryComplete: discoveryComplete, error: error, updated: updated,
             requests: polling.requests, inFlight: workerBusy, cooldown: polling.cooldown,
             lastRequest: polling.lastRequest, lastStarted: polling.lastStarted,
@@ -118,23 +115,12 @@ Item {
         selectionChanged(true)
         pump()
     }
-    function configure(text) {
-        try {
-            var config = JSON.parse(text)
-            var entry = (config.plugins || []).filter(function(p) { return p.id === "olafkfreund.github-actions" })[0]
-            var names = entry && Array.isArray(entry.repositories) ? entry.repositories : []
-            if (!polling.repos.length && names.length)
-                polling.repos = names.filter(function(name) { return typeof name === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(name) }).map(function(name) { return {repo:name} })
-            adopt()
-        } catch (e) { error = "Configuration: " + e.message }
-    }
     function selectionChanged(immediate) {
         if (!polling) return
         Polling.select(polling, current ? current.repo : "", current ? current.run : "", expanded, Date.now(), immediate)
     }
     function adopt() {
         repos = polling.repos.slice()
-        repositories = repos.map(function(repo) { return repo.repo })
         details = Object.assign({}, polling.details)
         error = polling.error
         // Reassign the state reference to notify bindings after pure-JS mutations.
@@ -200,13 +186,6 @@ Item {
         }
     }
     ListModel { id: visibleRows; dynamicRoles: true }
-    FileView {
-        path: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
-        watchChanges: true
-        printErrors: false
-        onLoaded: root.configure(text())
-        onFileChanged: reload()
-    }
     Timer { interval: 100; running: root.opened; repeat: true; onTriggered: root.pump() }
     Timer { interval: 1000; running: root.opened; repeat: true; triggeredOnStart: true; onTriggered: root.now = Date.now() }
     Process {
@@ -278,7 +257,7 @@ Item {
                     spacing: Style.spacing.md
                     Text {
                         width: parent.width
-                        text: "GitHub Actions  ·  " + root.repositories.length + (root.repositories.length === 1 ? " repository" : " repositories")
+                        text: "GitHub Actions  ·  " + root.repos.length + (root.repos.length === 1 ? " repository" : " repositories")
                         color: Color.menu.text
                         font { family: Style.font.menuFamily; pixelSize: Style.font.title; bold: true }
                         textFormat: Text.PlainText
@@ -311,7 +290,7 @@ Item {
                             anchors.fill: parent
                             visible: searchField.text.length === 0
                             text: root.filtering ? "Search repositories…" : root.cooldownText || root.error ||
-                                (root.discoveryComplete ? "Activity checked " + root.checkedCount + "/" + root.repositories.length + " · running first · / search repositories" : "Discovering repositories… " + root.repositories.length + " found")
+                                (root.discoveryComplete ? "Activity checked " + root.checkedCount + "/" + root.repos.length + " · running first · / search repositories" : "Discovering repositories… " + root.repos.length + " found")
                             color: root.error || root.cooldownText ? Color.urgent : Color.menu.text
                             opacity: 0.75
                             font: searchField.font
