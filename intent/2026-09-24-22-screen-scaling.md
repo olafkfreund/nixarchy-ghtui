@@ -8,8 +8,8 @@ author: olafkfreund
 
 ## Problem
 
-The panel's size and text do not change with the screen they open on. In
-your words: "the text and the windows needs to follow the desktop size and
+The panel's size and text do not change with the screen they open on. As the
+request put it: "the text and the windows needs to follow the desktop size and
 scale".
 
 - `ActionsPanel.qml` caps the card at `Style.space(900)` × `Style.space(680)`
