@@ -32,7 +32,14 @@ function duration(item, now) {
     return seconds >= 60 ? Math.floor(seconds / 60) + "m " + seconds % 60 + "s" : seconds + "s";
 }
 
-function rows(repos, expanded, details, filter, now) {
+// Whole minutes below an hour, then "Xh Ym": the same rule duration() uses.
+function age(ms) {
+    var minutes = Math.floor(Math.max(0, ms) / 60000);
+    return minutes >= 60 ? Math.floor(minutes / 60) + "h " + minutes % 60 + "m" : minutes + "m";
+}
+
+// live is "repo:runId" of the run polling refreshes now, or "" / undefined.
+function rows(repos, expanded, details, filter, now, live) {
     var result = [];
     var query = filter.toLowerCase();
     repos.slice().sort(function(a, b) { return (b.active || 0) - (a.active || 0); }).forEach(function(repo) {
@@ -59,7 +66,11 @@ function rows(repos, expanded, details, filter, now) {
             if (more && run.status === "completed") { result.push(more); more = null; }
             var runKey = repo.repo + ":" + run.id;
             var detail = details[runKey];
-            var stamp = detail && detail.updated ? " · jobs fetched " + detail.updated.slice(11, 19) + " UTC" : "";
+            var fresh = !!detail && (runKey === live || (run.status === "completed" && detail.finalAttempt === (run.run_attempt || 1)));
+            var notRefreshing = !!(detail && detail.updated) && !!expanded[runKey] && !fresh;
+            var at = notRefreshing ? Date.parse(detail.updated) : now;
+            var stamp = !detail || !detail.updated ? "" : notRefreshing ? " · jobs " + age(now - at) + " old, not refreshing"
+                : " · jobs fetched " + detail.updated.slice(11, 19) + " UTC";
             result.push({key: runKey, parent: repoKey, kind: "run", depth: 1, title: run.name || "Workflow",
                 subtitle: (run.head_branch || "") + " · #" + run.run_number + stamp + " · " + (run.display_title || ""),
                 status: state(run), info: duration(run, now), repo: repo.repo, run: String(run.id), url: run.html_url});
@@ -71,11 +82,11 @@ function rows(repos, expanded, details, filter, now) {
                 var steps = job.steps || [];
                 var done = steps.filter(function(step) { return step.status === "completed"; }).length;
                 result.push({key: jobKey, parent: runKey, kind: "job", depth: 2, title: job.name, subtitle: "",
-                    status: state(job), info: done + "/" + steps.length + " steps · " + duration(job, now), repo: repo.repo, run: String(run.id), url: job.html_url});
+                    status: state(job), info: done + "/" + steps.length + " steps · " + duration(job, at), repo: repo.repo, run: String(run.id), url: job.html_url});
                 if (!expanded[jobKey]) return;
                 steps.forEach(function(step) {
                     result.push({key: jobKey + ":" + step.number, parent: jobKey, kind: "step", depth: 3, title: step.name, subtitle: "",
-                        status: state(step), info: duration(step, now), repo: repo.repo, run: String(run.id), url: job.html_url});
+                        status: state(step), info: duration(step, at), repo: repo.repo, run: String(run.id), url: job.html_url});
                 });
             });
         });

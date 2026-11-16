@@ -31,6 +31,7 @@ run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'ma
 if kind=='catalogue': data=[{'repo':'one/repo'},{'repo':'two/repo'}]
 elif kind=='jobs': data=[{'id':8,'name':'build','status':'in_progress','steps':[{'number':1,'name':'Checkout','status':'completed','conclusion':'success'}]}]
 elif kind=='run': data=run
+elif kind=='account': data={'login':'tester'}
 else: data=[run] if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
 reply=json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':'','errorType':'','remaining':4000,'padding':'x'*200000}).encode()+b'\\n'
 for i in range(0,len(reply),4096): os.write(1,reply[i:i+4096])
@@ -55,6 +56,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import "Polling.js" as Polling
 ShellRoot {
     ActionsPanel { id: panel }
@@ -87,7 +89,7 @@ ShellRoot {
     Timer {
         interval: 1000; running: true
         onTriggered: {
-            check(Color.background.toString()===Quickshell.env("EXPECTED_BACKGROUND"),"active Omarchy theme")
+            check(Commons.Color.background.toString()===Quickshell.env("EXPECTED_BACKGROUND"),"active Omarchy theme")
             check(panel.textScale===undefined,"no panel scale factor")
             menuFile.reload()
             check(!panel.opened && panel.polling.requests===0,"registration does not open or poll")
@@ -97,7 +99,7 @@ ShellRoot {
             panel.polling.repos=[{repo:"one/repo"},{repo:"two/repo"}]; panel.adopt()
             check(panel.entries.length===2,"seeded repositories")
             panel.polling.repos[0].runs=[{id:7,name:"CI",status:"in_progress",run_attempt:1}]
-            panel.expanded={"repo:one/repo":true}
+            panel.polling.expanded={"repo:one/repo":true}
             panel.adopt()
             panel.move(1)
             check(panel.current.kind==="run","keyboard selection")
@@ -108,6 +110,16 @@ ShellRoot {
             check(panel.current.info==="8s","running duration ticks with now")
             check(panel.current.key===tickKey && panel.cursor===tickCursor,"tick keeps selection")
             check(JSON.parse(panel.status()).scrollY===tickScroll,"tick keeps scroll")
+            var savedRuns=panel.polling.repos[0].runs
+            panel.polling.repos[0].runs=[]
+            panel.adopt()
+            var poll=JSON.parse(panel.status())
+            check(poll.pollSelected===panel.current.repo && poll.pollInspected===(panel.current.run||""),"polling follows the highlight")
+            check("remaining" in poll && "resetAt" in poll,"status has quota fields")
+            panel.polling.repos[0].runs=savedRuns
+            panel.adopt()
+            panel.move(-1)
+            check(panel.current.kind==="run","cursor back on the run")
             panel.expand(false)
             check(panel.entries[2].title==="Loading jobs…","expand run")
             panel.expand(true)
