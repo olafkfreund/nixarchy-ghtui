@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 44
 spec: spec/2026-11-16-44-logs-and-watch.md
 coders:        # step number -> coder | codex, one-line reason each. Builds, reviews and commits stay with the session.
