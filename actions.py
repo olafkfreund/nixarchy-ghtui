@@ -57,13 +57,17 @@ def request(endpoint, include=False):
 
 
 def page_endpoint(task):
-    if not isinstance(task, dict) or task.get("kind") not in ("catalogue", "activity", "summary", "jobs", "run"):
+    if not isinstance(task, dict) or task.get("kind") not in ("catalogue", "activity", "summary", "jobs", "run", "account"):
         raise ValueError("Invalid page operation")
     number = task.get("page", 1)
     if type(number) is not int or number < 1 or number > 100000:
         raise ValueError("Invalid page number")
     if type(task.get("requestId")) is not int or task["requestId"] < 1:
         raise ValueError("Invalid request identity")
+    if task["kind"] == "account":
+        if task.get("repo") not in (None, ""):
+            raise ValueError("Invalid page operation")
+        return "user"
     if task["kind"] == "catalogue":
         return f"user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&direction=desc&per_page=100&page={number}"
     base = "repos/" + repo_name(task.get("repo")) + "/actions/runs"
@@ -164,7 +168,8 @@ def read_page(task):
             elif status == 401:
                 result.update(errorType="auth", error="Authenticate with gh auth login")
             elif status in (403, 404):
-                result.update(errorType="permission", error="Resource unavailable or Actions read permission missing")
+                result.update(errorType="permission", error=("Repository list unavailable; token cannot read your repositories"
+                                                              if task["kind"] == "catalogue" else "Resource unavailable or Actions read permission missing"))
             else:
                 result.update(errorType="network", error="GitHub request failed")
             return result
@@ -176,6 +181,12 @@ def read_page(task):
                 raise ValueError("Invalid repository entry")
             result["data"] = [{"repo": repo_name(row["full_name"]), "description": plain(row.get("description") or ""),
                                "archived": bool(row.get("archived")), "disabled": bool(row.get("disabled"))} for row in body]
+        elif kind == "account":
+            result["data"] = None
+            login = body.get("login") if isinstance(body, dict) else None
+            if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9-]+", login):
+                raise ValueError("Invalid account response")
+            result["data"] = {"login": login}
         elif kind == "run":
             if not isinstance(body, dict) or str(body.get("id")) != str(task["run"]) or "status" not in body:
                 raise ValueError("Invalid run response")
@@ -186,13 +197,12 @@ def read_page(task):
                 raise ValueError("Invalid workflow response")
             if any(not isinstance(row, dict) or type(row.get("id")) is not int or row["id"] < 1 or not isinstance(row.get("status"), str) for row in body[key]):
                 raise ValueError("Invalid workflow entry")
-            if kind == "jobs" and any(not isinstance(row.get("steps", []), list) for row in body[key]):
+            if kind == "jobs" and any(not isinstance(row.get("steps", []), list) or any(not isinstance(step, dict) for step in row.get("steps", [])) for row in body[key]):
                 raise ValueError("Invalid job steps")
             for row in body[key]:
                 plain_fields(row, ("name",) if kind == "jobs" else RUN_TEXT)
                 for step in row.get("steps", []) if kind == "jobs" else []:
-                    if isinstance(step, dict):
-                        plain_fields(step, ("name",))
+                    plain_fields(step, ("name",))
             result["data"] = body[key]
             if kind == "activity" or task.get("status") in ACTIVE:
                 # One page per unfinished status (#30); total_count says how many runs were left out.
