@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 44
 intent: intent/2026-11-16-44-logs-and-watch.md
 ---
