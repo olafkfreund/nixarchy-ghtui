@@ -197,6 +197,10 @@ None. The plan implements the spec as approved. One reading to confirm at plan a
 - Spec Verification says `account` "doesn't accept a repo". The plan rejects a non-empty `repo` on an `account` task and allows an absent or empty one, because the scheduler always sends `repo: ""` (`Polling.js:112`). Rejecting any non-`None` value would stop every scheduled account check. This was a review finding; it follows the spec's wording.
 - In step 4 the existing `permission` jobs line stays as an empty branch (`else if (t.kind==="jobs") {}`) so the new shared jobs write doesn't make jobs errors fall into the run-lookup branch. Output is identical to the spec's description.
 
+## Deviations during implementation
+
+- Step 7: `tests/qml-smoke.py` qualifies `Color.background` as `Commons.Color.background` (with `import qs.Commons as Commons`). #40 (3fb9c8d, merged after this plan was written) made the same change in `ActionsPanel.qml` because Qt 6.12's QtQuick `Color` singleton shadows `qs.Commons`' `Color`, but left the test's shell on the bare name, so the smoke test failed at its theme check on main before any panel check ran.
+
 ## Owner answers (2026-11-16, "approve all plans as recommended")
 
 These override any step text they contradict. Merge order: #41 -> #42 -> #43(a) -> #43(b); #44 after #42; #45 and #47 after #41; #46 after #44 and #47.
