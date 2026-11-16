@@ -282,6 +282,31 @@ class WriteTest(unittest.TestCase):
                 self.assertTrue(result["ok"])
                 self.assertEqual((result["errorType"], result["error"]), ("", ""))
 
+    def test_rate_headers_never_turn_success_or_5xx_into_rate(self):
+        unknown = "Outcome unknown; check GitHub before retrying"
+        reset = "X-RateLimit-Remaining: 0\nX-RateLimit-Reset: 4102444800\n"
+        cases = ((202, "", reset, 0, "ok"), (201, "", "Retry-After: 60\n", 0, "ok"),
+                 (503, "", "Retry-After: 60\n", 1, "unknown"), (502, "rate limit", "", 1, "unknown"),
+                 (200, "", reset, 1, "unknown"), (202, "", "", 1, "unknown"))
+        for status, message, headers, code, want in cases:
+            with self.subTest(status=status, headers=headers, code=code), patch.object(
+                    actions, "request", return_value=self.reply(status, message, headers, code)):
+                result = actions.write_action(self.task())
+            if want == "ok":
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["errorType"], "")
+                # The headers are kept so the panel still applies the cooldown.
+                self.assertTrue(result["remaining"] == 0 or result["retryAt"] > time.time() * 1000)
+            else:
+                self.assertFalse(result["ok"])
+                self.assertEqual((result["errorType"], result["error"]), ("unknown", unknown))
+
+    def test_deep_json_after_send_is_unknown(self):
+        deep = "[" * 100000 + "]" * 100000
+        with patch.object(actions, "request", return_value=(f"HTTP/2.0 202 Accepted\n\n{deep}", "", 0)):
+            result = actions.write_action(self.task())
+        self.assertEqual(result["errorType"], "unknown")
+
     def test_refusals(self):
         for status, prefix in ((403, "Needs Actions write on o/r: "), (404, "Needs Actions write on o/r: "),
                                (409, "GitHub refused: "), (422, "GitHub refused: ")):

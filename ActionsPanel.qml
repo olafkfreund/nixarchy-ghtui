@@ -280,8 +280,9 @@ Item {
         stderr: StdioCollector { id: actionErrors }
         onExited: function(code) {
             if (actionErrors.text.trim()) console.warn("GitHub Actions helper (exit " + code + "): " + actionErrors.text.trim())
-            root.receiveAction(Model.actionReply(actionOutput.text, code, root.actionInfo.requestId), root.actionInfo)
-            root.actionBusy = false
+            // finally: an exception in receiveAction must not block later actions
+            try { root.receiveAction(Model.actionReply(actionOutput.text, code, root.actionInfo.requestId), root.actionInfo) }
+            finally { root.actionBusy = false }
         }
         onStarted: root.actionStarted = true
         onRunningChanged: if (!running && root.actionBusy && !root.actionStarted) root.actionFailedToStart()

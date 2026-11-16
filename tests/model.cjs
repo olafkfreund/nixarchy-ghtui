@@ -69,6 +69,8 @@ assert.equal(JSON.parse(model.reply('', 127, 5)).error, 'python3 not found');
   assert.equal(model.actionReply('{"ok":true}', 0, 3), '{"ok":true}');
   assert.deepEqual(JSON.parse(model.actionReply('', 127, 3)), {requestId: 3, ok: false, errorType: 'setup', error: 'python3 not found'});
   assert.deepEqual(JSON.parse(model.actionReply('', 1, 3)), {requestId: 3, ok: false, errorType: 'unknown', error: 'Outcome unknown; check GitHub before retrying'});
+  // A SIGTERM'd helper exits 0 with no output: the write may have been sent.
+  assert.deepEqual(JSON.parse(model.actionReply('', 0, 3)), {requestId: 3, ok: false, errorType: 'unknown', error: 'Outcome unknown; check GitHub before retrying'});
 }
 const ranked = model.rows([{repo:'z/idle', checked:'now', active:0}, {repo:'a/unchecked'}, {repo:'b/running', active:2, checked:'now'}], {}, {}, '', Date.now());
 assert.equal(ranked[0].title, 'b/running');

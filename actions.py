@@ -267,21 +267,22 @@ def write_action(task):
             if status < 400:
                 raise
             body = None
-        if rate_limited(result, status, body):
+        # Success and "unknown" first: rate headers on an accepted write still set a cooldown, never a failure (#45).
+        if 200 <= status < 300 and code == 0:
+            result["ok"] = True
+        elif not 400 <= status < 500:
+            result.update(errorType="unknown", error=UNKNOWN)
+        elif rate_limited(result, status, body):
             result.update(errorType="rate", error="GitHub rate limit")
         elif status == 401:
             result.update(errorType="auth", error="Authenticate with gh auth login")
-        elif 400 <= status < 500:
+        else:
             message = plain(str(body.get("message", "")))[:120] if isinstance(body, dict) else ""
             prefix = f"Needs Actions write on {task['repo']}" if status in (403, 404) else "GitHub refused"
             result.update(errorType="refused", error=prefix + (": " + message if message else ""))
-        elif 200 <= status < 300 and code == 0:
-            result["ok"] = True
-        else:
-            result.update(errorType="unknown", error=UNKNOWN)
     except FileNotFoundError:
         result.update(errorType="setup", error="Install gh (GitHub CLI)")
-    except (subprocess.TimeoutExpired, OSError, ValueError):
+    except (subprocess.TimeoutExpired, OSError, ValueError, RecursionError):
         result.update(errorType="unknown", error=UNKNOWN)
     return result
 
