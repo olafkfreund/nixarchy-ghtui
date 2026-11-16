@@ -128,3 +128,11 @@ Each PR is a squash-free set of commits on its own branch; revert the merge comm
 1. **#42 prerequisite vs merge order.** The spec requires #42's always-visible status line for `v` and `w` messages and says "if #42 is not merged, #44 waits". The recorded merge order only puts #44 after #41. This plan keeps the spec: step 0 stops if #42 is not merged. Alternative if the owner wants #44 earlier: add a minimal local status line inside #44 (one `Text` under the search field plus a `message` property), which duplicates #42's decision 1 and will conflict with it. Owner to choose.
 2. **`Process` instead of `Quickshell.execDetached` for the log terminal.** The spec prescribes `execDetached(["omarchy-launch-tui", ...])` and also says the panel shows "Terminal launcher not found" when the process cannot start. `execDetached` cannot report that. This plan launches the same argv through a `Process` object (the Qt 0.3.1 failed-start pattern already used for `requestProc`). Fallback if rejected: keep `execDetached` and drop the "not found" message.
 3. **Small choices the spec leaves open (not deviations, listed for review):** empty full log text "This log is empty."; `XDG_RUNTIME_DIR` unset gives a `setup` error "Log directory unavailable"; the four-slot charge is implemented as four future-dated `s.starts` entries so the existing window and gap checks apply unchanged; `Polling.watch` returns `"on" | "off" | "full"`; `rows()` takes `watches` as a sixth argument.
+
+## Owner answers (2026-11-16, "approve all plans as recommended")
+
+These override any step text they contradict. Merge order: #41 -> #42 -> #43(a) -> #43(b); #44 after #42; #45 and #47 after #41; #46 after #44 and #47.
+
+- Deviation 1: **#44 waits for #42.** Step 0's stop when #42 is not merged is correct; the merge order above records it. No local status line.
+- Deviation 2: accepted. The log terminal starts through a `Process` with the Qt 0.3.1 failed-start pattern, so "Terminal launcher not found" can be shown.
+- Item 3 small choices: accepted as listed.
