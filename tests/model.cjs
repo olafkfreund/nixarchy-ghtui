@@ -109,3 +109,29 @@ for (const url of ['https://github.com.evil.example/', 'https://github.com@evil.
                    'https://github.com/o\x85r', 'http://github.com/o', undefined, 5])
     assert.equal(model.browsable(url), false, JSON.stringify(url));
 console.log('Model: more row, linear syncRows and random-order equivalence passed');
+
+// #41: an expanded run that polling no longer refreshes says so and freezes its timers.
+{
+  const now = Date.parse('2026-01-01T01:00:00Z'), at = ms => new Date(now - ms).toISOString().replace('.000Z', 'Z');
+  const job = {id: 8, name: 'build', status: 'in_progress', started_at: '2026-01-01T00:00:00Z', steps: []};
+  const run = {id: 7, status: 'in_progress', name: 'CI', run_number: 3, run_attempt: 1};
+  const view = (r, d, live, open = {'repo:o/r': true, 'o/r:7': true}, t = now) =>
+    model.rows([{repo: 'o/r', runs: [r]}], open, d ? {'o/r:7': d} : {}, '', t, live);
+  const stale = {jobs: [job], updated: at(4 * 60000)};
+  assert.ok(view(run, stale, 'o/r:9')[1].subtitle.includes('jobs 4m old, not refreshing'));
+  const frozen = view(run, stale, 'o/r:9')[2].info;
+  assert.equal(view(run, stale, 'o/r:9', undefined, now + 600000)[2].info, frozen, 'timer stays at the last fetch');
+  const fresh = view(run, stale, 'o/r:7');
+  assert.ok(fresh[1].subtitle.includes('jobs fetched 00:56:00 UTC') && !fresh[1].subtitle.includes('not refreshing'));
+  assert.notEqual(view(run, stale, 'o/r:7', undefined, now + 600000)[2].info, fresh[2].info, 'live timer uses now');
+  const done = {...run, status: 'completed', conclusion: 'success'};
+  assert.ok(!view(done, {...stale, finalAttempt: 1}, '')[1].subtitle.includes('not refreshing'));
+  assert.ok(view(done, {...stale, finalAttempt: 2}, '')[1].subtitle.includes('not refreshing'));
+  assert.ok(view(run, {...stale, updated: at(75 * 60000)}, '')[1].subtitle.includes('jobs 1h 15m old'));
+  const err = view(run, {...stale, error: 'rate limited'}, '');
+  assert.deepEqual([err[2].kind, err[2].title, err[3].kind], ['message', 'rate limited', 'job']);
+  assert.ok(!view(run, {error: 'rate limited'}, '')[1].subtitle.includes('jobs '), 'no stamp without updated');
+  assert.ok(view(run, stale, '', {'repo:o/r': true})[1].subtitle.includes('jobs fetched'), 'collapsed run keeps jobs fetched');
+  assert.equal(view(run, stale)[1].subtitle.includes('not refreshing'), true, 'five arguments still work');
+}
+console.log('Model: not-refreshing marker passed');
