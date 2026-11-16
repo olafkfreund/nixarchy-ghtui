@@ -457,3 +457,54 @@ req=polling.next(cataloguePrune,0); assert.equal(req.kind,'catalogue');
 polling.complete(cataloguePrune,response(req,[{repo:'a/bc',archived:true}]),100);
 assert.equal(cataloguePrune.details['a/b:5'],undefined);
 assert.ok(cataloguePrune.details['a/bc:5']);
+
+// Quota metadata paces background checks, while selected work keeps its normal interval.
+const quotaReply=polling.create(); reopen(quotaReply,0);
+req=polling.next(quotaReply,0); assert.equal(req.kind,'catalogue');
+polling.complete(quotaReply,{...response(req),error:'offline',errorType:'network',remaining:400,resetAt:900000},100);
+assert.equal(quotaReply.remaining,400); assert.equal(quotaReply.resetAt,900000);
+quotaReply.tasks[polling.key('catalogue')].due=1000;
+req=polling.next(quotaReply,1000);
+polling.complete(quotaReply,{...response(req),remaining:null,resetAt:1000000},1100);
+assert.equal(quotaReply.remaining,400); assert.equal(quotaReply.resetAt,900000);
+
+function pacedRepo(remaining, active, activityAt=0) {
+  const p=polling.create(); reopen(p,0); p.discover=false; p.catalogueComplete=true;
+  p.remaining=remaining; p.resetAt=7000000;
+  p.repos=[{repo:'a/b',active,activityAt}];
+  return p;
+}
+const eased=pacedRepo(400,1);
+assert.equal(polling.next(eased,20000),null);
+req=polling.next(eased,45000); assert.equal(req.kind,'activity'); assert.equal(req.repo,'a/b');
+const tight=pacedRepo(100,0);
+assert.equal(polling.next(tight,5999999),null);
+req=polling.next(tight,6000000); assert.equal(req.kind,'activity');
+const ample=pacedRepo(5000,1);
+req=polling.next(ample,15000); assert.equal(req.kind,'activity');
+const reset=pacedRepo(100,1);
+reset.resetAt=10000;
+req=polling.next(reset,15000); assert.equal(req.kind,'activity');
+
+const catalogueAge=polling.create(); reopen(catalogueAge,0);
+catalogueAge.catalogueComplete=true; catalogueAge.catalogueAt=0; catalogueAge.discover=false;
+catalogueAge.remaining=400; catalogueAge.resetAt=1200000;
+reopen(catalogueAge,600000); assert.equal(catalogueAge.discover,false);
+reopen(catalogueAge,900000); assert.equal(catalogueAge.discover,true);
+
+const selectedPace=pacedRepo(100,1);
+selectedPace.repos[0].summaryAt=0;
+polling.select(selectedPace,'a/b','',{},0,true);
+req=polling.next(selectedPace,10000); assert.equal(req.kind,'activity');
+const summaryPace=pacedRepo(100,0);
+summaryPace.repos[0].summaryAt=0;
+polling.select(summaryPace,'a/b','',{},0,true);
+req=polling.next(summaryPace,60000); assert.equal(req.kind,'summary');
+const jobsPace=pacedRepo(100,0);
+jobsPace.repos[0].summaryAt=0; jobsPace.repos[0].runs=[{id:7,status:'in_progress'}];
+jobsPace.details={'a/b:7':{jobsAt:0}};
+polling.select(jobsPace,'a/b','7',{'a/b:7':true},0,true);
+req=polling.next(jobsPace,5000); assert.equal(req.kind,'jobs');
+const lookupPace=pacedRepo(100,0);
+lookupPace.repos[0].runs=[{id:7,status:'queued',followupAt:0}];
+req=polling.next(lookupPace,15000); assert.equal(req.kind,'run');

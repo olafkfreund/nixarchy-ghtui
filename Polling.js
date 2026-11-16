@@ -2,15 +2,19 @@
 var phases = ["recent", "in_progress", "queued", "waiting", "pending", "requested"];
 var TIMING = {settle:250, catalogue:300000, summary:60000, selected:10000, active:15000,
     idle:600000, followup:15000, jobs:5000, window:60000, perWindow:60, gap:1000,
-    rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000};
+    rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000, quotaEase:1000, quotaTight:300};
 function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
         stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true, catalogueBlocked:"",
-        account:"", accountChecked:false, error:"", requests:0, lastRequest:"", lastStarted:0};
+        account:"", accountChecked:false, remaining:null, resetAt:0, error:"", requests:0, lastRequest:"", lastStarted:0};
 }
 function key(kind, repo, run) { return kind + ":" + (repo || "") + ":" + (run || ""); }
 function age(at, interval) { return at === undefined ? -Infinity : at + interval; }
+function pace(s, now) {
+    if (typeof s.remaining!=="number" || now>=s.resetAt || s.remaining>=TIMING.quotaEase) return 1;
+    return s.remaining>=TIMING.quotaTight ? 3 : 10;
+}
 function repoFor(s, name) { return s.repos.filter(function(r) { return r.repo === name })[0]; }
 function runFor(s, repo, id) {
     var r = repoFor(s, repo);
@@ -28,7 +32,7 @@ function ensure(s, kind, repo, run, group, due) {
 function open(s, now) {
     s.opened = true; s.generation++; s.auth = false; s.accountChecked = false;
     if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
-    if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue) s.discover = true;
+    if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue*pace(s,now)) s.discover = true;
     s.stableAt = now;
 }
 function close(s) {
@@ -80,7 +84,7 @@ function seed(s, now) {
         var activityKey = key("activity",r.repo);
         if (summary && !(s.flight && s.flight.key === activityKey)) delete s.tasks[activityKey];
         if (!summary) {
-            var interval = selected ? TIMING.selected : r.active > 0 ? TIMING.active : TIMING.idle;
+            var interval = selected ? TIMING.selected : (r.active > 0 ? TIMING.active : TIMING.idle)*pace(s,now);
             var group = selected ? "interactive" : r.active > 0 ? "active" : "background";
             if (now >= age(r.activityAt, interval) && (group!=="background" || !backgroundQueued || s.tasks[activityKey])) {
                 ensure(s, "activity",r.repo,"",group,age(r.activityAt,interval));
@@ -184,6 +188,7 @@ function complete(s,reply,now) {
     if (!s.opened || !flight || flight.generation!==s.generation || reply.requestId!==flight.request.requestId) return false;
     var t=s.tasks[flight.key]; s.flight=null;
     if (!t) return false;
+    if (typeof reply.remaining==="number") { s.remaining=reply.remaining; s.resetAt=reply.resetAt || 0; }
     var okData=t.kind==="run" || t.kind==="account" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
         : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
     if (!reply.errorType && !reply.error && !okData)
