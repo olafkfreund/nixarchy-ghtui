@@ -519,3 +519,65 @@ req=polling.next(jobsPace,5000); assert.equal(req.kind,'jobs');
 const lookupPace=pacedRepo(100,0);
 lookupPace.repos[0].runs=[{id:7,status:'queued',followupAt:0}];
 req=polling.next(lookupPace,15000); assert.equal(req.kind,'run');
+
+// Writes can extend read cooldown without changing read errors, work or request budgets.
+for (const [reply,deadline] of [
+  [{retryAt:5000},5000],
+  [{remaining:0,resetAt:7000},7000],
+  [{errorType:'rate'},62000]
+]) {
+  const write=selectedRepo([{id:7,status:'in_progress'}]);
+  write.error='existing error'; write.repos[0].blocked=false; write.repos[0].error='repo error';
+  write.cooldown=1000; write.starts=[100,200];
+  polling.ensure(write,'run','a/b','7','interactive',9000);
+  const before={error:write.error,auth:write.auth,blocked:write.repos[0].blocked,
+    repoError:write.repos[0].error,tasks:Object.keys(write.tasks),starts:write.starts.slice()};
+  polling.noteWrite(write,reply,2000);
+  assert.equal(write.cooldown,deadline);
+  assert.deepEqual({error:write.error,auth:write.auth,blocked:write.repos[0].blocked,
+    repoError:write.repos[0].error,tasks:Object.keys(write.tasks),starts:write.starts},before);
+}
+const refusedWrite=selectedRepo([{id:7,status:'in_progress'}]);
+refusedWrite.repos[0].activityAt=0;
+polling.ensure(refusedWrite,'run','a/b','7','interactive',1000);
+polling.noteWrite(refusedWrite,{errorType:'refused',error:'Needs Actions write'},1000);
+assert.equal(refusedWrite.repos[0].blocked,undefined);
+assert.equal(refusedWrite.auth,false);
+assert.equal(polling.next(refusedWrite,1000).kind,'run');
+
+const touched=selectedRepo([{id:7,status:'in_progress'}]);
+touched.repos[0].activityAt=0; touched.repos[0].summaryAt=0;
+polling.touch(touched,'a/b','7',1000);
+const runKey=polling.key('run','a/b','7');
+assert.deepEqual(Object.keys(touched.tasks),[runKey]);
+assert.equal(touched.tasks[runKey].due,1000);
+assert.equal(touched.tasks[runKey].group,'interactive');
+assert.equal(touched.repos[0].summaryAt,undefined);
+touched.cooldown=2000;
+assert.equal(polling.next(touched,1999),null);
+req=polling.next(touched,2000); assert.equal(req.kind,'run'); assert.equal(req.run,'7');
+
+const backedOff=selectedRepo([{id:7,status:'in_progress'}]);
+backedOff.repos[0].summaryAt=0;
+const retryRun=polling.ensure(backedOff,'run','a/b','7','active',9000);
+retryRun.failures=3;
+polling.touch(backedOff,'a/b','7',1000);
+assert.equal(retryRun.due,1000);
+assert.equal(retryRun.group,'interactive');
+assert.equal(retryRun.failures,3);
+assert.equal(backedOff.repos[0].summaryAt,undefined);
+
+const inFlight=selectedRepo([{id:7,status:'in_progress'}]);
+inFlight.repos[0].activityAt=0; inFlight.repos[0].summaryAt=0;
+polling.ensure(inFlight,'run','a/b','7','interactive',1000);
+const older=polling.next(inFlight,1000); assert.equal(older.kind,'run');
+polling.touch(inFlight,'a/b','7',1100);
+assert.equal(inFlight.tasks[runKey].again,true);
+assert.equal(polling.complete(inFlight,response(older,{id:7,status:'completed',run_attempt:1}),1200),true);
+assert.ok(inFlight.tasks[runKey]);
+assert.ok(inFlight.tasks[runKey].due<=1200);
+assert.ok(!inFlight.tasks[runKey].again);
+const newer=polling.next(inFlight,2000); assert.equal(newer.kind,'run');
+assert.notEqual(newer.requestId,older.requestId);
+assert.equal(polling.complete(inFlight,response(newer,{id:7,status:'completed',run_attempt:2}),2100),true);
+assert.equal(inFlight.tasks[runKey],undefined);
