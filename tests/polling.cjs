@@ -22,6 +22,17 @@ function response(request, data=[], nextPage=0, total) {
   return reply;
 }
 function reopen(s, now) { polling.open(s, now); s.accountChecked = true; }
+// An auth or setup error on the account check stops polling until r, then r recovers.
+for (const errorType of ['auth','setup']) {
+  const gate=polling.create(); polling.open(gate,0);
+  const first=polling.next(gate,0); assert.equal(first.kind,'account');
+  polling.complete(gate,{requestId:first.requestId,error:'stop',errorType},100);
+  assert.equal(gate.accountChecked,false); assert.equal(polling.next(gate,5000),null,errorType+' stops the gate');
+  polling.manual(gate,6000,false);
+  const retry=polling.next(gate,6000); assert.equal(retry.kind,'account',errorType+': r retries the check');
+  polling.complete(gate,response(retry,{login:'tester'}),6100);
+  assert.equal(gate.accountChecked,true); assert.equal(polling.next(gate,7100).kind,'catalogue',errorType+': polling resumes');
+}
 // The account check gates all cached work on each open.
 const account=polling.create();
 account.repos=[{repo:'a/b',runs:[{id:7,status:'in_progress'}]}];

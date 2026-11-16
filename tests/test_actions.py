@@ -199,17 +199,24 @@ class PageTest(unittest.TestCase):
             with self.subTest(task=bad), self.assertRaises(ValueError):
                 actions.page_endpoint(bad)
         link = 'Link: <https://api.github.com/user?page=2>; rel="next"\n'
-        for body in ({"login": "octo-cat", "id": 1, "email": "x"}, {}, {"login": 1},
-                     {"login": "a b"}, {"login": "a\n"}, {"login": ""}):
+        for body in ({"login": "octo-cat", "id": 1, "email": "x"}, {"login": "mona-cat_octo", "email": "x"}, {}, {"login": 1},
+                     {"login": "a b", "email": "x"}, {"login": "a\n"}, {"login": ""}):
             with self.subTest(body=body), patch.object(actions, "request", return_value=(
                     "HTTP/2.0 200 OK\n" + link + "\n" + json.dumps(body), "", 0)):
                 result = actions.read_page(task)
             self.assertEqual(result["nextPage"], 0)
-            if body.get("login") == "octo-cat":
+            if body.get("login") in ("octo-cat", "mona-cat_octo"):
                 self.assertEqual(result["errorType"], "")
-                self.assertEqual(result["data"], {"login": "octo-cat"})
+                self.assertEqual(result["data"], {"login": body["login"]})
             else:
                 self.assertEqual(result["errorType"], "network")
+                self.assertIsNone(result["data"])
+        # HTTP 200 but gh exits non-zero: the profile must not ride along on the error.
+        with patch.object(actions, "request", return_value=(
+                'HTTP/2.0 200 OK\n\n{"login":"octo","email":"x@y"}', "", 1)):
+            result = actions.read_page(task)
+        self.assertEqual(result["errorType"], "network")
+        self.assertIsNone(result["data"])
 
     def test_catalogue_403_message(self):
         for status in (403, 404):

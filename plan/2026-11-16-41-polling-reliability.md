@@ -200,6 +200,10 @@ None. The plan implements the spec as approved. One reading to confirm at plan a
 ## Deviations during implementation
 
 - Step 7: `tests/qml-smoke.py` qualifies `Color.background` as `Commons.Color.background` (with `import qs.Commons as Commons`). #40 (3fb9c8d, merged after this plan was written) made the same change in `ActionsPanel.qml` because Qt 6.12's QtQuick `Color` singleton shadows `qs.Commons`' `Color`, but left the test's shell on the bare name, so the smoke test failed at its theme check on main before any panel check ran.
+- Review fixes (Codex review and Opus review of the finished diff):
+  - The account login pattern also allows `_` (`[A-Za-z0-9_-]+`). GitHub Enterprise Managed Users on github.com have logins like `mona-cat_octo`; the stricter pattern made their check fail as `network` and the gate never opened. Test added.
+  - An `account` reply drops `data` on every error path, not only on an invalid login. With HTTP 200 and a non-zero `gh` exit the full `/user` profile was returned on the `network` error. Test added.
+  - `tests/polling.cjs` covers an `auth` or `setup` error on the account check followed by `r`.
 
 ## Owner answers (2026-11-16, "approve all plans as recommended")
 

@@ -162,6 +162,8 @@ def read_page(task):
             body = None
         result["data"] = body
         if status >= 400 or code:
+            if task["kind"] == "account":
+                result["data"] = None  # never pass on the /user profile, only the login
             message = str(body.get("message", "")) if isinstance(body, dict) else ""
             if status == 429 or result["remaining"] == 0 or result["retryAt"] or "rate limit" in message.lower() or "secondary rate" in message.lower():
                 result.update(errorType="rate", error="GitHub rate limit")
@@ -184,7 +186,7 @@ def read_page(task):
         elif kind == "account":
             result["data"] = None
             login = body.get("login") if isinstance(body, dict) else None
-            if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9-]+", login):
+            if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", login):
                 raise ValueError("Invalid account response")
             result["data"] = {"login": login}
         elif kind == "run":
