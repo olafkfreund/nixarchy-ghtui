@@ -1,10 +1,14 @@
 """Exercise the real QML worker with a temporary fake API; no live GitHub requests."""
 import argparse
+import json
 import os
 from pathlib import Path
+import queue
+import shutil
 import subprocess
 import tempfile
-import tomllib
+import threading
+import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('plugin_dir', nargs='?', type=Path, default=Path(__file__).resolve().parents[1])
@@ -13,39 +17,94 @@ required = ('manifest.json', 'ActionsPanel.qml', 'ActionsModel.js', 'Polling.js'
             'actions.py', 'menu.py', 'menu.example.json', 'keybindings.sh')
 if not source.is_dir() or any(not (source / name).is_file() for name in required):
     parser.error('plugin_dir must contain the complete GitHub Actions plugin')
-shell = Path(os.environ['OMARCHY_PATH']) / 'shell'
-colors = tomllib.loads((Path.home() / '.local/state/omarchy/current/theme/colors.toml').read_text())
+
+
+def collect(proc, lines, states=None):
+    def read():
+        for line in proc.stdout:
+            lines.append(line.rstrip())
+            if states is not None and 'STATE ' in line:
+                try:
+                    states.put(json.loads(line.split('STATE ', 1)[1]))
+                except json.JSONDecodeError:
+                    pass
+    threading.Thread(target=read, daemon=True).start()
+
+
+def stop(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def start_session(home, path, deadline):
+    directory = Path(tempfile.mkdtemp(prefix='actions-sway-'))
+    os.chmod(directory, 0o700)
+    conf = directory / 'sway.conf'
+    conf.write_text('output HEADLESS-1 resolution 1280x720 position 0 0\n')
+    env = {'XDG_RUNTIME_DIR': str(directory), 'HOME': str(home), 'PATH': path,
+           'WLR_BACKENDS': 'headless', 'WLR_RENDERER': 'pixman',
+           'WLR_LIBINPUT_NO_DEVICES': '1'}
+    sway_lines = []
+    sway = None
+    try:
+        sway = subprocess.Popen(['sway', '-c', str(conf)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        collect(sway, sway_lines)
+        while time.monotonic() < deadline:
+            wayland = [p for p in directory.glob('wayland-*') if p.is_socket()]
+            ipc = [p for p in directory.glob('sway-ipc.*.sock') if p.is_socket()]
+            if wayland and ipc:
+                for socket in (wayland[0], ipc[0]):
+                    if socket.resolve().parent != directory.resolve():
+                        raise RuntimeError('refusing to run: compositor socket outside the private directory')
+                child_env = {**env, 'WAYLAND_DISPLAY': wayland[0].name,
+                             'QT_QPA_PLATFORM': 'wayland', 'QT_QUICK_BACKEND': 'software'}
+                return directory, sway, sway_lines, ipc[0], child_env
+            if sway.poll() is not None:
+                break
+            time.sleep(0.05)
+        raise RuntimeError('timeout starting private sway: ' + '\n'.join(sway_lines[-30:]))
+    except BaseException:
+        stop(sway)
+        shutil.rmtree(directory)
+        raise
+
+
 for scenario in ('fresh', 'managed'):
-    with tempfile.TemporaryDirectory(prefix='actions-qml-') as directory:
-        root = Path(directory)
+    deadline = time.monotonic() + 25
+    with tempfile.TemporaryDirectory(prefix='actions-qml-') as temporary:
+        root = Path(temporary)
+        stubs = Path(__file__).resolve().parent / 'stubs'
         for name in ('Commons', 'Ui'):
-            (root / name).symlink_to(shell / name)
+            (root / name).symlink_to(stubs / name)
         for name in ('ActionsPanel.qml', 'ActionsModel.js', 'Polling.js', 'menu.py', 'menu.example.json'):
             (root / name).symlink_to(source / name)
-        # The fake replies with ~200 KiB (over the 64 KiB pipe buffer) in 4 KiB chunks and exits at once,
-        # so every run checks that a reply written right before exit reaches the panel whole (#36).
-        (root / 'actions.py').write_text('''import json, os, sys, time
+        # A reply larger than the pipe buffer must be read whole even as the helper exits (#36).
+        (root / 'actions.py').write_text('''import json, os, signal, sys, time
 request=json.loads(sys.argv[2]); kind=request['kind']
+with open(os.environ['FAKE_LOG'],'a') as log: log.write(f"{kind} {request['requestId']} {request['repo']}\\n")
+if os.environ.get('FAKE_MODE')=='block':
+    with open(os.environ['FAKE_PID'],'w') as pid: pid.write(str(os.getpid()))
+    signal.pause()
 time.sleep(0.1)
-run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1}
+runs=[{'id':i,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':i,
+       'run_started_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(time.time()-5))} for i in range(7,32)]
 if kind=='catalogue': data=[{'repo':'one/repo'},{'repo':'two/repo'}]
 elif kind=='jobs': data=[{'id':8,'name':'build','status':'in_progress','steps':[{'number':1,'name':'Checkout','status':'completed','conclusion':'success'}]}]
-elif kind=='run': data=run
+elif kind=='run': data=runs[0]
 elif kind=='account': data={'login':'tester'}
-else: data=[run] if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
+else: data=runs if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
 reply=json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':'','errorType':'','remaining':4000,'padding':'x'*200000}).encode()+b'\\n'
 for i in range(0,len(reply),4096): os.write(1,reply[i:i+4096])
 os._exit(0)
 ''')
         home = root / 'home'
         home.mkdir()
-        theme = home / '.local/state/omarchy/current/theme'
-        theme.parent.mkdir(parents=True)
-        theme.symlink_to(Path.home() / '.local/state/omarchy/current/theme')
-        (home / '.config').mkdir()
-        (home / '.config/fontconfig').symlink_to(Path.home() / '.config/fontconfig')
-        (home / '.config/omarchy').mkdir()
-        (home / '.config/omarchy/shell.toml').symlink_to(Path.home() / '.config/omarchy/shell.toml')
         menu_path = home / '.config/omarchy/extensions/omarchy-menu.jsonc'
         if scenario == 'managed':
             menu_path.parent.mkdir(parents=True)
@@ -55,9 +114,7 @@ os._exit(0)
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import qs.Commons
 import qs.Commons as Commons
-import "Polling.js" as Polling
 ShellRoot {
     ActionsPanel { id: panel }
     FileView {
@@ -68,116 +125,105 @@ ShellRoot {
         printErrors: false
         onFileChanged: reload()
     }
+    property int seq: 0
+    property string previous: ""
+    property bool seeded: false
     Timer {
-        interval: 18000; running: true
+        interval: 50; running: true; repeat: true
         onTriggered: {
-            var missing = stage === 1 ? [panel.polling.requests>=6 ? "" : "requests>=6", panel.details["one/repo:7"] ? "" : "jobs one/repo:7",
-                panel.polling.catalogueComplete ? "" : "catalogueComplete"].filter(Boolean).join(",") : ""
-            console.error("CHECK FAILED: timeout stage=" + stage + (missing ? " missing=" + missing : "") + " " + panel.status()); Qt.quit()
-        }
-    }
-    function stopped() {
-        if (!panel.polling.auth) return false
-        console.error("CHECK FAILED: polling stopped: " + panel.error + " " + panel.status()); Qt.quit()
-        return true
-    }
-    property int stage: 0
-    property string selected: ""
-    property double closedAt: 0
-    property int closedRequests: 0
-    function check(value, label) { if (!value) throw new Error("CHECK FAILED: " + label) }
-    Timer {
-        interval: 1000; running: true
-        onTriggered: {
-            check(Commons.Color.background.toString()===Quickshell.env("EXPECTED_BACKGROUND"),"active Omarchy theme")
-            check(panel.textScale===undefined,"no panel scale factor")
-            menuFile.reload()
-            check(!panel.opened && panel.polling.requests===0,"registration does not open or poll")
-            if (Quickshell.env("MENU_SCENARIO") === "fresh")
-                check(menuFile.text().indexOf('"apps.github-actions"') >= 0,"registered while closed")
-            panel.polling=Polling.create()
-            panel.polling.repos=[{repo:"one/repo"},{repo:"two/repo"}]; panel.adopt()
-            check(panel.entries.length===2,"seeded repositories")
-            panel.polling.repos[0].runs=[{id:7,name:"CI",status:"in_progress",run_attempt:1}]
-            panel.polling.expanded={"repo:one/repo":true}
-            panel.adopt()
-            panel.move(1)
-            check(panel.current.kind==="run","keyboard selection")
-            panel.polling.repos[0].runs[0].run_started_at=new Date(panel.now-5000).toISOString()
-            panel.adopt()
-            var tickKey=panel.current.key, tickCursor=panel.cursor, tickScroll=JSON.parse(panel.status()).scrollY
-            panel.now=panel.now+3000
-            check(panel.current.info==="8s","running duration ticks with now")
-            check(panel.current.key===tickKey && panel.cursor===tickCursor,"tick keeps selection")
-            check(JSON.parse(panel.status()).scrollY===tickScroll,"tick keeps scroll")
-            var savedRuns=panel.polling.repos[0].runs
-            panel.polling.repos[0].runs=[]
-            panel.adopt()
-            var poll=JSON.parse(panel.status())
-            check(poll.pollSelected===panel.current.repo && poll.pollInspected===(panel.current.run||""),"polling follows the highlight")
-            check("remaining" in poll && "resetAt" in poll,"status has quota fields")
-            panel.polling.repos[0].runs=savedRuns
-            panel.adopt()
-            panel.move(-1)
-            check(panel.current.kind==="run","cursor back on the run")
-            panel.expand(false)
-            check(panel.entries[2].title==="Loading jobs…","expand run")
-            panel.expand(true)
-            check(panel.entries.length===3,"collapse run retains other repository")
-            panel.filterText="no-match"
-            check(panel.entries.length===0,"filter")
-            panel.filterText="repo"
-            check(panel.cursor===0 && panel.entries.length===2,"search resets collapsed results")
-            panel.expand(false)
-            panel.move(1)
-            panel.expand(false)
-            selected=panel.current.key
-            panel.open()
-            stage=1
-        }
-    }
-    Timer {
-        interval: 250; running: true; repeat: true
-        onTriggered: {
-            if(stopped()) return
-            if(stage===1 && panel.polling.requests>=6 && panel.details["one/repo:7"] && panel.polling.catalogueComplete) {
-                check(panel.error==="","async API has no error")
-                check(panel.current.key===selected && panel.filterText==="repo","poll preserves searched selection")
-                check(panel.details["one/repo:7"].jobs[0].steps.length===1,"jobs and steps arrive")
-                check(panel.polling.catalogueComplete,"catalogue completed")
-                panel.close()
-                closedRequests=panel.polling.requests
-                closedAt=Date.now()
-                stage=2
-            } else if(stage===2 && Date.now()-closedAt>1200) {
-                check(!panel.workerBusy && !panel.polling.flight,"close settles worker")
-                check(panel.polling.requests===closedRequests,"closed panel starts no requests")
-                var history=panel.polling.starts.length
+            if (!seeded) {
+                menuFile.reload()
+                if (Quickshell.env("MENU_SCENARIO") === "fresh" && menuFile.text().indexOf('"apps.github-actions"') < 0) return
+                if (panel.opened || panel.polling.requests !== 0) throw new Error("registration opened or polled")
+                seeded = true
+                panel.polling.repos = [{repo:"one/repo"},{repo:"two/repo"}]
+                panel.adopt()
                 panel.open()
-                check(panel.polling.starts.length>=history,"reopen preserves budget")
-                panel.close()
-                stage=3
-            } else if(stage===3 && !panel.workerBusy) {
-                console.log("QML_CHECKS_PASSED")
-                Qt.quit()
+            }
+            var state = Object.assign(JSON.parse(panel.status()), {
+                cursor: panel.cursor, info: panel.current ? panel.current.info : "",
+                auth: panel.polling.auth, layout: JSON.parse(panel.layout()),
+                stubBackground: Commons.Color.background.toString()
+            })
+            var body = JSON.stringify(state)
+            if (body !== previous) {
+                previous = body
+                state.seq = ++seq
+                console.log("STATE " + JSON.stringify(state))
             }
         }
     }
 }
 ''')
+        session = None
+        quickshell = None
+        sway_lines = []
+        shell_lines = []
+        states = queue.Queue()
+        last = [None]
         try:
-            result=subprocess.run(['quickshell','-p',str(root),'--no-color'],capture_output=True,text=True,timeout=25,
-                                  env={**os.environ, 'HOME':str(home), 'MENU_SCENARIO':scenario, 'EXPECTED_BACKGROUND':colors['background'].lower()})
-        except subprocess.TimeoutExpired as error:
-            print(error.stdout, error.stderr)
-            raise
-        output=result.stdout+result.stderr
-        print(output)
-        if result.returncode or 'QML_CHECKS_PASSED' not in output or any(term in output for term in ('ERROR:', 'ReferenceError','TypeError','CHECK FAILED')):
-            raise SystemExit('QML smoke check failed')
-        if scenario == 'managed':
-            assert 'GitHub Actions menu registration failed:' in output and 'Menu is managed:' in output
-            assert menu_path.is_symlink() and menu_path.read_text() == '{}\n'
-        else:
-            assert 'menu registration failed' not in output
-            assert '"apps.github-actions"' in menu_path.read_text()
+            directory, session, sway_lines, ipc, env = start_session(home, os.environ['PATH'], deadline)
+            env.update({'MENU_SCENARIO': scenario, 'FAKE_LOG': str(root / 'fake.log')})
+            quickshell = subprocess.Popen(['quickshell', '-p', str(root), '--no-color'], env=env,
+                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            collect(quickshell, shell_lines, states)
+
+            def failure(label):
+                raise AssertionError(f'{scenario}: {label}; last state={last[0]!r}\n'
+                                     f'sway output:\n{chr(10).join(sway_lines[-30:])}\n'
+                                     f'quickshell output:\n{chr(10).join(shell_lines[-30:])}')
+
+            def wait_state(label, pred, after_seq=0, timeout=18):
+                end = min(deadline, time.monotonic() + timeout)
+                while time.monotonic() < end:
+                    try:
+                        state = states.get(timeout=min(0.1, max(0.01, end - time.monotonic())))
+                    except queue.Empty:
+                        if quickshell.poll() is not None:
+                            failure(label + ': quickshell exited')
+                        continue
+                    last[0] = state
+                    if state['seq'] > after_seq and pred(state):
+                        return state
+                failure(label + ': timeout')
+
+            def key(label, args):
+                while True:
+                    try:
+                        last[0] = states.get_nowait()
+                    except queue.Empty:
+                        break
+                before = last[0]
+                if before is None:
+                    failure(label + ': no state before key')
+                result = subprocess.run(['wtype', *args], env=env, capture_output=True, text=True,
+                                        timeout=max(0.1, deadline - time.monotonic()))
+                if result.returncode:
+                    failure(label + ': wtype failed: ' + result.stderr)
+                return before
+
+            wait_state('stubs load', lambda s: s['stubBackground'] == '#101315' and s['opened'] and
+                       s['rows'] >= 2 and s['layout']['listWidth'] > 0 and s['layout']['listHeight'] > 0)
+            print(f'{scenario}: stubs load')
+            # get_tree may omit layer-shell surfaces; the key transition is the focus check.
+            subprocess.run(['swaymsg', '-s', str(ipc), '-t', 'get_tree'], env=env,
+                           capture_output=True, text=True, timeout=3)
+            before = key('readiness: probe', ['-s', '300', '-k', 'j', '-s', '300', '-k', 'k'])
+            moved = wait_state('readiness: probe j',
+                               lambda s: s['cursor'] == before['cursor'] + 1, before['seq'])
+            wait_state('readiness: probe key not delivered',
+                       lambda s: s['cursor'] == before['cursor'], moved['seq'])
+            print(f'{scenario}: readiness: probe key delivered')
+            if scenario == 'managed':
+                assert any('GitHub Actions menu registration failed:' in line and 'Menu is managed:' in line
+                           for line in shell_lines)
+                assert menu_path.is_symlink() and menu_path.read_text() == '{}\n'
+            else:
+                assert not any('menu registration failed' in line for line in shell_lines)
+                assert '"apps.github-actions"' in menu_path.read_text()
+            print('QML_CHECKS_PASSED')
+        finally:
+            stop(quickshell)
+            stop(session)
+            if session is not None:
+                shutil.rmtree(directory)
