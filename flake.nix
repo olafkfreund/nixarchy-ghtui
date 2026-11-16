@@ -45,6 +45,17 @@
             '';
       });
 
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
+          packages = [
+            pkgs.quickshell
+            pkgs.sway
+            pkgs.wtype
+            pkgs.python3
+          ];
+        };
+      });
+
       checks = forAllSystems (pkgs: {
         plugin =
           pkgs.runCommand "nixarchy-ghtui-checks-${version}"
