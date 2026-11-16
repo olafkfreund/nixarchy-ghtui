@@ -63,6 +63,13 @@ function manual(s, now, catalogue) {
         }
     }
 }
+function touch(s, repo, run, now) {
+    var t=ensure(s,"run",repo,run,"interactive",now);
+    t.due=now;
+    if (s.flight && s.flight.key===t.key) t.again=true;
+    var r=repoFor(s,repo);
+    if (r) delete r.summaryAt;
+}
 function seed(s, now) {
     if (!s.accountChecked) { ensure(s,"account","","","interactive",now); return; }
     Object.keys(s.tasks).forEach(function(id) {
@@ -183,6 +190,15 @@ function activity(s,r,items,now,total) {
     r.activityAt=now; r.checked=new Date(now).toISOString(); r.error="";
     prune(s,r);
 }
+function cool(s,reply,now) {
+    if (reply.errorType==="rate" || reply.remaining===0 || reply.retryAt>now) {
+        var deadline=Math.max(reply.retryAt || 0,reply.remaining===0 ? reply.resetAt || 0 : 0);
+        if (deadline<=now) deadline=now+Math.min(TIMING.rateMax,TIMING.rateBase*Math.pow(2,s.rateFailures));
+        s.cooldown=Math.max(s.cooldown,deadline);
+        if (reply.errorType==="rate") s.rateFailures++;
+    }
+}
+function noteWrite(s,reply,now) { cool(s,reply,now); }
 function complete(s,reply,now) {
     var flight=s.flight;
     if (!s.opened || !flight || flight.generation!==s.generation || reply.requestId!==flight.request.requestId) return false;
@@ -193,12 +209,7 @@ function complete(s,reply,now) {
         : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
     if (!reply.errorType && !reply.error && !okData)
         reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
-    if (reply.errorType==="rate" || reply.remaining===0 || reply.retryAt>now) {
-        var deadline=Math.max(reply.retryAt || 0,reply.remaining===0 ? reply.resetAt || 0 : 0);
-        if (deadline<=now) deadline=now+Math.min(TIMING.rateMax,TIMING.rateBase*Math.pow(2,s.rateFailures));
-        s.cooldown=Math.max(s.cooldown,deadline);
-        if (reply.errorType==="rate") s.rateFailures++;
-    }
+    cool(s,reply,now);
     if (t.kind==="account" && reply.errorType==="permission") {
         s.accountChecked=true; s.error=""; delete s.tasks[t.key]; return true;
     }
@@ -242,7 +253,9 @@ function complete(s,reply,now) {
             if (resolved.status==="completed" && t.repo===s.selected && t.run===s.inspected && s.expanded[t.repo+":"+t.run])
                 ensure(s,"jobs",t.repo,t.run,"interactive",now);
         }
-        delete s.tasks[t.key]; return true;
+        if (t.again) { t.again=false; t.due=now; }
+        else delete s.tasks[t.key];
+        return true;
     }
     t.items=t.kind==="catalogue" ? t.items.concat(data) : union(t.items,data);
     if (t.kind==="catalogue") {
