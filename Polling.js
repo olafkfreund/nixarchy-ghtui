@@ -6,7 +6,7 @@ var TIMING = {settle:250, catalogue:300000, summary:60000, selected:10000, activ
 function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
-        stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true,
+        stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true, catalogueBlocked:"",
         account:"", accountChecked:false, error:"", requests:0, lastRequest:"", lastStarted:0};
 }
 function key(kind, repo, run) { return kind + ":" + (repo || "") + ":" + (run || ""); }
@@ -27,6 +27,7 @@ function ensure(s, kind, repo, run, group, due) {
 }
 function open(s, now) {
     s.opened = true; s.generation++; s.auth = false; s.accountChecked = false;
+    if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
     if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue) s.discover = true;
     s.stableAt = now;
 }
@@ -40,6 +41,7 @@ function select(s, repo, run, expanded, now, immediate) {
 }
 function manual(s, now, catalogue) {
     s.auth = false;
+    if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
     if (!s.accountChecked) {
         var account=ensure(s,"account","","","interactive",now);
         account.due=Math.min(account.due,now);
@@ -48,10 +50,12 @@ function manual(s, now, catalogue) {
     var r = repoFor(s, s.selected);
     if (r) {
         r.blocked = false; r.error = ""; s.stableAt = now;
-        ensure(s, "summary", r.repo, "", "interactive", now);
+        var summary=ensure(s, "summary", r.repo, "", "interactive", now);
+        summary.due=Math.min(summary.due,now);
         if (s.inspected && s.expanded[r.repo + ":" + s.inspected]) {
             if (s.details[r.repo+":"+s.inspected]) s.details[r.repo+":"+s.inspected].unavailable=false;
-            ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
+            var jobs=ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
+            jobs.due=Math.min(jobs.due,now);
         }
     }
 }
@@ -193,7 +197,8 @@ function complete(s,reply,now) {
         // ponytail: s.auth now means "stopped until manual refresh"; rename if a third stop reason appears
         if (reply.errorType==="auth" || reply.errorType==="setup") s.auth=true;
         if (reply.errorType==="permission") {
-            if (r && t.kind!=="jobs" && t.kind!=="run") { r.blocked=true; r.error=s.error; }
+            if (t.kind==="catalogue") { s.discover=false; s.catalogueBlocked=s.error; }
+            else if (r && t.kind!=="jobs" && t.kind!=="run") { r.blocked=true; r.error=s.error; }
             else if (r && t.kind==="jobs") s.details[t.repo+":"+t.run]=Object.assign({},s.details[t.repo+":"+t.run] || {},{error:s.error,jobsAt:now,unavailable:true});
             else if (r) { var failed=runFor(s,t.repo,t.run); if(failed){ failed.awaitingFinal=false; delete failed.followupAt; failed.lookupError=s.error; } }
             delete s.tasks[t.key];

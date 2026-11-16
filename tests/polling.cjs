@@ -327,3 +327,58 @@ polling.ensure(plain,'activity','a/b','','active',0); req=polling.next(plain,0);
 polling.complete(plain,response(req,[{id:1,status:'in_progress'}]),100);
 assert.deepEqual(plain.repos[0].hidden || {},{}); assert.equal(plain.repos[0].active,1);
 console.log('Polling: one page per unfinished status, hidden counts and kept runs');
+
+// Catalogue permission stops discovery until a manual refresh or reopen.
+function blockedCatalogue() {
+  const c=polling.create(); reopen(c,0);
+  c.repos=[{repo:'a/b',archived:true}];
+  const request=polling.next(c,0); assert.equal(request.kind,'catalogue');
+  polling.complete(c,{...response(request),error:'catalogue forbidden',errorType:'permission'},100);
+  assert.equal(c.discover,false); assert.equal(c.catalogueBlocked,'catalogue forbidden');
+  assert.equal(c.repos.length,1);
+  for(let now=1000;now<=60000;now+=1000) assert.equal(polling.next(c,now),null);
+  return c;
+}
+const blocked=blockedCatalogue();
+polling.manual(blocked,61000,false);
+assert.equal(blocked.catalogueBlocked,'');
+assert.equal(polling.next(blocked,61000).kind,'catalogue');
+const blockedAgain=blockedCatalogue();
+polling.manual(blockedAgain,61000,true);
+assert.equal(blockedAgain.catalogueBlocked,'');
+assert.equal(polling.next(blockedAgain,61000).kind,'catalogue');
+const reopened=blockedCatalogue();
+reopened.catalogueComplete=true; reopened.catalogueAt=60000;
+reopen(reopened,61000);
+assert.equal(reopened.catalogueBlocked,'');
+assert.equal(polling.next(reopened,61000).kind,'catalogue');
+const selectedBlocked=blockedCatalogue();
+selectedBlocked.repos[0].archived=false;
+selectedBlocked.selected='a/b';
+polling.manual(selectedBlocked,61000,false);
+assert.equal(selectedBlocked.catalogueBlocked,'');
+assert.ok(selectedBlocked.tasks[polling.key('summary','a/b')]);
+
+// Manual refresh advances an existing retry without erasing its failure count.
+for(const kind of ['summary','jobs']) {
+  const retry=selectedRepo([{id:7,status:'in_progress'}]);
+  polling.select(retry,'a/b',kind==='jobs' ? '7' : '',kind==='jobs' ? {'a/b:7':true} : {},0,true);
+  retry.repos[0].summaryAt=0;
+  const task=polling.ensure(retry,kind,'a/b',kind==='jobs' ? '7' : '','interactive',301000);
+  task.failures=5;
+  polling.manual(retry,1000,false);
+  assert.equal(task.due,1000);
+  assert.equal(task.failures,5);
+  retry.cooldown=2000;
+  assert.equal(polling.next(retry,1000),null);
+  retry.cooldown=0;
+  retry.starts=Array.from({length:60},()=>1000);
+  assert.equal(polling.next(retry,1000),null);
+  retry.starts=[];
+  assert.equal(polling.next(retry,1000).kind,kind);
+}
+const stable=selectedRepo();
+polling.select(stable,'a/b','',{},1000,false);
+const stableAt=stable.stableAt;
+polling.select(stable,'a/b','',{},2000,false);
+assert.equal(stable.stableAt,stableAt);
