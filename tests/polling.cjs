@@ -382,3 +382,78 @@ polling.select(stable,'a/b','',{},1000,false);
 const stableAt=stable.stableAt;
 polling.select(stable,'a/b','',{},2000,false);
 assert.equal(stable.stableAt,stableAt);
+
+// Failed jobs keep cached rows visible and clear their error on success.
+function jobsFixture(cached) {
+  const j=selectedRepo([{id:7,status:'in_progress'}]);
+  j.repos[0].summaryAt=0; j.repos[0].activityAt=0;
+  polling.select(j,'a/b','7',{'a/b:7':true},0,true);
+  if (cached) j.details['a/b:7']={jobs:[{id:1,status:'in_progress'}],updated:'2026-01-01T00:00:00.000Z',jobsAt:0};
+  polling.ensure(j,'jobs','a/b','7','interactive',0);
+  return j;
+}
+const jobsCached=jobsFixture(true);
+req=polling.next(jobsCached,0); assert.equal(req.kind,'jobs');
+polling.complete(jobsCached,{...response(req),error:'offline',errorType:'network'},100);
+assert.equal(jobsCached.details['a/b:7'].error,'offline');
+assert.equal(jobsCached.details['a/b:7'].jobs.length,1);
+assert.equal(jobsCached.details['a/b:7'].updated,'2026-01-01T00:00:00.000Z');
+assert.equal(jobsCached.details['a/b:7'].jobsAt,0);
+jobsCached.tasks[polling.key('jobs','a/b','7')].due=1000;
+req=polling.next(jobsCached,1000); assert.equal(req.kind,'jobs');
+polling.complete(jobsCached,response(req,[{id:2,status:'completed'}]),1100);
+assert.equal(jobsCached.details['a/b:7'].error,undefined);
+assert.equal(jobsCached.details['a/b:7'].jobs[0].id,2);
+const jobsEmpty=jobsFixture(false);
+req=polling.next(jobsEmpty,0); assert.equal(req.kind,'jobs');
+polling.complete(jobsEmpty,{...response(req),error:'offline',errorType:'network'},100);
+assert.equal(jobsEmpty.details['a/b:7'].error,'offline');
+assert.equal(jobsEmpty.details['a/b:7'].jobs,undefined);
+const jobsDenied=jobsFixture(true);
+req=polling.next(jobsDenied,0); assert.equal(req.kind,'jobs');
+polling.complete(jobsDenied,{...response(req),error:'forbidden',errorType:'permission'},100);
+assert.equal(jobsDenied.details['a/b:7'].error,'forbidden');
+assert.equal(jobsDenied.details['a/b:7'].unavailable,true);
+assert.equal(jobsDenied.details['a/b:7'].jobsAt,100);
+assert.equal(jobsDenied.details['a/b:7'].jobs.length,1);
+assert.equal(polling.runFor(jobsDenied,'a/b',7).lookupError,undefined);
+
+// A full snapshot looks up kept queued runs that vanished and drops stale details.
+const snapshot=selectedRepo([5,6,7,8].map(id=>({id,status:'queued',followupAt:0})));
+polling.select(snapshot,'a/b','6',{'a/b:5':true},0,true);
+snapshot.details={'a/b:5':{unavailable:true},'a/b:6':{unavailable:true},'a/b:7':{jobs:[]},'a/b:8':{jobs:[]}};
+let snapNow=0;
+for (const phase of polling.phases) {
+  req=polling.next(snapshot,snapNow); assert.equal(req.kind,'summary'); assert.equal(req.status,phase);
+  polling.complete(snapshot,response(req,phase==='queued' ? [{id:8,status:'queued'}] : []),snapNow+100);
+  snapNow+=1000;
+}
+for (const id of [5,6]) {
+  assert.equal(polling.runFor(snapshot,'a/b',id).awaitingFinal,true);
+  assert.equal(polling.runFor(snapshot,'a/b',id).followupAt,undefined);
+  assert.ok(snapshot.details[`a/b:${id}`]);
+}
+assert.equal(polling.runFor(snapshot,'a/b',7),undefined);
+assert.equal(snapshot.details['a/b:7'],undefined);
+assert.equal(polling.runFor(snapshot,'a/b',8).awaitingFinal,undefined);
+assert.ok(snapshot.details['a/b:8']);
+req=polling.next(snapshot,snapNow); assert.equal(req.kind,'run');
+polling.complete(snapshot,response(req,{id:Number(req.run),status:'completed'}),snapNow+100);
+assert.equal(polling.runFor(snapshot,'a/b',req.run).status,'completed');
+
+const activityPrune=selectedRepo(Array.from({length:12},(_,i)=>({id:i+1,status:'completed'})));
+activityPrune.repos[0].repo='other/repo';
+polling.select(activityPrune,'other/repo','1',{},0,true);
+polling.select(activityPrune,'','',{},1000,true);
+activityPrune.details={'other/repo:1':{jobs:[]},'other/repo:12':{jobs:[]}};
+polling.activity(activityPrune,activityPrune.repos[0],[],1000,0);
+assert.equal(activityPrune.details['other/repo:1'],undefined);
+assert.ok(activityPrune.details['other/repo:12']);
+
+const cataloguePrune=polling.create(); reopen(cataloguePrune,0);
+cataloguePrune.repos=[{repo:'a/b',archived:true},{repo:'a/bc',archived:true}];
+cataloguePrune.details={'a/b:5':{jobs:[]},'a/bc:5':{jobs:[]}};
+req=polling.next(cataloguePrune,0); assert.equal(req.kind,'catalogue');
+polling.complete(cataloguePrune,response(req,[{repo:'a/bc',archived:true}]),100);
+assert.equal(cataloguePrune.details['a/b:5'],undefined);
+assert.ok(cataloguePrune.details['a/bc:5']);

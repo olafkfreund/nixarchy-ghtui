@@ -155,6 +155,11 @@ function recent(s,r,runs) {
 function kept(s,r,run) {
     return s.expanded[r.repo+":"+run.id] || r.repo===s.selected && String(run.id)===s.inspected;
 }
+function prune(s,r) {
+    var ids={}; (r.runs || []).forEach(function(run) { ids[String(run.id)]=true });
+    var prefix=r.repo+":";
+    Object.keys(s.details).forEach(function(id) { if (id.indexOf(prefix)===0 && !ids[id.slice(prefix.length)]) delete s.details[id]; });
+}
 function activity(s,r,items,now,total) {
     var ids={}; items.forEach(function(run) { ids[run.id]=true });
     var previous=r.runs || [], partial=total>items.length, dropped={};
@@ -172,6 +177,7 @@ function activity(s,r,items,now,total) {
     r.active=typeof total==="number" ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
     if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
     r.activityAt=now; r.checked=new Date(now).toISOString(); r.error="";
+    prune(s,r);
 }
 function complete(s,reply,now) {
     var flight=s.flight;
@@ -194,12 +200,15 @@ function complete(s,reply,now) {
     var r=repoFor(s,t.repo);
     if (reply.errorType || reply.error) {
         s.error=reply.error || "Invalid GitHub response";
+        if (t.kind==="jobs") { var dk=t.repo+":"+t.run;
+            s.details[dk]=Object.assign({},s.details[dk]||{},{error:s.error});
+            if (reply.errorType==="permission") Object.assign(s.details[dk],{jobsAt:now,unavailable:true}); }
         // ponytail: s.auth now means "stopped until manual refresh"; rename if a third stop reason appears
         if (reply.errorType==="auth" || reply.errorType==="setup") s.auth=true;
         if (reply.errorType==="permission") {
             if (t.kind==="catalogue") { s.discover=false; s.catalogueBlocked=s.error; }
             else if (r && t.kind!=="jobs" && t.kind!=="run") { r.blocked=true; r.error=s.error; }
-            else if (r && t.kind==="jobs") s.details[t.repo+":"+t.run]=Object.assign({},s.details[t.repo+":"+t.run] || {},{error:s.error,jobsAt:now,unavailable:true});
+            else if (t.kind==="jobs") {} // Detail was written above.
             else if (r) { var failed=runFor(s,t.repo,t.run); if(failed){ failed.awaitingFinal=false; delete failed.followupAt; failed.lookupError=s.error; } }
             delete s.tasks[t.key];
         } else {
@@ -241,6 +250,7 @@ function complete(s,reply,now) {
     if (reply.nextPage) { t.page=reply.nextPage; t.due=now; t.order=++s.order; return true; }
     if (t.kind==="catalogue") {
         var names=t.items.map(function(repo) { return repo.repo });
+        s.repos.forEach(function(repo) { if (names.indexOf(repo.repo)<0) prune(s,{repo:repo.repo,runs:[]}); });
         s.repos=s.repos.filter(function(repo) { return names.indexOf(repo.repo)>=0 });
         // GitHub's pushed-descending catalogue order is retained across refreshes.
         s.repos.sort(function(a,b) { return names.indexOf(a.repo)-names.indexOf(b.repo) });
@@ -254,6 +264,11 @@ function complete(s,reply,now) {
         if (t.phase<phases.length) { t.due=now; t.order=++s.order; return true; }
         var keep=(r.runs || []).filter(function(run) { return run.awaitingFinal || kept(s,r,run) });
         r.runs=recent(s,r,union(t.all,keep));
+        var seen={}; t.all.forEach(function(run) { seen[String(run.id)]=true });
+        r.runs.forEach(function(run) {
+            if (run.status!=="completed" && !seen[String(run.id)]) { run.awaitingFinal=true; delete run.followupAt; }
+        });
+        prune(s,r);
         r.hidden=t.hidden || {};
         r.summaryAt=now;
     } else if (r && t.kind==="jobs") {
