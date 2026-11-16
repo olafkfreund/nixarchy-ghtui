@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 41
 spec: spec/2026-11-16-41-polling-reliability.md
 coders:
