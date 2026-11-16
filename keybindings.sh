@@ -20,6 +20,10 @@ Esc → Clear filter, then close
 r → Refresh selected repository, expanded run and activity
 Shift + R → Rediscover accessible repositories
 o → Open selected repository, run or job on GitHub
+a → Rerun all jobs of the selected finished run (asks y/n)
+f → Rerun failed jobs of the selected failed run (asks y/n)
+c → Cancel the selected unfinished run (asks y/n)
+y / n / Esc → Confirm or cancel a pending action; Enter does nothing
 Search editing → Native cursor movement, selection, Backspace and Delete
 KEYS
 }
