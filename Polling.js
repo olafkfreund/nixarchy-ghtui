@@ -7,7 +7,7 @@ function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
         stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true,
-        error:"", requests:0, lastRequest:"", lastStarted:0};
+        account:"", accountChecked:false, error:"", requests:0, lastRequest:"", lastStarted:0};
 }
 function key(kind, repo, run) { return kind + ":" + (repo || "") + ":" + (run || ""); }
 function age(at, interval) { return at === undefined ? -Infinity : at + interval; }
@@ -26,7 +26,7 @@ function ensure(s, kind, repo, run, group, due) {
     return t;
 }
 function open(s, now) {
-    s.opened = true; s.generation++; s.auth = false;
+    s.opened = true; s.generation++; s.auth = false; s.accountChecked = false;
     if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue) s.discover = true;
     s.stableAt = now;
 }
@@ -40,6 +40,10 @@ function select(s, repo, run, expanded, now, immediate) {
 }
 function manual(s, now, catalogue) {
     s.auth = false;
+    if (!s.accountChecked) {
+        var account=ensure(s,"account","","","interactive",now);
+        account.due=Math.min(account.due,now);
+    }
     if (catalogue) { s.discover = true; return; }
     var r = repoFor(s, s.selected);
     if (r) {
@@ -52,6 +56,7 @@ function manual(s, now, catalogue) {
     }
 }
 function seed(s, now) {
+    if (!s.accountChecked) { ensure(s,"account","","","interactive",now); return; }
     Object.keys(s.tasks).forEach(function(id) {
         var t = s.tasks[id];
         if (s.flight && s.flight.key === id) return;
@@ -100,7 +105,7 @@ function next(s, now) {
     if (s.starts.length >= TIMING.perWindow || s.starts.length && now - s.starts[s.starts.length-1] < TIMING.gap) return null;
     s.clock=now;
     seed(s,now);
-    var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now });
+    var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now && (s.accountChecked || t.kind === "account") });
     due.sort(function(a,b) { return a.due === b.due ? a.order-b.order : a.due-b.due });
     var group = ["interactive","interactive","interactive","active","background"][s.slot % 5];
     var t = due.filter(function(t) { return t.group === group })[0];
@@ -169,7 +174,7 @@ function complete(s,reply,now) {
     if (!s.opened || !flight || flight.generation!==s.generation || reply.requestId!==flight.request.requestId) return false;
     var t=s.tasks[flight.key]; s.flight=null;
     if (!t) return false;
-    var okData=t.kind==="run" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
+    var okData=t.kind==="run" || t.kind==="account" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
         : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
     if (!reply.errorType && !reply.error && !okData)
         reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
@@ -178,6 +183,9 @@ function complete(s,reply,now) {
         if (deadline<=now) deadline=now+Math.min(TIMING.rateMax,TIMING.rateBase*Math.pow(2,s.rateFailures));
         s.cooldown=Math.max(s.cooldown,deadline);
         if (reply.errorType==="rate") s.rateFailures++;
+    }
+    if (t.kind==="account" && reply.errorType==="permission") {
+        s.accountChecked=true; s.error=""; delete s.tasks[t.key]; return true;
     }
     var r=repoFor(s,t.repo);
     if (reply.errorType || reply.error) {
@@ -200,6 +208,13 @@ function complete(s,reply,now) {
     s.error=""; s.rateFailures=0; t.failures=0;
     if (r) r.error="";
     var data=reply.data;
+    if (t.kind==="account") {
+        if (s.account && s.account!==data.login) {
+            s.tasks={}; s.repos=[]; s.details={}; s.expanded={}; s.selected=""; s.inspected="";
+            s.catalogueComplete=false; s.catalogueBlocked=""; s.discover=true;
+        }
+        s.account=data.login; s.accountChecked=true; delete s.tasks[t.key]; return true;
+    }
     if (t.kind==="run") {
         if (r) {
             var resolved=Object.assign({},data,{awaitingFinal:false,followupAt:now});
