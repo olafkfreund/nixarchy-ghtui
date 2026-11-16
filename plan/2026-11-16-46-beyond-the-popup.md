@@ -607,3 +607,12 @@ host only; other hosts are untried.
    fixes 40% of the column height, a three-row list minimum and a one-line
    floor for the pane. On a card too small for a one-line pane plus three
    rows, the list shrinks below three rows rather than hiding the pane.
+
+## Owner answers (2026-11-16, "approve all plans as recommended")
+
+These override any step text they contradict. Merge order: #41 -> #42 -> #43(a) -> #43(b); #44 after #42; #45 and #47 after #41; #46 after #44 and #47.
+
+- Deviation 1: **the smaller change.** Step 2 does not add `actor_login`. `detail()` reads #42's flattened `actor` string; the helper adds only `triggering_login` (same cleaning rule: `plain(obj["login"])` when it is a dict with a string `login`, else `""`). Adjust step 2's and step 3's tests to match.
+- Deviation 2: **#46 waits for #47.** Step 1 confirms #47 is merged; step 6 uses #47's real key events for `i` and Esc. `toggleDetail()` and `escape()` may still exist, but the test drives them by key presses.
+- Deviations 3, 4, 6, 7: accepted as written.
+- Deviation 5: keep #41's `network` type for an invalid login, and test it.
