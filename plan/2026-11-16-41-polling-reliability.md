@@ -196,3 +196,10 @@ All changes are in one PR with one commit per step, so `git revert` of the merge
 None. The plan implements the spec as approved. One reading to confirm at plan approval:
 - Spec Verification says `account` "doesn't accept a repo". The plan rejects a non-empty `repo` on an `account` task and allows an absent or empty one, because the scheduler always sends `repo: ""` (`Polling.js:112`). Rejecting any non-`None` value would stop every scheduled account check. This was a review finding; it follows the spec's wording.
 - In step 4 the existing `permission` jobs line stays as an empty branch (`else if (t.kind==="jobs") {}`) so the new shared jobs write doesn't make jobs errors fall into the run-lookup branch. Output is identical to the spec's description.
+
+## Owner answers (2026-11-16, "approve all plans as recommended")
+
+These override any step text they contradict. Merge order: #41 -> #42 -> #43(a) -> #43(b); #44 after #42; #45 and #47 after #41; #46 after #44 and #47.
+
+- Account task with an empty `repo`: accepted as written (reject only a non-empty `repo`).
+- The empty `permission` jobs branch in step 4: accepted.
