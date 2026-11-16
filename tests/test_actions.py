@@ -176,6 +176,60 @@ class PageTest(unittest.TestCase):
         self.assertEqual(result["errorType"], "")
         self.assertNotIn("total", result)
 
+    def test_bad_steps_reject_the_page(self):
+        task = {"kind": "jobs", "repo": "a/b", "run": "7", "requestId": 1}
+        for steps in ([None], ["x"], [1], None):
+            with self.subTest(steps=steps), patch.object(actions, "request", return_value=(
+                    "HTTP/2.0 200 OK\n\n" + json.dumps({"jobs": [{"id": 8, "status": "completed", "steps": steps}]}), "", 0)):
+                self.assertEqual(actions.read_page(task)["errorType"], "network")
+        with patch.object(actions, "request", return_value=(
+                "HTTP/2.0 200 OK\n\n" + json.dumps({"jobs": [{"id": 8, "status": "completed", "steps": [{"name": "a\nb"}]}]}), "", 0)):
+            result = actions.read_page(task)
+        self.assertEqual(result["errorType"], "")
+        self.assertEqual(result["data"][0]["steps"][0]["name"], "a b")
+
+    def test_account_page(self):
+        task = {"kind": "account", "requestId": 1}
+        for repo in (None, ""):
+            with self.subTest(repo=repo):
+                self.assertEqual(actions.page_endpoint(dict(task, repo=repo)), "user")
+        self.assertEqual(actions.page_endpoint(task), "user")
+        for bad in (dict(task, repo="a/.."), {"kind": "account"},
+                    dict(task, requestId=None), dict(task, requestId=0), dict(task, requestId=True)):
+            with self.subTest(task=bad), self.assertRaises(ValueError):
+                actions.page_endpoint(bad)
+        link = 'Link: <https://api.github.com/user?page=2>; rel="next"\n'
+        for body in ({"login": "octo-cat", "id": 1, "email": "x"}, {"login": "mona-cat_octo", "email": "x"}, {}, {"login": 1},
+                     {"login": "a b", "email": "x"}, {"login": "a\n"}, {"login": ""}):
+            with self.subTest(body=body), patch.object(actions, "request", return_value=(
+                    "HTTP/2.0 200 OK\n" + link + "\n" + json.dumps(body), "", 0)):
+                result = actions.read_page(task)
+            self.assertEqual(result["nextPage"], 0)
+            if body.get("login") in ("octo-cat", "mona-cat_octo"):
+                self.assertEqual(result["errorType"], "")
+                self.assertEqual(result["data"], {"login": body["login"]})
+            else:
+                self.assertEqual(result["errorType"], "network")
+                self.assertIsNone(result["data"])
+        # HTTP 200 but gh exits non-zero: the profile must not ride along on the error.
+        with patch.object(actions, "request", return_value=(
+                'HTTP/2.0 200 OK\n\n{"login":"octo","email":"x@y"}', "", 1)):
+            result = actions.read_page(task)
+        self.assertEqual(result["errorType"], "network")
+        self.assertIsNone(result["data"])
+
+    def test_catalogue_403_message(self):
+        for status in (403, 404):
+            with self.subTest(status=status), patch.object(actions, "request", return_value=(
+                    f'HTTP/2.0 {status} Error\n\n{{"message":"unavailable"}}', "", 1)):
+                result = actions.read_page({"kind": "catalogue", "requestId": 1})
+            self.assertEqual(result["errorType"], "permission")
+            self.assertEqual(result["error"], "Repository list unavailable; token cannot read your repositories")
+        with patch.object(actions, "request", return_value=(
+                'HTTP/2.0 403 Error\n\n{"message":"unavailable"}', "", 1)):
+            result = actions.read_page({"kind": "summary", "repo": "a/b", "requestId": 1})
+        self.assertEqual(result["error"], "Resource unavailable or Actions read permission missing")
+
     def test_page_text_is_plain(self):
         # #32: fork PRs control these strings; bidi overrides, controls and line breaks must not reach QML.
         emoji, persian = "👨‍👩‍👧", "می‌خواهم"
@@ -198,9 +252,9 @@ class PageTest(unittest.TestCase):
         self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run, display_title=emoji))["display_title"], emoji)
 
         job = {"id": 8, "status": "completed", "conclusion": "success", "html_url": "https://github.com/a/b/actions/runs/7/job/8",
-               "name": "x\x1b[31my", "steps": [{"number": 1, "status": "completed", "name": "s t"}, "not-a-step"]}
+               "name": "x\x1b[31my", "steps": [{"number": 1, "status": "completed", "name": "s t"}]}
         self.assertEqual(page({"kind": "jobs", "repo": "a/b", "run": "7"}, {"jobs": [job]})[0],
-                         dict(job, name="x[31my", steps=[{"number": 1, "status": "completed", "name": "s t"}, "not-a-step"]))
+                         dict(job, name="x[31my", steps=[{"number": 1, "status": "completed", "name": "s t"}]))
 
         repos = page({"kind": "catalogue"}, [{"full_name": "o/r", "description": "d⁦e\r\nf"},
                                               {"full_name": "o/s", "description": persian}])

@@ -63,7 +63,8 @@ Item {
             checked: checkedCount, discoveryComplete: discoveryComplete, error: error, updated: updated,
             requests: polling.requests, inFlight: workerBusy, cooldown: polling.cooldown,
             lastRequest: polling.lastRequest, lastStarted: polling.lastStarted,
-            filter: filterText, editing: filtering, selected: current ? current.key : "", scrollY: list.contentY})
+            filter: filterText, editing: filtering, selected: current ? current.key : "", scrollY: list.contentY,
+            pollSelected: polling.selected, pollInspected: polling.inspected, remaining: polling.remaining, resetAt: polling.resetAt})
     }
 
     function rebuild(resetSelection) {
@@ -72,7 +73,8 @@ Item {
         var topItem = list.itemAtIndex(topIndex)
         var topKey = entries[topIndex] ? entries[topIndex].key : ""
         var topOffset = topItem ? topItem.y - list.contentY : 0
-        var next = Model.rows(repos, expanded, details, filterText, now)
+        var next = Model.rows(repos, expanded, details, filterText, now,
+            polling.selected && polling.inspected ? polling.selected + ":" + polling.inspected : "")
         var structureChanged = Model.syncRows(visibleRows, next)
         entries = next
         cursor = resetSelection ? 0 : Model.selection(entries, key, cursor)
@@ -119,15 +121,17 @@ Item {
     function selectionChanged(immediate) {
         if (!polling) return
         Polling.select(polling, current ? current.repo : "", current ? current.run : "", expanded, Date.now(), immediate)
+        rebuild()
     }
     function adopt() {
         repos = polling.repos.slice()
         details = Object.assign({}, polling.details)
-        error = polling.error
+        expanded = polling.expanded
+        error = polling.error || polling.catalogueBlocked
         // Reassign the state reference to notify bindings after pure-JS mutations.
         polling = Object.assign({}, polling)
         rebuild()
-        if (!polling.selected || !Polling.repoFor(polling, polling.selected)) selectionChanged(false)
+        selectionChanged(false)
     }
     function refresh(catalogue) {
         selectionChanged(true)

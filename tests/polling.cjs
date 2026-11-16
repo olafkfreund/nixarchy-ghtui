@@ -21,9 +21,88 @@ function response(request, data=[], nextPage=0, total) {
   if (total!==undefined) reply.total=total;
   return reply;
 }
+function reopen(s, now) { polling.open(s, now); s.accountChecked = true; }
+// An auth or setup error on the account check stops polling until r, then r recovers.
+for (const errorType of ['auth','setup']) {
+  const gate=polling.create(); polling.open(gate,0);
+  const first=polling.next(gate,0); assert.equal(first.kind,'account');
+  polling.complete(gate,{requestId:first.requestId,error:'stop',errorType},100);
+  assert.equal(gate.accountChecked,false); assert.equal(polling.next(gate,5000),null,errorType+' stops the gate');
+  polling.manual(gate,6000,false);
+  const retry=polling.next(gate,6000); assert.equal(retry.kind,'account',errorType+': r retries the check');
+  polling.complete(gate,response(retry,{login:'tester'}),6100);
+  assert.equal(gate.accountChecked,true); assert.equal(polling.next(gate,7100).kind,'catalogue',errorType+': polling resumes');
+}
+// The account check gates all cached work on each open.
+const account=polling.create();
+account.repos=[{repo:'a/b',runs:[{id:7,status:'in_progress'}]}];
+account.details={'a/b:7':{jobs:[]}}; account.expanded={'a/b:7':true};
+account.selected='a/b'; account.inspected='7'; account.catalogueComplete=true;
+polling.ensure(account,'catalogue','','','background',0);
+polling.ensure(account,'summary','a/b','','interactive',0);
+polling.open(account,0);
+let accountReq=polling.next(account,0);
+assert.equal(accountReq.kind,'account');
+assert.equal(polling.next(account,1000),null,'in-flight account check blocks other work');
+assert.equal(polling.complete(account,response(accountReq,{login:'tester'}),100),true);
+assert.equal(account.account,'tester'); assert.equal(account.accountChecked,true);
+assert.equal(account.repos.length,1); assert.ok(account.details['a/b:7']);
+assert.equal(polling.next(account,1000).kind,'summary','cached work resumes after first check');
+polling.close(account); polling.open(account,2000);
+accountReq=polling.next(account,2000); assert.equal(accountReq.kind,'account');
+polling.complete(account,response(accountReq,{login:'tester'}),2100);
+assert.equal(account.repos.length,1); assert.equal(account.selected,'a/b');
+assert.ok(account.details['a/b:7']); assert.equal(account.expanded['a/b:7'],true);
+assert.equal(account.inspected,'7'); assert.equal(account.catalogueComplete,true);
+polling.close(account); polling.open(account,3000);
+polling.ensure(account,'activity','a/b','','active',3000);
+polling.ensure(account,'run','a/b','7','active',3000);
+account.catalogueBlocked='permission'; account.discover=false;
+accountReq=polling.next(account,3000); assert.equal(accountReq.kind,'account');
+polling.complete(account,response(accountReq,{login:'other'}),3100);
+assert.equal(account.account,'other'); assert.equal(account.accountChecked,true);
+assert.equal(account.repos.length,0); assert.equal(Object.keys(account.details).length,0); assert.equal(Object.keys(account.expanded).length,0);
+assert.equal(account.selected,''); assert.equal(account.inspected,'');
+assert.equal(account.catalogueComplete,false); assert.equal(account.catalogueBlocked,'');
+assert.equal(account.discover,true); assert.equal(Object.keys(account.tasks).length,0);
+
+const uncertain=polling.create(); uncertain.account='tester'; uncertain.repos=[{repo:'a/b'}];
+polling.open(uncertain,0);
+let uncertainReq=polling.next(uncertain,0);
+polling.complete(uncertain,{...response(uncertainReq),error:'offline',errorType:'network'},100);
+assert.equal(uncertain.accountChecked,false);
+assert.ok(uncertain.tasks[polling.key('account')].due>100);
+assert.equal(polling.next(uncertain,1000),null);
+polling.manual(uncertain,1000,false);
+assert.equal(uncertain.tasks[polling.key('account')].due,1000);
+uncertain.cooldown=2000; assert.equal(polling.next(uncertain,1000),null);
+uncertain.cooldown=0; uncertainReq=polling.next(uncertain,1000); assert.equal(uncertainReq.kind,'account');
+polling.complete(uncertain,{...response(uncertainReq),error:'forbidden',errorType:'permission'},1100);
+assert.equal(uncertain.accountChecked,true); assert.equal(uncertain.error,'');
+assert.equal(uncertain.account,'tester'); assert.equal(uncertain.repos.length,1);
+assert.equal(polling.next(uncertain,2000).kind,'catalogue');
+
+const forbidden=polling.create(); polling.open(forbidden,0);
+let forbiddenReq=polling.next(forbidden,0);
+polling.complete(forbidden,{...response(forbiddenReq),error:'forbidden',errorType:'permission'},100);
+assert.equal(forbidden.accountChecked,true); assert.equal(forbidden.error,'');
+
+for (const data of [[],null]) {
+  const bad=polling.create(); polling.open(bad,0);
+  const check=polling.next(bad,0); assert.equal(check.kind,'account');
+  polling.complete(bad,response(check,data),100);
+  assert.equal(bad.error,'Workflow helper returned invalid data'); assert.equal(bad.auth,true);
+}
+const staleAccount=polling.create(); polling.open(staleAccount,0);
+const staleReq=polling.next(staleAccount,0);
+polling.close(staleAccount); polling.open(staleAccount,1000);
+const currentReq=polling.next(staleAccount,1000); assert.equal(currentReq.kind,'account');
+assert.equal(polling.complete(staleAccount,response(staleReq,{login:'tester'}),1000),false);
+assert.equal(staleAccount.accountChecked,false);
+assert.equal(staleAccount.flight.request.requestId,currentReq.requestId);
 function simulation(activeCount=0, duration=1800000) {
   const s=polling.create(), repos=Array.from({length:137},(_,i)=>({repo:`org/r${i}`}));
-  polling.open(s,0); polling.select(s,'org/r0',activeCount ? '1' : '',activeCount ? {'org/r0:1':true} : {},0,false);
+  reopen(s,0); polling.select(s,'org/r0',activeCount ? '1' : '',activeCount ? {'org/r0:1':true} : {},0,false);
   let flight=null, cold=null, summary=null, catalogue=null;
   const history=[], ages={jobs:0,selected:0,active:0};
   function run(i) { return {id:i+1,status:'in_progress',run_attempt:1,name:'CI'}; }
@@ -66,7 +145,7 @@ assert.ok(busy.ages.active<=25000,`active age ${busy.ages.active}`);
 console.log('Candidate:', {idleRequests:idle.history.length,coldScanMs:idle.cold,summaryMs:busy.summary,warmAges:busy.ages});
 
 // Continuous work in all classes, including page continuations, cannot starve either reserved class.
-const fair=polling.create(); polling.open(fair,0); fair.discover=false; fair.catalogueComplete=true;
+const fair=polling.create(); reopen(fair,0); fair.discover=false; fair.catalogueComplete=true;
 for(const [group,kind] of [['interactive','jobs'],['active','run'],['background','catalogue']])
   polling.ensure(fair,kind,'a/b','1',group,0);
 fair.selected='a/b'; fair.inspected='1'; fair.expanded={'a/b:1':true};
@@ -79,16 +158,16 @@ for(let now=0;now<20000;now+=1000) {
 }
 for(let i=0;i<served.length;i+=5) assert.deepEqual(served.slice(i,i+5),['interactive','interactive','interactive','active','background']);
 
-const limited=polling.create(); polling.open(limited,0);
+const limited=polling.create(); reopen(limited,0);
 let req=polling.next(limited,0);
 polling.complete(limited,{...response(req),errorType:'rate',error:'rate',retryAt:90000,remaining:0,resetAt:120000},1000);
 assert.equal(limited.cooldown,120000);
 polling.manual(limited,2000,true); assert.equal(polling.next(limited,119999),null);
-polling.close(limited); polling.open(limited,4000); assert.equal(polling.next(limited,119999),null);
+polling.close(limited); reopen(limited,4000); assert.equal(polling.next(limited,119999),null);
 req=polling.next(limited,120000); assert.ok(req);
 polling.complete(limited,{...response(req),errorType:'rate',error:'rate'},121000);
 assert.equal(limited.cooldown,241000); // second secondary-limit fallback doubles
-const old=req; polling.close(limited); polling.open(limited,250000);
+const old=req; polling.close(limited); reopen(limited,250000);
 req=polling.next(limited,250000); assert.ok(req);
 assert.equal(polling.complete(limited,response(old),251000),false);
 assert.equal(limited.flight.request.requestId,req.requestId);
@@ -97,7 +176,7 @@ assert.equal(limited.catalogueComplete,true); assert.equal(polling.next(limited,
 
 // Debounce, same-run navigation, completion reconciliation, final cache and rerun invalidation.
 const s=polling.create(); s.repos=[{repo:'a/b',runs:[{id:7,status:'in_progress',run_attempt:1}],activityAt:0,summaryAt:0,active:1}];
-s.catalogueComplete=true; s.discover=false; polling.open(s,0);
+s.catalogueComplete=true; s.discover=false; reopen(s,0);
 polling.select(s,'a/b','7',{'a/b:7':true},0,false);
 assert.equal(polling.next(s,200),null);
 req=polling.next(s,250); assert.equal(req.kind,'jobs');
@@ -117,7 +196,7 @@ assert.equal(polling.next(s,16000)?.kind,'activity');
 polling.mergeRuns(s,s.repos[0],[{id:7,status:'in_progress',run_attempt:2}]);
 assert.equal(s.details['a/b:7'],undefined);
 console.log('Polling: fairness, budgets, cooldown, debounce, lifecycle, completion and rerun checks passed');
-const partial=polling.create(); polling.open(partial,0); partial.discover=false; partial.catalogueComplete=true;
+const partial=polling.create(); reopen(partial,0); partial.discover=false; partial.catalogueComplete=true;
 partial.repos=[{repo:'a/b',summaryAt:0,runs:[{id:7,status:'in_progress'}]}, {repo:'other/repo',summaryAt:0}];
 polling.select(partial,'a/b','',{},0,true);
 req=polling.next(partial,0); assert.equal(req.kind,'activity');
@@ -139,10 +218,10 @@ polling.manual(partial,15000,false); assert.equal(partial.repos[0].blocked,false
 req=polling.next(partial,15000); assert.equal(req.kind,'summary');
 polling.complete(partial,{...response(req),error:'login',errorType:'auth'},15100);
 assert.equal(polling.next(partial,40000),null);
-polling.close(partial); polling.open(partial,41000);
+polling.close(partial); reopen(partial,41000);
 assert.equal(partial.auth,false);
 
-const churn=polling.create(); polling.open(churn,0); churn.discover=false; churn.catalogueComplete=true;
+const churn=polling.create(); reopen(churn,0); churn.discover=false; churn.catalogueComplete=true;
 churn.repos=Array.from({length:20},(_,i)=>({repo:`x/r${i}`,activityAt:0}));
 for(let now=0;now<1000;now+=50) {
   polling.select(churn,`x/r${now/50}`,'',{},now,false);
@@ -162,12 +241,12 @@ console.log('Polling: partial snapshots, permission isolation, auth retry and ra
 const overload=simulation(30,300000);
 assert.ok(overload.ages.active>25000,'overload stretches freshness rather than bypassing the budget');
 assert.ok(overload.history.filter(x=>x.group==='background').length>=Math.floor(overload.history.length/5));
-const ordered=polling.create(); polling.open(ordered,0); ordered.discover=false; ordered.catalogueComplete=true;
+const ordered=polling.create(); reopen(ordered,0); ordered.discover=false; ordered.catalogueComplete=true;
 ordered.repos=[{repo:'newer/check',activityAt:1000},{repo:'oldest/check',activityAt:0}];
 req=polling.next(ordered,700000); assert.equal(req.repo,'oldest/check','idle background checks oldest data first');
 console.log('Polling: overload preserves budget/fairness; idle data ordered by freshness');
 
-const overlap=polling.create(); polling.open(overlap,0); overlap.discover=false; overlap.catalogueComplete=true;
+const overlap=polling.create(); reopen(overlap,0); overlap.discover=false; overlap.catalogueComplete=true;
 overlap.repos=[{repo:'a/b',summaryAt:0}]; polling.select(overlap,'a/b','',{},0,true);
 req=polling.next(overlap,0); polling.complete(overlap,response(req,[{id:7,status:'in_progress'}],2),100);
 assert.equal(overlap.repos[0].checked,undefined);
@@ -177,7 +256,7 @@ console.log('Polling: overlapping pages deduplicate workflow IDs');
 
 // Setup errors and malformed data stop polling until a manual refresh; stale ones are ignored.
 function flight(kind) {
-  const f=polling.create(); polling.open(f,0); f.discover=false; f.catalogueComplete=true;
+  const f=polling.create(); reopen(f,0); f.discover=false; f.catalogueComplete=true;
   f.repos=[{repo:'a/b',runs:[{id:7,status:'in_progress',run_attempt:1}]}]; f.selected='a/b';
   polling.ensure(f,kind,kind==='catalogue' ? '' : 'a/b',kind==='run' ? '7' : '','interactive',0);
   const r=polling.next(f,0); assert.equal(r.kind,kind); return {f,r};
@@ -202,14 +281,14 @@ assert.equal(runOk.error,'Workflow helper returned invalid data'); assert.equal(
 ({f:setup,r:setupReq}=flight('catalogue'));
 assert.equal(polling.complete(setup,{...response(setupReq),requestId:setupReq.requestId+1,error:'x',errorType:'setup'},1000),false);
 assert.equal(polling.complete(setup,{...response(setupReq,null),requestId:setupReq.requestId+1},1000),false);
-polling.close(setup); polling.open(setup,2000);
+polling.close(setup); reopen(setup,2000);
 assert.equal(polling.complete(setup,{...response(setupReq),error:'x',errorType:'setup'},2000),false);
 assert.equal(setup.auth,false,'stale setup or malformed replies change nothing');
 console.log('Polling: setup errors and malformed data stop until manual refresh');
 
 // #30: one page per unfinished status; the rest is counted, never fetched.
 function selectedRepo(runs=[]) {
-  const c=polling.create(); polling.open(c,0); c.discover=false; c.catalogueComplete=true;
+  const c=polling.create(); reopen(c,0); c.discover=false; c.catalogueComplete=true;
   c.repos=[{repo:'a/b',runs}]; return c;
 }
 const queued=Array.from({length:100},(_,i)=>({id:1000+i,status:'queued'}));
@@ -259,3 +338,184 @@ polling.ensure(plain,'activity','a/b','','active',0); req=polling.next(plain,0);
 polling.complete(plain,response(req,[{id:1,status:'in_progress'}]),100);
 assert.deepEqual(plain.repos[0].hidden || {},{}); assert.equal(plain.repos[0].active,1);
 console.log('Polling: one page per unfinished status, hidden counts and kept runs');
+
+// Catalogue permission stops discovery until a manual refresh or reopen.
+function blockedCatalogue() {
+  const c=polling.create(); reopen(c,0);
+  c.repos=[{repo:'a/b',archived:true}];
+  const request=polling.next(c,0); assert.equal(request.kind,'catalogue');
+  polling.complete(c,{...response(request),error:'catalogue forbidden',errorType:'permission'},100);
+  assert.equal(c.discover,false); assert.equal(c.catalogueBlocked,'catalogue forbidden');
+  assert.equal(c.repos.length,1);
+  for(let now=1000;now<=60000;now+=1000) assert.equal(polling.next(c,now),null);
+  return c;
+}
+const blocked=blockedCatalogue();
+polling.manual(blocked,61000,false);
+assert.equal(blocked.catalogueBlocked,'');
+assert.equal(polling.next(blocked,61000).kind,'catalogue');
+const blockedAgain=blockedCatalogue();
+polling.manual(blockedAgain,61000,true);
+assert.equal(blockedAgain.catalogueBlocked,'');
+assert.equal(polling.next(blockedAgain,61000).kind,'catalogue');
+const reopened=blockedCatalogue();
+reopened.catalogueComplete=true; reopened.catalogueAt=60000;
+reopen(reopened,61000);
+assert.equal(reopened.catalogueBlocked,'');
+assert.equal(polling.next(reopened,61000).kind,'catalogue');
+const selectedBlocked=blockedCatalogue();
+selectedBlocked.repos[0].archived=false;
+selectedBlocked.selected='a/b';
+polling.manual(selectedBlocked,61000,false);
+assert.equal(selectedBlocked.catalogueBlocked,'');
+assert.ok(selectedBlocked.tasks[polling.key('summary','a/b')]);
+
+// Manual refresh advances an existing retry without erasing its failure count.
+for(const kind of ['summary','jobs']) {
+  const retry=selectedRepo([{id:7,status:'in_progress'}]);
+  polling.select(retry,'a/b',kind==='jobs' ? '7' : '',kind==='jobs' ? {'a/b:7':true} : {},0,true);
+  retry.repos[0].summaryAt=0;
+  const task=polling.ensure(retry,kind,'a/b',kind==='jobs' ? '7' : '','interactive',301000);
+  task.failures=5;
+  polling.manual(retry,1000,false);
+  assert.equal(task.due,1000);
+  assert.equal(task.failures,5);
+  retry.cooldown=2000;
+  assert.equal(polling.next(retry,1000),null);
+  retry.cooldown=0;
+  retry.starts=Array.from({length:60},()=>1000);
+  assert.equal(polling.next(retry,1000),null);
+  retry.starts=[];
+  assert.equal(polling.next(retry,1000).kind,kind);
+}
+const stable=selectedRepo();
+polling.select(stable,'a/b','',{},1000,false);
+const stableAt=stable.stableAt;
+polling.select(stable,'a/b','',{},2000,false);
+assert.equal(stable.stableAt,stableAt);
+
+// Failed jobs keep cached rows visible and clear their error on success.
+function jobsFixture(cached) {
+  const j=selectedRepo([{id:7,status:'in_progress'}]);
+  j.repos[0].summaryAt=0; j.repos[0].activityAt=0;
+  polling.select(j,'a/b','7',{'a/b:7':true},0,true);
+  if (cached) j.details['a/b:7']={jobs:[{id:1,status:'in_progress'}],updated:'2026-01-01T00:00:00.000Z',jobsAt:0};
+  polling.ensure(j,'jobs','a/b','7','interactive',0);
+  return j;
+}
+const jobsCached=jobsFixture(true);
+req=polling.next(jobsCached,0); assert.equal(req.kind,'jobs');
+polling.complete(jobsCached,{...response(req),error:'offline',errorType:'network'},100);
+assert.equal(jobsCached.details['a/b:7'].error,'offline');
+assert.equal(jobsCached.details['a/b:7'].jobs.length,1);
+assert.equal(jobsCached.details['a/b:7'].updated,'2026-01-01T00:00:00.000Z');
+assert.equal(jobsCached.details['a/b:7'].jobsAt,0);
+jobsCached.tasks[polling.key('jobs','a/b','7')].due=1000;
+req=polling.next(jobsCached,1000); assert.equal(req.kind,'jobs');
+polling.complete(jobsCached,response(req,[{id:2,status:'completed'}]),1100);
+assert.equal(jobsCached.details['a/b:7'].error,undefined);
+assert.equal(jobsCached.details['a/b:7'].jobs[0].id,2);
+const jobsEmpty=jobsFixture(false);
+req=polling.next(jobsEmpty,0); assert.equal(req.kind,'jobs');
+polling.complete(jobsEmpty,{...response(req),error:'offline',errorType:'network'},100);
+assert.equal(jobsEmpty.details['a/b:7'].error,'offline');
+assert.equal(jobsEmpty.details['a/b:7'].jobs,undefined);
+const jobsDenied=jobsFixture(true);
+req=polling.next(jobsDenied,0); assert.equal(req.kind,'jobs');
+polling.complete(jobsDenied,{...response(req),error:'forbidden',errorType:'permission'},100);
+assert.equal(jobsDenied.details['a/b:7'].error,'forbidden');
+assert.equal(jobsDenied.details['a/b:7'].unavailable,true);
+assert.equal(jobsDenied.details['a/b:7'].jobsAt,100);
+assert.equal(jobsDenied.details['a/b:7'].jobs.length,1);
+assert.equal(polling.runFor(jobsDenied,'a/b',7).lookupError,undefined);
+
+// A full snapshot looks up kept queued runs that vanished and drops stale details.
+const snapshot=selectedRepo([5,6,7,8].map(id=>({id,status:'queued',followupAt:0})));
+polling.select(snapshot,'a/b','6',{'a/b:5':true},0,true);
+snapshot.details={'a/b:5':{unavailable:true},'a/b:6':{unavailable:true},'a/b:7':{jobs:[]},'a/b:8':{jobs:[]}};
+let snapNow=0;
+for (const phase of polling.phases) {
+  req=polling.next(snapshot,snapNow); assert.equal(req.kind,'summary'); assert.equal(req.status,phase);
+  polling.complete(snapshot,response(req,phase==='queued' ? [{id:8,status:'queued'}] : []),snapNow+100);
+  snapNow+=1000;
+}
+for (const id of [5,6]) {
+  assert.equal(polling.runFor(snapshot,'a/b',id).awaitingFinal,true);
+  assert.equal(polling.runFor(snapshot,'a/b',id).followupAt,undefined);
+  assert.ok(snapshot.details[`a/b:${id}`]);
+}
+assert.equal(polling.runFor(snapshot,'a/b',7),undefined);
+assert.equal(snapshot.details['a/b:7'],undefined);
+assert.equal(polling.runFor(snapshot,'a/b',8).awaitingFinal,undefined);
+assert.ok(snapshot.details['a/b:8']);
+req=polling.next(snapshot,snapNow); assert.equal(req.kind,'run');
+polling.complete(snapshot,response(req,{id:Number(req.run),status:'completed'}),snapNow+100);
+assert.equal(polling.runFor(snapshot,'a/b',req.run).status,'completed');
+
+const activityPrune=selectedRepo(Array.from({length:12},(_,i)=>({id:i+1,status:'completed'})));
+activityPrune.repos[0].repo='other/repo';
+polling.select(activityPrune,'other/repo','1',{},0,true);
+polling.select(activityPrune,'','',{},1000,true);
+activityPrune.details={'other/repo:1':{jobs:[]},'other/repo:12':{jobs:[]}};
+polling.activity(activityPrune,activityPrune.repos[0],[],1000,0);
+assert.equal(activityPrune.details['other/repo:1'],undefined);
+assert.ok(activityPrune.details['other/repo:12']);
+
+const cataloguePrune=polling.create(); reopen(cataloguePrune,0);
+cataloguePrune.repos=[{repo:'a/b',archived:true},{repo:'a/bc',archived:true}];
+cataloguePrune.details={'a/b:5':{jobs:[]},'a/bc:5':{jobs:[]}};
+req=polling.next(cataloguePrune,0); assert.equal(req.kind,'catalogue');
+polling.complete(cataloguePrune,response(req,[{repo:'a/bc',archived:true}]),100);
+assert.equal(cataloguePrune.details['a/b:5'],undefined);
+assert.ok(cataloguePrune.details['a/bc:5']);
+
+// Quota metadata paces background checks, while selected work keeps its normal interval.
+const quotaReply=polling.create(); reopen(quotaReply,0);
+req=polling.next(quotaReply,0); assert.equal(req.kind,'catalogue');
+polling.complete(quotaReply,{...response(req),error:'offline',errorType:'network',remaining:400,resetAt:900000},100);
+assert.equal(quotaReply.remaining,400); assert.equal(quotaReply.resetAt,900000);
+quotaReply.tasks[polling.key('catalogue')].due=1000;
+req=polling.next(quotaReply,1000);
+polling.complete(quotaReply,{...response(req),remaining:null,resetAt:1000000},1100);
+assert.equal(quotaReply.remaining,400); assert.equal(quotaReply.resetAt,900000);
+
+function pacedRepo(remaining, active, activityAt=0) {
+  const p=polling.create(); reopen(p,0); p.discover=false; p.catalogueComplete=true;
+  p.remaining=remaining; p.resetAt=7000000;
+  p.repos=[{repo:'a/b',active,activityAt}];
+  return p;
+}
+const eased=pacedRepo(400,1);
+assert.equal(polling.next(eased,20000),null);
+req=polling.next(eased,45000); assert.equal(req.kind,'activity'); assert.equal(req.repo,'a/b');
+const tight=pacedRepo(100,0);
+assert.equal(polling.next(tight,5999999),null);
+req=polling.next(tight,6000000); assert.equal(req.kind,'activity');
+const ample=pacedRepo(5000,1);
+req=polling.next(ample,15000); assert.equal(req.kind,'activity');
+const reset=pacedRepo(100,1);
+reset.resetAt=10000;
+req=polling.next(reset,15000); assert.equal(req.kind,'activity');
+
+const catalogueAge=polling.create(); reopen(catalogueAge,0);
+catalogueAge.catalogueComplete=true; catalogueAge.catalogueAt=0; catalogueAge.discover=false;
+catalogueAge.remaining=400; catalogueAge.resetAt=1200000;
+reopen(catalogueAge,600000); assert.equal(catalogueAge.discover,false);
+reopen(catalogueAge,900000); assert.equal(catalogueAge.discover,true);
+
+const selectedPace=pacedRepo(100,1);
+selectedPace.repos[0].summaryAt=0;
+polling.select(selectedPace,'a/b','',{},0,true);
+req=polling.next(selectedPace,10000); assert.equal(req.kind,'activity');
+const summaryPace=pacedRepo(100,0);
+summaryPace.repos[0].summaryAt=0;
+polling.select(summaryPace,'a/b','',{},0,true);
+req=polling.next(summaryPace,60000); assert.equal(req.kind,'summary');
+const jobsPace=pacedRepo(100,0);
+jobsPace.repos[0].summaryAt=0; jobsPace.repos[0].runs=[{id:7,status:'in_progress'}];
+jobsPace.details={'a/b:7':{jobsAt:0}};
+polling.select(jobsPace,'a/b','7',{'a/b:7':true},0,true);
+req=polling.next(jobsPace,5000); assert.equal(req.kind,'jobs');
+const lookupPace=pacedRepo(100,0);
+lookupPace.repos[0].runs=[{id:7,status:'queued',followupAt:0}];
+req=polling.next(lookupPace,15000); assert.equal(req.kind,'run');
