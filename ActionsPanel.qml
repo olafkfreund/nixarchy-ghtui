@@ -535,6 +535,7 @@ Item {
                         text: "GitHub Actions  ·  " + root.repos.length + (root.repos.length === 1 ? " repository" : " repositories") + (root.watching ? "  ·  " + Object.keys(root.polling.watches).length + " watched" : "")
                         color: Commons.Color.menu.text
                         font { family: Style.font.menuFamily; pixelSize: root.fTitle; bold: true }
+                        elide: Text.ElideRight
                         textFormat: Text.PlainText
                     }
                     TextInput {
@@ -691,6 +692,7 @@ Item {
                         opacity: root.confirm || root.actionText ? 1 : 0.65
                         font { family: Style.font.menuFamily; pixelSize: root.fCaption }
                         elide: Text.ElideRight
+                        maximumLineCount: 2
                         wrapMode: root.textStep > 0 ? Text.WordWrap : Text.NoWrap
                         textFormat: Text.PlainText
                     }

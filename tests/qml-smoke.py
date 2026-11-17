@@ -369,7 +369,7 @@ ShellRoot {
                 if (zoomStage===0) {
                     zoomRepos=panel.polling.repos
                     zoomOriginalExpanded=panel.polling.expanded
-                    panel.filterText=""
+                    panel.filterText="o/r"
                     panel.polling.repos=zoomRepos.concat(Array.from({length:40},function(_,i) { return {repo:"o/r"+i} }))
                     panel.polling.expanded={"repo:one/repo":true}
                     panel.adopt()
@@ -495,6 +495,7 @@ ShellRoot {
                 panel.open()
                 check(panel.actionText.indexOf("Rerun requested")===0 && !panel.actionError,"result of a write sent before close is kept")
                 check(JSON.parse(panel.status()).actionBusy===false,"status shows no write")
+                panel.setTextStep(2)
                 panel.close()
                 closedRequests=panel.polling.requests
                 closedAt=Date.now()
@@ -503,7 +504,6 @@ ShellRoot {
                 check(!panel.workerBusy && !panel.polling.flight,"close settles worker")
                 check(panel.polling.requests===closedRequests,"closed panel starts no requests")
                 var history=panel.polling.starts.length
-                panel.setTextStep(2)
                 panel.open()
                 check(panel.polling.starts.length>=history,"reopen preserves budget")
                 check(panel.textStep===2,"reopen preserves text size")

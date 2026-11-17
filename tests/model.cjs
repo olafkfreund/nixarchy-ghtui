@@ -475,10 +475,17 @@ console.log('Model: watched rows and notices passed');
   assert.deepEqual(calls, ['more']);
   assert.equal(press(61, '=', Qt.ControlModifier), true);
   assert.deepEqual(calls, ['more', 'zoom']);
+  const searchBody = fs.readFileSync('ActionsPanel.qml', 'utf8').split('id: searchField')[1]
+    .split('Keys.onPressed: function(event) {')[1].split('\n                        }\n                        Text {')[0];
+  const searchHandler = vm.runInNewContext('(function(event) {' + searchBody + '\n})', {root, Qt});
+  const searchEvent = {key:61, text:'=', modifiers:Qt.ControlModifier, accepted:false};
+  searchHandler(searchEvent);
+  assert.equal(searchEvent.accepted, true, 'search field accepts Ctrl+=');
+  assert.deepEqual(calls, ['more', 'zoom', 'zoom'], 'search field calls textKey');
   assert.equal(press(77, 'M'), false, 'Shift+M passes through');
   press(Qt.Key_Y, 'y');
   press(Qt.Key_W, 'w');
-  assert.deepEqual(calls, ['more', 'zoom', 'copy', 'watch']);
+  assert.deepEqual(calls, ['more', 'zoom', 'zoom', 'copy', 'watch']);
   const ctrlWatch = {key:Qt.Key_W, text:'w', modifiers:Qt.ControlModifier, isAutoRepeat:false};
   handler(ctrlWatch);
   assert.equal(ctrlWatch.accepted,false);
@@ -487,11 +494,22 @@ console.log('Model: watched rows and notices passed');
   assert.equal(press(77, 'm'), true);
   press(Qt.Key_Y, 'y', Qt.ControlModifier);
   press(Qt.Key_Y, 'y', 0, true);
-  assert.deepEqual(calls, ['more', 'zoom', 'copy', 'watch']);
+  assert.deepEqual(calls, ['more', 'zoom', 'zoom', 'copy', 'watch']);
   press(Qt.Key_Y, 'y');
   press(Qt.Key_N, 'n');
   press(Qt.Key_Escape, '');
-  assert.deepEqual(calls, ['more', 'zoom', 'copy', 'watch', 'yes', 'no', 'no']);
+  assert.deepEqual(calls, ['more', 'zoom', 'zoom', 'copy', 'watch', 'yes', 'no', 'no']);
+}
+
+{
+  const qml = fs.readFileSync('ActionsPanel.qml', 'utf8');
+  assert.doesNotMatch(qml, /pixelSize:\s*Style\.font\b/);
+  assert.deepEqual(qml.split('\n').filter(line => line.includes('Style.space(')).map(line => line.trim()), [
+    'function sp(n) { return Model.zoomed(Style.space(n), textStep) }',
+    'width: Math.min(Style.space(900), window.width - Style.gapsOut * 2)',
+    'height: Math.min(Style.space(680), window.height - Style.gapsOut * 2)',
+    'borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border, Math.max(1, Style.space(2)))'
+  ]);
 }
 
 // Exercise the panel lifecycle and fixed watch messages without a display.
