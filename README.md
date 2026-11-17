@@ -1,14 +1,14 @@
 # GitHub Actions for Omarchy
 
-A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with running workflows first. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text, rows and spacing use the theme's sizes, like the other Omarchy menus, and the panel shrinks to fit smaller screens. No buttons, background daemon, database or token storage.
+A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with failing repositories first, then running ones. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text, rows and spacing use the theme's sizes, like the other Omarchy menus, and the panel shrinks to fit smaller screens. The panel can also rerun or cancel a selected run, after a y/n confirmation. No buttons, background daemon, database or token storage.
 
 ## Screenshots
 
 ![The panel opening on a search for nixarchy, narrowing it, then drilling into a running workflow down to the steps of its install job and back out](docs/img/github-actions.gif)
 
-Press **Super+Alt+A**. Running workflows sort first; `/` searches repositories and workflows. `l` or Enter opens a repository to its runs, a run to its jobs, and a job to its steps, with live status and timers. `h` goes back up, `o` opens the selected row on GitHub, and Esc closes.
+Press **Super+Alt+A**. Repositories sort failing first, then running; each row shows the last result on its default branch and its age. `/` searches repositories and workflows. `l` or Enter opens a repository to its runs, a run to its jobs, and a job to its steps, with live status and timers. `h` goes back up, `o` opens the selected row on GitHub, and Esc closes.
 
-| Repositories, running first | A running job's steps | Search |
+| Repositories, failing then running first | A running job's steps | Search |
 | --- | --- | --- |
 | ![Repositories matching nixarchy, the one with two running workflows first](docs/img/github-actions-list.webp) | ![A running install check expanded to its jobs, and the install job to its eight steps](docs/img/github-actions-steps.webp) | ![The search narrowed to nixarchy-p, leaving two repositories](docs/img/github-actions-search.webp) |
 
@@ -19,8 +19,8 @@ Press **Super+Alt+A**. Running workflows sort first; `/` searches repositories a
 ## Requirements
 
 - Omarchy shell with the panel plugin contract and `qs.Commons` / `qs.Ui` components.
-- `gh`, authenticated for your repositories with Actions read access.
-- Python 3, and `xdg-open` for the optional browser shortcut.
+- `gh`, authenticated for your repositories with Actions read access. To rerun or cancel, the token must also write Actions: a classic token needs the `repo` scope, a fine-grained token needs Actions read and write plus Metadata read. A read-only token still works for everything else, and a refused action says which permission is missing.
+- Python 3, and `xdg-open` for the optional browser shortcut. `wl-copy` (`wl-clipboard`) for the optional copy shortcut. `less` to read logs, `notify-send` (`libnotify`) for notifications, and `omarchy-launch-tui` (from Omarchy) to open the log in a terminal.
 
 On NixOS, missing dependencies belong in your declarative configuration. Do not install them with pacman or an imperative Nix profile.
 
@@ -59,12 +59,12 @@ Import a NixOS module with the following content, replacing `YOUR_USER` with you
   home-manager.users.YOUR_USER = { pkgs, ... }: {
     programs.nixarchy.plugins."olafkfreund.github-actions".src =
       inputs.github-actions.packages.${pkgs.stdenv.hostPlatform.system}.default;
-    home.packages = [ pkgs.gh pkgs.python3 pkgs.xdg-utils pkgs.bash ];
+    home.packages = [ pkgs.gh pkgs.python3 pkgs.xdg-utils pkgs.wl-clipboard pkgs.less pkgs.libnotify pkgs.bash ];
   };
 }
 ```
 
-The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. The package lists these as `passthru.runtimeDeps` (`gh`, `python3`, `xdg-utils`). No second desktop stack or standalone Home Manager installation is needed.
+The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. The package lists these as `passthru.runtimeDeps` (`gh`, `python3`, `xdg-utils`, `wl-clipboard`, `less`, `libnotify`). No second desktop stack or standalone Home Manager installation is needed.
 
 Nix must have permission to fetch this repository. Your `gh auth login` is for runtime API access and does not automatically configure Nix's fetch credentials. An SSH input URL such as `git+ssh://git@github.com/olafkfreund/nixarchy-ghtui.git` is another option when your SSH access is configured. Never put tokens in `flake.nix` or `flake.lock`.
 
@@ -120,32 +120,44 @@ For a symlink-managed or read-only `~/.config/omarchy/extensions/omarchy-menu.js
 
 No manual repository list is required. Opening the popup fetches every page of GitHub's authenticated `GET /user/repos` endpoint with owner, collaborator and organisation-member affiliations. This covers repositories associated with your account and visible to the current token, not every public repository on GitHub. Archived and disabled repositories remain searchable but are not polled for activity. Currently github.com only; local checkouts are not required.
 
-Press **/** and type an owner, repository name or description. Use **↑ / ↓** while typing to select a result, then **Enter** to expand it and resume navigation. **Tab** finishes editing without expanding. Search results stay collapsed until you expand them. Repositories with running workflows move to the top as activity is discovered; unchecked repositories say **not checked**. The header shows scan progress. Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
+Press **/** and type an owner, repository name or description. Use **↑ / ↓** while typing to select a result, then **Enter** to expand it and resume navigation. **Tab** finishes editing without expanding. Repositories you have opened stay open while you type. Three tokens narrow runs: `branch:<text>`, `actor:<text>` and `is:failed` (case-insensitive; all of them and any plain text must match, and a repository shows only if one loaded run matches every token). Tokens filter only the runs the panel already holds, so an unchecked repository never matches them; press **m** on a repository to load 30 more runs first. An unknown prefix such as `is:open` or an empty `branch:` is plain text. Only runs already loaded are searched, plus each repository's name, description and running count: the note beside the search field reads “recent runs loaded for N of M repositories”, so other repositories match on name and description only. Rows read like `✕ 3h · 2 running`: the latest finished run on the default branch and its age, then the running count. Failing repositories (`failure`, `timed_out`, `startup_failure`) sort first, then those with running workflows, then the rest; a green result not confirmed for 30 minutes is marked `stale`, and a repository whose newest 30 runs are all on other branches reads `no result`. Unchecked repositories say **not checked**. A status line under the search field always shows errors, a GitHub pause with its end time, or scan progress, and the remaining API requests (with the reset time when few are left). Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
 
 The catalogue and known activity stay in memory between openings. After `TIMING.catalogue`, reopening refreshes the repository catalogue; **Shift + R** refreshes it immediately when you gain access to another repository.
 
 ### Authentication / PAT
 
-The plugin uses your existing **`gh auth login`** authentication. It never extracts or stores the token itself. A PAT configured through GitHub CLI works too. Token restrictions still apply: fine-grained PATs need repository Metadata read and Actions read permission for the repositories you select; organisation access may require SSO authorization or approval. If a repository is missing, confirm that the same `gh` login can list it before refreshing the catalogue.
+The plugin uses your existing **`gh auth login`** authentication. It never extracts or stores the token itself. A PAT configured through GitHub CLI works too. Token restrictions still apply: fine-grained PATs need repository Metadata read and Actions read permission for the repositories you select; organisation access may require SSO authorization or approval. Rerun and cancel also need Actions write (classic: `repo` scope; fine-grained: Actions read and write plus Metadata read); the plugin does not probe the token first, so a refused action names the missing permission. If a repository is missing, confirm that the same `gh` login can list it before refreshing the catalogue.
 
 ## Keyboard
 
 | Key | Action |
 | --- | --- |
 | ↑ / ↓ or k / j | Select a row |
-| Enter / Space / → / l | Expand or collapse a repository, run or job |
+| Enter / Space | Expand or collapse a repository, run or job |
+| → / l | Open a collapsed row; on an open row, move to its first child |
 | ← / h | Collapse, or move to parent |
-| Page Up / Down, Home / End | Move through long lists |
-| / | Filter repositories/runs by name, branch or state |
+| Click | Select a row and expand or collapse it, like Enter |
+| Page Up / Down | Move one screenful |
+| Home / End, g / G | First or last row |
+| / | Filter repositories/runs by name, branch or state; `branch:x`, `actor:x`, `is:failed` |
 | ↑ / ↓ while filtering | Select a search result |
 | Enter while filtering | Expand selected result and resume navigation |
 | Tab while filtering | Resume navigation without expanding |
 | Esc | Clear filter, then close |
 | r | Refresh summaries and selected expanded run |
 | Shift + R | Rediscover repositories from GitHub |
+| m | Load 30 more recent runs (up to 100) for the selected repository |
 | o | Open selected repository/run/job on GitHub |
+| v | Open the log of a failed run or finished job (failed steps only for a failed job; needs `omarchy-launch-tui`, `less`) |
+| y | Copy the selected row's link (needs `wl-copy`) |
+| ? | Show this key list |
+| a | Rerun all jobs of the selected finished run (asks y/n) |
+| f | Rerun failed jobs of the selected failed run (asks y/n) |
+| c | Cancel the selected unfinished run (asks y/n) |
+| y / n / Esc | Confirm or cancel a pending action, while a confirmation is open; Enter does nothing |
+| Ctrl, Alt, Meta combinations | Left alone |
 
-Icons accompany status text: ✓ success, ✕ failure, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Job rows show completed/reported step counts. These are not estimates of remaining execution time. Open GitHub for full logs.
+Icons accompany status words (passed, failed, running, queued, …): ✓ passed, ✕ failed, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Passed has no colour of its own; only running and failure states are coloured. Job rows show completed/reported step counts. These are not estimates of remaining execution time. `v` opens the log of a failed run or a finished job after its run finishes; for a failed job it shows only failed steps, and for any other finished job it shows the full log. A step row opens its parent job's log.
 
 ## Refresh and errors
 
@@ -161,17 +173,21 @@ While open, one scheduler fetches a single API page at a time. Selecting a repos
 
 The values are the `TIMING` block at the top of `Polling.js`.
 
-Unchecked repositories are scanned first in catalogue order. Three request slots serve selected data, one serves known running workflows, and one serves background discovery; spare slots serve other due work. Pagination yields between requests. All paths, including manual refresh, share a maximum of `TIMING.perWindow` requested pages per rolling `TIMING.window`, at least `TIMING.gap` between starts, and one request in flight. These are ceilings: missing work, slow responses and cooldowns reduce request frequency.
+Unchecked repositories are scanned first in catalogue order. Three request slots serve selected data, one serves known running workflows, and one serves background discovery; spare slots serve other due work. Pagination yields between requests. All reads, including manual refresh, share a maximum of `TIMING.perWindow` requested pages per rolling `TIMING.window`, at least `TIMING.gap` between starts, and one request in flight. These are ceilings: missing work, slow responses and cooldowns reduce request frequency.
 
-Cached data remains usable during refresh. Recent history arrives first; full summaries include all five active states and ten recent runs. Only complete snapshots reconcile removals or mark activity checked. When a running workflow disappears, the panel fetches its final status rather than assuming success. Inspected completed runs receive a final jobs fetch, then reuse the result until refresh or a detected rerun.
+Cached data remains usable during refresh. The activity check reads up to 30 recent runs of each repository (still one request). Recent history arrives first; full summaries include all five active states and ten recent runs. Only complete snapshots reconcile removals or mark activity checked. When a running workflow disappears, the panel fetches its final status rather than assuming success. Inspected completed runs receive a final jobs fetch, then reuse the result until refresh or a detected rerun. An unfinished expanded run missing from a snapshot gets its final status looked up. An expanded run the cursor has left keeps its last jobs, marked `jobs N old, not refreshing`, and its timers stop at that fetch. A failed jobs fetch shows its error under the run and keeps the jobs already shown.
 
-GitHub retry/reset headers pause all work. Secondary rate limits without a deadline start with a `TIMING.rateBase` wait and back off up to `TIMING.rateMax`. Network/server errors back off the affected resource from `TIMING.retryBase` up to `TIMING.retryMax`; permission failures leave that repository unavailable until catalogue/manual refresh. Authentication failures pause polling until retry/reopen. Manual refresh never bypasses a server cooldown. Closing cancels the helper and its gh child; reopening retains cached data, local request history and cooldowns. A shell restart clears local memory; GitHub’s quota remains authoritative.
+GitHub retry/reset headers pause all work. Secondary rate limits without a deadline start with a `TIMING.rateBase` wait and back off up to `TIMING.rateMax`. Network/server errors back off the affected resource from `TIMING.retryBase` up to `TIMING.retryMax`; a permission failure leaves that repository unavailable until a catalogue or manual refresh, and a catalogue permission failure stops catalogue requests until `r`, `R` or reopen. Authentication failures pause polling until retry/reopen. Manual refresh never bypasses a server cooldown. Closing cancels the read helper and its gh child; a write already sent finishes, and its result stays in the footer for 10 seconds, so a quick reopen still shows it; reopening retains cached data, local request history and cooldowns. A shell restart clears local memory; GitHub’s quota remains authoritative.
 
-A request can take up to 25 seconds before timeout, and shares the account’s GitHub quota with other tools. Refresh targets can therefore stretch under load, network failures or rate limits. No polling occurs while closed, and no token is extracted or stored by the plugin.
+Below 1,000 remaining requests (`TIMING.quotaEase`) background checks of non-selected repositories slow 3x, and below 300 (`TIMING.quotaTight`) 10x, until GitHub's reset time. The selected repository and the inspected run keep full pace. On open the panel makes one extra request for the `gh` login: cached data shows first and is cleared if the login differs from the cached one. A switch while the panel is open is not detected.
+
+Writes (rerun, cancel) do not count toward that request ceiling and respect a GitHub cooldown. An outcome the panel could not confirm is never retried: check GitHub first.
+
+A request can take up to 25 seconds before timeout; a log fetch can take up to 90 seconds and occupies the shared worker, and counts as four requests against the polling budget, and shares the account’s GitHub quota with other tools. Refresh targets can therefore stretch under load, network failures or rate limits. No polling occurs while closed, and no token is extracted or stored by the plugin.
 
 ### Measured polling comparison
 
-Deterministic simulation with 137 repositories and one-second responses (not a live-network speed guarantee):
+Deterministic simulation (the 168 second idle cold scan is this simulation, not a live run) with 137 repositories and one-second responses (not a live-network speed guarantee):
 
 | Measure | 0.2.2 baseline | 0.3.0 |
 | --- | --- | --- |
