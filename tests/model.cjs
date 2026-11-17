@@ -428,7 +428,8 @@ console.log('Model: text size passed');
   const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
     .split('\n                }\n\n                Column {')[0];
   const calls = [];
-  const root = {confirm:null, copyLink:() => calls.push('copy'), loadMore:() => calls.push('more'), answer:yes => calls.push(yes ? 'yes' : 'no')};
+  const root = {confirm:null, textKey:event => { if (event.key === 61 && event.modifiers === 1) { calls.push('zoom'); return true; } return false; },
+    copyLink:() => calls.push('copy'), loadMore:() => calls.push('more'), answer:yes => calls.push(yes ? 'yes' : 'no')};
   const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_Y:89, Key_N:78, Key_Escape:27};
   const handler = vm.runInNewContext('(function(event) {' + body + '\n})',
     {root, Qt, Quickshell:{execDetached:() => calls.push('keys')}});
@@ -441,18 +442,20 @@ console.log('Model: text size passed');
   assert.deepEqual(calls, ['more']);
   assert.equal(press(77, 'm', Qt.ControlModifier), false);
   assert.deepEqual(calls, ['more']);
+  assert.equal(press(61, '=', Qt.ControlModifier), true);
+  assert.deepEqual(calls, ['more', 'zoom']);
   assert.equal(press(77, 'M'), false, 'Shift+M passes through');
   press(Qt.Key_Y, 'y');
-  assert.deepEqual(calls, ['more', 'copy']);
+  assert.deepEqual(calls, ['more', 'zoom', 'copy']);
   root.confirm = {text:'confirm'};
   assert.equal(press(77, 'm'), true);
   press(Qt.Key_Y, 'y', Qt.ControlModifier);
   press(Qt.Key_Y, 'y', 0, true);
-  assert.deepEqual(calls, ['more', 'copy']);
+  assert.deepEqual(calls, ['more', 'zoom', 'copy']);
   press(Qt.Key_Y, 'y');
   press(Qt.Key_N, 'n');
   press(Qt.Key_Escape, '');
-  assert.deepEqual(calls, ['more', 'copy', 'yes', 'no', 'no']);
+  assert.deepEqual(calls, ['more', 'zoom', 'copy', 'yes', 'no', 'no']);
 }
 
 {
