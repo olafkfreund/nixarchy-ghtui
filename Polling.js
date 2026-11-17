@@ -64,6 +64,12 @@ function manual(s, now, catalogue) {
         }
     }
 }
+function more(s, repo, now) {
+    var r=repoFor(s,repo);
+    if (!r || s.tasks[key("more",repo)] || s.tasks[key("summary",repo)]) return;
+    r.recentLimit=Math.min(100,(r.recentLimit || 10)+30);
+    ensure(s,"more",repo,"","interactive",now);
+}
 function touch(s, repo, run, now) {
     var t=ensure(s,"run",repo,run,"interactive",now);
     t.due=now;
@@ -87,7 +93,7 @@ function seed(s, now) {
     s.repos.slice().sort(function(a,b) { return (a.activityAt === undefined ? -Infinity : a.activityAt) - (b.activityAt === undefined ? -Infinity : b.activityAt) }).forEach(function(r) {
         if (r.archived || r.disabled || r.blocked) return;
         var selected = r.repo === s.selected && now >= s.stableAt;
-        if (selected && now >= age(r.summaryAt, TIMING.summary)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,TIMING.summary));
+        if (selected && !s.tasks[key("more",r.repo)] && now >= age(r.summaryAt, TIMING.summary)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,TIMING.summary));
         var summary = s.tasks[key("summary",r.repo)];
         var activityKey = key("activity",r.repo);
         if (summary && !(s.flight && s.flight.key === activityKey)) delete s.tasks[activityKey];
@@ -132,6 +138,11 @@ function next(s, now) {
     s.slot++; s.starts.push(now); s.requests++; s.lastStarted=now; s.lastRequest=t.kind + (t.repo ? " " + t.repo : "");
     var request = {kind:t.kind,repo:t.repo,run:t.run,page:t.page,requestId:++s.serial};
     if (t.kind === "summary") request.status = phases[t.phase];
+    if (t.kind === "more") request.status = "recent";
+    if (request.status === "recent") {
+        var r=repoFor(s,t.repo);
+        if (r && r.recentLimit) request.limit=r.recentLimit;
+    }
     s.flight = {key:t.key, request:request, generation:s.generation};
     return request;
 }
@@ -162,7 +173,7 @@ function mergeRuns(s,r,incoming) {
 function recent(s,r,runs) {
     var completed=0;
     return runs.sort(function(a,b) { return (a.status==="completed")-(b.status==="completed") || b.id-a.id })
-        .filter(function(run) { return run.status!=="completed" || ++completed<=10 || kept(s,r,run) });
+        .filter(function(run) { return run.status!=="completed" || ++completed<=(r.recentLimit || 10) || kept(s,r,run) });
 }
 function kept(s,r,run) {
     return s.expanded[r.repo+":"+run.id] || r.repo===s.selected && String(run.id)===s.inspected || r.last && run.id===r.last.id;
@@ -283,6 +294,11 @@ function complete(s,reply,now) {
             else s.repos.push(repo);
         });
     } else if (r && t.kind==="summary") mergeRuns(s,r,data);
+    else if (r && t.kind==="more") {
+        lastResult(r,data,now,data,r.recentLimit || 10);
+        mergeRuns(s,r,data);
+        r.recentFetched=data.length;
+    }
     if (reply.nextPage) { t.page=reply.nextPage; t.due=now; t.order=++s.order; return true; }
     if (t.kind==="catalogue") {
         var names=t.items.map(function(repo) { return repo.repo });
@@ -296,10 +312,10 @@ function complete(s,reply,now) {
         t.all=union(t.all,t.items);
         if (phases[t.phase]==="in_progress") activity(s,r,t.items,now,reply.total);
         if (typeof reply.total==="number") (t.hidden=t.hidden || {})[phases[t.phase]]=Math.max(0,reply.total-t.items.length);
-        if (phases[t.phase]==="recent") t.recent=t.items;
+        if (phases[t.phase]==="recent") { t.recent=t.items; r.recentFetched=t.items.length; }
         t.phase++; t.items=[]; t.page=1;
         if (t.phase<phases.length) { t.due=now; t.order=++s.order; return true; }
-        lastResult(r,t.all,now,t.recent,10);
+        lastResult(r,t.all,now,t.recent,r.recentLimit || 10);
         var keep=(r.runs || []).filter(function(run) { return run.awaitingFinal || kept(s,r,run) });
         r.runs=recent(s,r,union(t.all,keep));
         var seen={}; t.all.forEach(function(run) { seen[String(run.id)]=true });

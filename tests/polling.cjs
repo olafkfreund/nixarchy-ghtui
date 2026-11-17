@@ -485,6 +485,95 @@ for (const phase of polling.phases) {
 assert.equal(summaryLast.repos[0].last.id,1,'summary uses all runs');
 assert.ok(polling.runFor(summaryLast,'a/b',1),'summary protects the last result before trimming');
 
+// Step 9: one recent-page request per load, with no overlapping summary.
+const loads=selectedRepo([{id:1,status:'queued',followupAt:100000}]);
+const loaded=loads.repos[0];
+Object.assign(loaded,{default_branch:'main',summaryAt:0,activityAt:60000,hidden:{queued:4}});
+polling.select(loads,'a/b','',{},0,true);
+polling.more(loads,'missing/repo',0);
+assert.equal(loaded.recentLimit,undefined);
+polling.more(loads,'a/b',60000);
+polling.more(loads,'a/b',60000);
+assert.equal(loaded.recentLimit,40);
+assert.deepEqual(Object.keys(loads.tasks),[polling.key('more','a/b')]);
+let moreReq=polling.next(loads,60000);
+assert.equal(moreReq.kind,'more'); assert.equal(moreReq.status,'recent'); assert.equal(moreReq.limit,40);
+assert.equal(loads.tasks[polling.key('summary','a/b')],undefined,'due summary waits for more');
+polling.more(loads,'a/b',60100);
+assert.equal(loaded.recentLimit,40,'in-flight more cannot raise limit');
+polling.select(loads,'other/repo','',{},60100,true); polling.seed(loads,60100);
+polling.select(loads,'a/b','',{},60100,true); polling.seed(loads,60100);
+assert.equal(loads.tasks[polling.key('more','a/b')].key,polling.key('more','a/b'),'selection changes retain one more task');
+const firstMore=[...Array.from({length:30},(_,i)=>result(100-i,'feature')),result(70,'main','failure')];
+polling.complete(loads,response(moreReq,firstMore),60100);
+assert.equal(loaded.last.id,70); assert.equal(loaded.last.conclusion,'failure');
+assert.equal(loaded.recentFetched,31); assert.equal(loaded.summaryAt,0);
+assert.deepEqual({...loaded.hidden},{queued:4});
+assert.equal(polling.runFor(loads,'a/b',1).followupAt,100000);
+assert.equal(polling.runFor(loads,'a/b',1).awaitingFinal,undefined);
+const model={}; vm.createContext(model); vm.runInContext(fs.readFileSync('ActionsModel.js','utf8'),model);
+assert.equal(model.rows([loaded],{}, {},'',60100,'')[0].status,'failure','loaded result updates repository row');
+moreReq=polling.next(loads,61000); assert.equal(moreReq.kind,'summary'); assert.equal(moreReq.status,'recent');
+assert.equal(moreReq.limit,40);
+polling.more(loads,'a/b',61100);
+assert.equal(loaded.recentLimit,40,'in-flight summary cannot raise limit');
+for (let i=0;i<polling.phases.length;i++) {
+  if (i) moreReq=polling.next(loads,61000+i*1000);
+  polling.complete(loads,response(moreReq,i===0 ? firstMore : i===2 ? [{id:1,status:'queued',followupAt:100000}] : []),61100+i*1000);
+}
+assert.ok(polling.runFor(loads,'a/b',70),'summary retains the loaded last result');
+assert.equal(loaded.recentFetched,31);
+assert.equal(loaded.summaryAt,66100);
+for (const [limit,now] of [[70,67000],[100,68000],[100,69000]]) {
+  polling.more(loads,'a/b',now);
+  assert.equal(loaded.recentLimit,limit);
+  moreReq=polling.next(loads,now); assert.equal(moreReq.kind,'more'); assert.equal(moreReq.limit,limit);
+  polling.complete(loads,response(moreReq,[result(70,'main','failure'),result(110,'feature')]),now+100);
+}
+assert.equal(loaded.runs.filter(run=>run.id===70).length,1,'more after summary merges by id');
+
+const defaultSummary=selectedRepo([]); polling.select(defaultSummary,'a/b','',{},0,true);
+req=polling.next(defaultSummary,0); assert.equal(req.status,'recent');
+assert.equal(Object.hasOwn(req,'limit'),false,'default summary omits limit');
+const blockedMore=selectedRepo([]); polling.select(blockedMore,'a/b','',{},0,true);
+req=polling.next(blockedMore,0); assert.equal(req.kind,'summary');
+polling.more(blockedMore,'a/b',100);
+assert.equal(blockedMore.repos[0].recentLimit,undefined);
+assert.equal(blockedMore.tasks[polling.key('more','a/b')],undefined);
+
+for (const count of [20,40]) {
+  const page=selectedRepo([]), r=page.repos[0];
+  Object.assign(r,{default_branch:'main',recentLimit:40,last:{id:5,branch:'main',confirmedAt:1}});
+  polling.select(page,'a/b','',{},0,true);
+  let at=0;
+  for (const phase of polling.phases) {
+    const request=polling.next(page,at);
+    assert.equal(request.status,phase);
+    if (phase==='recent') assert.equal(request.limit,40);
+    polling.complete(page,response(request,phase==='recent' ? Array.from({length:count},(_,i)=>result(i+6,'feature')) : []),at+100);
+    at+=1000;
+  }
+  assert.equal(r.last.confirmedAt,count===20 ? 5100 : 1,'summary reach uses configured page size');
+  assert.equal(r.recentFetched,count);
+  assert.equal(r.runs.filter(run=>run.status==='completed').length,count,'recent keeps configured limit');
+}
+
+for (const transition of ['close','account']) {
+  const old=selectedRepo([]); old.repos[0].summaryAt=0;
+  polling.more(old,'a/b',0);
+  const staleMore=polling.next(old,0);
+  if (transition==='close') {
+    polling.close(old); reopen(old,1000);
+    polling.more(old,'a/b',1000);
+    const current=polling.next(old,1000); assert.equal(current.kind,'more');
+  }
+  else { old.account='first'; polling.close(old); polling.open(old,1000);
+    const check=polling.next(old,1000); polling.complete(old,response(check,{login:'second'}),1100); }
+  assert.equal(polling.complete(old,response(staleMore,[result(99)]),1200),false);
+  assert.equal(old.repos[0]?.runs?.length || 0,0,'stale more reply changes no runs');
+  if (transition==='close') assert.equal(old.flight.request.kind,'more','stale reply leaves current flight intact');
+}
+
 // Catalogue permission stops discovery until a manual refresh or reopen.
 function blockedCatalogue() {
   const c=polling.create(); reopen(c,0);
