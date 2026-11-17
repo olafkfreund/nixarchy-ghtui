@@ -43,7 +43,8 @@ if os.environ.get('FAKE_MODE')=='block':
     signal.pause()
 if os.path.exists(os.environ['HOME']+'/run-done'): open(os.environ['HOME']+'/closed-kinds.log','a').write(kind+'\\n')
 time.sleep(0.1)
-run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1,'html_url':'https://github.com/one/repo/actions/runs/7'}
+run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1,'html_url':'https://github.com/one/repo/actions/runs/7',
+     'head_sha':'0123456789abcdef0123456789abcdef01234567','event':'push','actor':'octo','triggering_login':'octo','path':'.github/workflows/ci.yml'}
 started=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(time.time()-5))
 runs=[run] if not os.environ.get('FAKE_RUNS') else [dict(run,id=i,run_number=i,run_started_at=started,html_url='https://github.com/one/repo/actions/runs/%d'%i) for i in range(7,7+int(os.environ['FAKE_RUNS']))]
 if kind=='catalogue': data=[{'repo':'one/repo'},{'repo':'two/repo'}]
@@ -184,11 +185,32 @@ ShellRoot {
             panel.polling=Polling.create()
             panel.polling.repos=[{repo:"one/repo"},{repo:"two/repo"}]; reseed()
             check(panel.entries.length===2,"seeded repositories")
+            // #46: the title shows a login only once this open verified it, and changes with the data in one adopt().
+            panel.polling.account="alice"; panel.polling.accountVerified=false; panel.adopt()
+            check(panel.titleText.indexOf("alice")<0,"pending lookup shows no account")
+            panel.polling.account="bob"; panel.polling.accountVerified=true; panel.polling.repos=[]; panel.adopt()
+            check(panel.titleText.indexOf("bob@github.com")>=0 && panel.repos.length===0,"title follows the verified account and the cleared data in one adopt()")
+            panel.polling.account=""; panel.polling.accountVerified=false
+            panel.polling.repos=[{repo:"one/repo"},{repo:"two/repo"}]; reseed()
+            check(panel.entries.length===2 && panel.titleText.indexOf("@github.com")<0,"seed restored")
             panel.polling.repos[0].runs=[{id:7,name:"CI",status:"in_progress",run_attempt:1,html_url:"https://github.com/one/repo/actions/runs/7"}]
             panel.polling.expanded={"repo:one/repo":true}
             reseed()
             panel.move(1)
             check(panel.current.kind==="run","keyboard selection")
+            check(!panel.detail,"pane starts closed")
+            var seedRun=panel.polling.repos[0].runs[0]
+            seedRun.head_sha="0123456789abcdef0123456789abcdef01234567"; seedRun.event="push"; seedRun.actor="octo"; seedRun.head_branch="main"
+            panel.toggleDetail()
+            check(panel.detailRows.length===9 && panel.detailRows[3].value==="0123456","pane shows the 7-character commit")
+            check(panel.detailRows[2].value==="main" && panel.detailRows[4].value==="push" && panel.detailRows[5].value==="octo","branch, event and actor lines")
+            check(panel.detailAccessibleName.indexOf("Run details")===0,"pane accessible name")
+            panel.toggleDetail()
+            panel.move(-1)
+            panel.toggleDetail()
+            check(panel.detailRows.length===1 && panel.detailRows[0].value==="Select a run","repo row shows Select a run")
+            panel.toggleDetail()
+            panel.move(1)
             panel.polling.repos[0].runs[0].run_started_at=new Date(panel.now-5000).toISOString()
             reseed()
             var tickKey=panel.current.key, tickCursor=panel.cursor, tickScroll=JSON.parse(panel.status()).scrollY
@@ -223,6 +245,8 @@ ShellRoot {
             panel.filterText="no-match"
             check(panel.entries.length===0,"filter")
             panel.filterText="repo"
+            panel.toggleDetail(); panel.handleEscape(true)
+            check(!panel.detail && panel.filterText==="repo","search Esc closes the pane, keeps the filter")
             check(panel.cursor===0 && panel.entries.length===3 && panel.entries[1].key==="one/repo:7","expansion survives filtering")
             panel.polling.error=""
             panel.polling.catalogueBlocked="Catalogue blocked"
@@ -275,6 +299,7 @@ ShellRoot {
             panel.move(-panel.entries.length)
             at("one/repo:7")
             selected=panel.current.key
+            panel.toggleDetail()  // open while the popup opens, so its layout has settled by the stage-1 checks
             panel.open()
             stage=1
         }
@@ -387,6 +412,15 @@ ShellRoot {
                     check(panel.current.key===selected,"seeding the failing row keeps the selection")
                     healthChecked=true
                 }
+                var lv=panel.listView, pn=panel.detailPane, ft=panel.footerItem
+                check(panel.opened && panel.detail && lv.height>0,"list non-empty with pane open")
+                check(lv.y+lv.height<=pn.y && pn.y+pn.height<=ft.y,"list, pane and footer do not overlap")
+                check(pn.height<=0.4*lv.parent.height+1,"pane within its share")
+                if (pn.avail>=3*panel.rowMin+pn.line) check(lv.height>=3*panel.rowMin,"list keeps three rows")
+                check(pn.Accessible.role===Accessible.Pane && pn.Accessible.name===panel.detailAccessibleName,"pane accessibility")
+                check(panel.titleText.indexOf("tester@github.com")>=0,"title shows the account from the fake reply")
+                panel.handleEscape(false)
+                check(!panel.detail && panel.opened,"Esc closes the pane first, popup stays")
                 check(panel.error==="","async API has no error")
                 check(panel.current.key===selected && panel.filterText==="repo","poll preserves searched selection")
                 check(panel.details["one/repo:7"].jobs[0].steps.length===1,"jobs and steps arrive")
@@ -644,6 +678,9 @@ def layout_error(state):
     if not (r['w'] > 0 and r['h'] > 0 and r['x'] >= 0 and r['x'] + r['w'] <= lay['listWidth']
             and r['y'] >= -0.5 and r['y'] + r['h'] <= lay['listHeight'] + 0.5):
         return f'layout: selected row outside the list: {r}'
+    pane = lay.get('pane')
+    if pane and not (pane['h'] > 0 and lay['listHeight'] <= pane['y'] + 0.5 and pane['y'] + pane['h'] <= lay['footerY'] + 0.5):
+        return f"layout: list, pane and footer overlap: list height {lay['listHeight']}, pane {pane}, footer y {lay['footerY']}"
     ordered = sorted(lay['rows'], key=lambda row: row['i'])
     for a, b in zip(ordered, ordered[1:]):
         if a['y'] + a['h'] > b['y'] + 0.5:
@@ -819,6 +856,9 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     ('Escape in search', K('Escape'), lambda p, s: s['filter'] == '' and not s['editing'] and s['opened'], 400),
                     ('/ one Return', K('slash', 'o', 'n', 'e', 'Return'),
                      lambda p, s: s['filter'] == 'one' and not s['editing'] and s['rows'] > 1, 500),
+                    ('i', K('i'), lambda p, s: s['layout']['pane'] is not None and s['filter'] == 'one', 500),
+                    ('Escape closes the pane first', K('Escape'),
+                     lambda p, s: s['layout']['pane'] is None and s['filter'] == 'one' and s['opened'], 500),
                     ('Escape with filter', K('Escape'), lambda p, s: s['filter'] == '' and s['opened'] and s['rows'] > 2, 500),
                     ('Ctrl+=', CTRL('equal'), lambda p, s: s['textStep'] == 1, 500),
                     ('Ctrl+0', CTRL('0'), lambda p, s: s['textStep'] == 0, 500),
