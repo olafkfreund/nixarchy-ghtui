@@ -75,7 +75,7 @@ def run_id(task):
 
 
 def page_endpoint(task):
-    if not isinstance(task, dict) or task.get("kind") not in ("catalogue", "activity", "summary", "jobs", "run", "account"):
+    if not isinstance(task, dict) or task.get("kind") not in ("catalogue", "activity", "summary", "more", "jobs", "run", "account"):
         raise ValueError("Invalid page operation")
     number = task.get("page", 1)
     if type(number) is not int or number < 1 or number > 100000:
@@ -96,9 +96,12 @@ def page_endpoint(task):
         return f"{base}/{run}/jobs?filter=latest&per_page=100&page={number}"
     if task["kind"] == "activity":
         return f"{base}?per_page=30"  # Polling.js ACTIVITY_PAGE must match
-    status = task.get("status", "recent")
+    status = "recent" if task["kind"] == "more" else task.get("status", "recent")
     if status == "recent":
-        return f"{base}?per_page=10"
+        limit = task.get("limit", 10)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Invalid page limit")
+        return f"{base}?per_page={limit}"
     if status not in ACTIVE:
         raise ValueError("Invalid workflow status")
     return f"{base}?status={status}&per_page=100&page={number}"
@@ -247,7 +250,7 @@ def read_page(task):
                 for step in row.get("steps", []) if kind == "jobs" else []:
                     plain_fields(step, ("name",))
             result["data"] = body[key]
-            if task.get("status") in ACTIVE:
+            if kind == "summary" and task.get("status") in ACTIVE:
                 # One page per unfinished status (#30); total_count says how many runs were left out.
                 total = body.get("total_count")
                 if type(total) is not int or total < 0:
