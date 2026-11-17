@@ -816,7 +816,9 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     ('End after walk', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1
                      and s['layout']['contentHeight'] > s['layout']['listHeight'] and s['scrollY'] > 0, 400),
                     ('Home before G', K('Home'), lambda p, s: s['cursor'] == 0, 400),
-                    ('G', K('G'), lambda p, s: s['cursor'] == s['rows'] - 1, 400),
+                    # wtype's -k G types "g" (case-insensitive name, one-level keymap); text mode types "G".
+                    # Keep it the only text argument: wtype prefixes later text arguments with a space.
+                    ('G', ['G'], lambda p, s: s['cursor'] == s['rows'] - 1, 400),
                     ('j to run', K('g', 'j'), lambda p, s: s['cursor'] == 1 and s['selected'].startswith('one/repo:'), 400),
                     ('Return on run', K('Return'), lambda p, s: s['rows'] > p['rows'] and s['selected'] == p['selected'], 4500),
                     ('Escape closes', K('Escape'), lambda p, s: not s['opened'], 2000),
