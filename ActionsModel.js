@@ -62,6 +62,8 @@ function age(run, now) {
 
 function clampStep(n) { return Math.max(-3, Math.min(5, Math.round(Number(n) || 0))) }
 function zoomed(px, step) { return px > 0 ? Math.max(1, Math.round(px * (10 + clampStep(step)) / 10)) : 0 }
+// Fonts stop at 9 px (or the theme size if smaller): 7 px captions at 70% were unreadable (#57).
+function fontPx(px, step) { return Math.max(Math.min(px, 9), zoomed(px, step)) }
 
 // Compact age of a result: Ns, Nm or Nh, floored.
 function ago(at, now) {

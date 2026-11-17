@@ -40,9 +40,9 @@ Item {
     property var actionInfo: null
     property double now: Date.now()
     property int textStep: 0
-    readonly property int fTitle: Model.zoomed(Style.font.title, textStep)
-    readonly property int fBody: Model.zoomed(Style.font.body, textStep)
-    readonly property int fCaption: Model.zoomed(Style.font.caption, textStep)
+    readonly property int fTitle: Model.fontPx(Style.font.title, textStep)
+    readonly property int fBody: Model.fontPx(Style.font.body, textStep)
+    readonly property int fCaption: Model.fontPx(Style.font.caption, textStep)
     function sp(n) { return Model.zoomed(Style.space(n), textStep) }
     function textKey(event) {
         var m = event.modifiers
