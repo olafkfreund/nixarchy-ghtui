@@ -36,7 +36,13 @@ Item {
     property var actionInfo: null
     property double now: Date.now()
     readonly property bool discoveryComplete: polling.catalogueComplete
-    readonly property string cooldownText: now < polling.cooldown ? "GitHub paused until " + new Date(polling.cooldown).toLocaleTimeString() : ""
+    property string notice: ""
+    property double noticeUntil: 0
+    readonly property var statusInfo: Model.statusLine({notice: notice, noticeUntil: noticeUntil, error: polling.error, repos: repos,
+        cooldown: polling.cooldown, discoveryComplete: discoveryComplete, checkedCount: checkedCount, repoCount: repos.length,
+        remaining: polling.remaining, resetAt: polling.resetAt}, now)
+    readonly property var coverage: Model.coverage(repos)
+    function showNotice(text) { notice = text; noticeUntil = Date.now() + 3000 }
     readonly property int checkedCount: repos.filter(function(repo) { return !!repo.checked || repo.archived || repo.disabled }).length
     readonly property var current: entries[cursor] || null
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
@@ -180,7 +186,7 @@ Item {
     }
     function statusColor(status) {
         if (["failure", "timed_out", "startup_failure", "error"].indexOf(status) >= 0) return Commons.Color.urgent
-        if (status === "in_progress" || status === "success") return Commons.Color.accent
+        if (status === "in_progress") return Commons.Color.accent
         return Commons.Color.menu.text
     }
     function openBrowser() {
@@ -369,6 +375,7 @@ Item {
                         selectByMouse: true
                         selectionColor: Commons.Color.menu.selectedBackground
                         selectedTextColor: Commons.Color.menu.selectedText
+                        rightPadding: coverageNote.implicitWidth + Style.spacing.md
                         Keys.onPressed: function(event) {
                             if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
                                 root.move(event.key === Qt.Key_Up ? -1 : 1)
@@ -386,12 +393,41 @@ Item {
                         Text {
                             anchors.fill: parent
                             visible: searchField.text.length === 0
-                            text: root.filtering ? "Search repositories…" : root.cooldownText || root.error ||
-                                (root.discoveryComplete ? "Activity checked " + root.checkedCount + "/" + root.repos.length + " · running first · / search repositories" : "Discovering repositories… " + root.repos.length + " found")
-                            color: root.error || root.cooldownText ? Commons.Color.urgent : Commons.Color.menu.text
+                            text: "Search repositories…"
+                            color: Commons.Color.menu.text
                             opacity: 0.75
                             font: searchField.font
                             elide: Text.ElideRight
+                            textFormat: Text.PlainText
+                        }
+                        Text {
+                            id: coverageNote
+                            anchors.right: parent.right
+                            text: "recent runs loaded for " + root.coverage.loaded + " of " + root.coverage.total + " repositories"
+                            color: Commons.Color.menu.text
+                            opacity: 0.65
+                            font: searchField.font
+                            textFormat: Text.PlainText
+                        }
+                    }
+                    Item {
+                        width: parent.width
+                        height: Math.ceil(searchField.font.pixelSize * 1.4)
+                        Text {
+                            width: parent.width - quotaNote.implicitWidth - (quotaNote.text ? Style.spacing.md : 0)
+                            text: root.statusInfo.text
+                            color: root.statusInfo.urgent ? Commons.Color.urgent : Commons.Color.menu.text
+                            font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
+                            elide: Text.ElideRight
+                            textFormat: Text.PlainText
+                        }
+                        Text {
+                            id: quotaNote
+                            anchors.right: parent.right
+                            text: root.statusInfo.quota
+                            color: Commons.Color.menu.text
+                            opacity: 0.65
+                            font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
                             textFormat: Text.PlainText
                         }
                     }
@@ -449,7 +485,7 @@ Item {
                                     id: info
                                     width: Math.min(implicitWidth, list.width * 0.35)
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: modelData.kind === "repo" ? modelData.info : modelData.status + (modelData.info ? " · " + modelData.info : "")
+                                    text: modelData.kind === "repo" ? modelData.info : modelData.statusText + (modelData.info ? " · " + modelData.info : "")
                                     color: root.statusColor(modelData.status)
                                     font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
                                     elide: Text.ElideRight
@@ -460,15 +496,16 @@ Item {
                         Text {
                             anchors.centerIn: parent
                             visible: root.entries.length === 0
-                            text: "No matching repositories or workflows"
+                            text: Model.emptyText({repoCount: root.repos.length, error: root.error, discoveryComplete: root.discoveryComplete, filter: root.filterText})
                             color: Commons.Color.menu.text
                             font { family: Style.font.menuFamily; pixelSize: Style.font.body }
+                            textFormat: Text.PlainText
                         }
                     }
                     Text {
                         id: footer
                         width: parent.width
-                        text: root.confirm ? root.confirm.text : root.actionText || root.cooldownText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  Esc close"
+                        text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  y copy  ? keys  Esc close"
                         color: root.actionError && !root.confirm && root.actionText ? Commons.Color.urgent : Commons.Color.menu.text
                         opacity: root.confirm || root.actionText ? 1 : 0.65
                         font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
