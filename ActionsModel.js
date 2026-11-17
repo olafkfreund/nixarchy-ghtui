@@ -32,10 +32,79 @@ function duration(item, now) {
     return seconds >= 60 ? Math.floor(seconds / 60) + "m " + seconds % 60 + "s" : seconds + "s";
 }
 
-// Whole minutes below an hour, then "Xh Ym": the same rule duration() uses.
-function age(ms) {
+var labels = {in_progress: "running", queued: "queued", requested: "queued", pending: "queued", waiting: "waiting",
+    success: "passed", failure: "failed", timed_out: "timed out", startup_failure: "startup failed",
+    cancelled: "cancelled", skipped: "skipped", neutral: "neutral", action_required: "needs action",
+    "awaiting final status": "checking result", unavailable: "unavailable"};
+function label(status) {
+    return Object.prototype.hasOwnProperty.call(labels, status) ? labels[status] : "unknown";
+}
+
+// Whole minutes below an hour, then "Xh Ym": #41's not-refreshing marker.
+function elapsed(ms) {
     var minutes = Math.floor(Math.max(0, ms) / 60000);
     return minutes >= 60 ? Math.floor(minutes / 60) + "h " + minutes % 60 + "m" : minutes + "m";
+}
+
+function age(run, now) {
+    var start = Date.parse(run.run_started_at || run.created_at || "");
+    if (!isFinite(start)) return "";
+    var seconds = Math.max(0, Math.floor((now - start) / 1000));
+    if (seconds < 60) return "now";
+    if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+    if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+    return Math.floor(seconds / 86400) + "d ago";
+}
+
+function cap(text, n) {
+    if (typeof text !== "string") return "";
+    return text.length > n ? text.slice(0, n - 1) + "…" : text;
+}
+
+function clock(ms, seconds) {
+    var date = new Date(ms);
+    var time = [date.getHours(), date.getMinutes()];
+    if (seconds) time.push(date.getSeconds());
+    return time.map(function(part) { return ("0" + part).slice(-2); }).join(":");
+}
+
+function quotaText(remaining, resetAt, now) {
+    if (typeof remaining !== "number" || !(now < resetAt)) return "";
+    return remaining.toLocaleString("en-US") + " API requests left" + (remaining < 500 ? " · resets " + clock(resetAt) : "");
+}
+
+function statusLine(s, now) {
+    var parts = [];
+    if (s.notice && now < s.noticeUntil) parts.push(s.notice);
+    var error = s.error || "";
+    if (!error) for (var i = 0; i < s.repos.length; i++) {
+        if (s.repos[i].error) { error = s.repos[i].repo + ": " + s.repos[i].error; break; }
+    }
+    if (error) parts.push(error);
+    var paused = now < s.cooldown;
+    if (paused) parts.push("GitHub paused until " + clock(s.cooldown, true));
+    if (!error && !paused) parts.push(s.discoveryComplete ? "Activity checked " + s.checkedCount + "/" + s.repoCount
+        : "Discovering repositories… " + s.repoCount + " found");
+    return {text: parts.join(" · "), urgent: !!(error || paused), quota: quotaText(s.remaining, s.resetAt, now)};
+}
+
+function emptyText(s) {
+    if (!s.repoCount && s.error) return s.error;
+    if (!s.repoCount && !s.discoveryComplete) return "Discovering repositories…";
+    if (!s.repoCount) return "No repositories found for this account";
+    return 'No match for "' + s.filter + '" · search covers loaded runs only';
+}
+
+function coverage(repos) {
+    return {loaded: repos.filter(function(repo) { return !!repo.summaryAt; }).length, total: repos.length};
+}
+
+function accessibleName(row, expanded) {
+    var kind = row.kind === "repo" ? "repository" : row.kind;
+    var tail = row.kind === "repo" ? row.info : row.statusText;
+    var name = kind + ": " + row.title + (tail ? ", " + tail : "");
+    if (["repo", "run", "job"].indexOf(row.kind) >= 0) name += expanded ? ", expanded" : ", collapsed";
+    return name;
 }
 
 // live is "repo:runId" of the run polling refreshes now, or "" / undefined.
@@ -69,7 +138,7 @@ function rows(repos, expanded, details, filter, now, live) {
             var fresh = !!detail && (runKey === live || (run.status === "completed" && detail.finalAttempt === (run.run_attempt || 1)));
             var notRefreshing = !!(detail && detail.updated) && !!expanded[runKey] && !fresh;
             var at = notRefreshing ? Date.parse(detail.updated) : now;
-            var stamp = !detail || !detail.updated ? "" : notRefreshing ? " · jobs " + age(now - at) + " old, not refreshing"
+            var stamp = !detail || !detail.updated ? "" : notRefreshing ? " · jobs " + elapsed(now - at) + " old, not refreshing"
                 : " · jobs fetched " + detail.updated.slice(11, 19) + " UTC";
             result.push({key: runKey, parent: repoKey, kind: "run", depth: 1, title: run.name || "Workflow",
                 subtitle: (run.head_branch || "") + " · #" + run.run_number + stamp + " · " + (run.display_title || ""),

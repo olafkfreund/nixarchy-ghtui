@@ -19,6 +19,57 @@ assert.equal(model.rows(repos, {}, {}, 'main', Date.now()).length, 1);
 assert.equal(model.rows(repos, expanded, details, 'missing', Date.now()).length, 0);
 assert.equal(model.rows(repos, expanded, {}, '', Date.now())[2].title, 'Loading jobs…');
 assert.equal(model.duration({started_at:'2026-01-01T00:00:00Z'}, Date.parse('2026-01-01T00:01:15Z')), '1m 15s');
+const labels = {in_progress:'running', queued:'queued', requested:'queued', pending:'queued', waiting:'waiting',
+  success:'passed', failure:'failed', timed_out:'timed out', startup_failure:'startup failed',
+  cancelled:'cancelled', skipped:'skipped', neutral:'neutral', action_required:'needs action',
+  'awaiting final status':'checking result', unavailable:'unavailable'};
+for (const [status, expected] of Object.entries(labels)) assert.equal(model.label(status), expected, status);
+for (const status of ['', undefined, 'error', 'constructor']) assert.equal(model.label(status), 'unknown');
+const now = new Date(2026, 0, 2, 0, 0, 0).getTime();
+for (const [seconds, expected] of [[0,'now'], [59,'now'], [60,'1m ago'], [59*60,'59m ago'],
+  [60*60,'1h ago'], [23*3600,'23h ago'], [24*3600,'1d ago']])
+  assert.equal(model.age({created_at:new Date(now-seconds*1000).toISOString()}, now), expected);
+assert.equal(model.age({}, now), '');
+assert.equal(model.age({created_at:new Date(now+60000).toISOString()}, now), 'now');
+assert.equal(model.age({created_at:'invalid'}, now), '');
+assert.equal(model.age({created_at:new Date(now-3600000).toISOString(), run_started_at:new Date(now-60000).toISOString()}, now), '1m ago');
+assert.equal(model.cap('abc', 4), 'abc');
+assert.equal(model.cap('abcd', 4), 'abcd');
+assert.equal(model.cap('abcde', 4), 'abc…');
+assert.equal(model.cap(null, 4), '');
+const resetAt = new Date(2026, 0, 2, 3, 4, 5).getTime();
+assert.equal(model.clock(resetAt), '03:04');
+assert.equal(model.clock(resetAt, true), '03:04:05');
+assert.equal(model.quotaText(499, resetAt, resetAt-1), '499 API requests left · resets 03:04');
+assert.equal(model.quotaText(500, resetAt, resetAt-1), '500 API requests left');
+assert.equal(model.quotaText(1234, resetAt, resetAt-1), '1,234 API requests left');
+assert.equal(model.quotaText(null, resetAt, resetAt-1), '');
+assert.equal(model.quotaText(499, resetAt, resetAt), '');
+assert.equal(model.quotaText(499, undefined, resetAt-1), '');
+const baseStatus = {notice:'n', noticeUntil:now+1, error:'global error', repos:[{repo:'o/r', error:'repo error'}],
+  cooldown:now+60000, discoveryComplete:true, checkedCount:2, repoCount:3, remaining:499, resetAt};
+const status = model.statusLine(baseStatus, now);
+assert.equal(status.text, 'n · global error · GitHub paused until 00:01:00');
+assert.equal(status.urgent, true);
+assert.equal(status.quota, '499 API requests left · resets 03:04');
+assert.equal(model.statusLine({...baseStatus, cooldown:0}, now).text, 'n · global error');
+assert.equal(model.statusLine({...baseStatus, error:'', cooldown:0}, now).text, 'n · o/r: repo error');
+assert.equal(model.statusLine({...baseStatus, noticeUntil:now, error:'', repos:[], cooldown:0}, now).text, 'Activity checked 2/3');
+assert.equal(model.statusLine({...baseStatus, notice:'', error:'', repos:[], cooldown:now+60000}, now).text, 'GitHub paused until 00:01:00');
+assert.equal(model.statusLine({...baseStatus, notice:'', error:'', repos:[], cooldown:0, discoveryComplete:false}, now).text,
+  'Discovering repositories… 3 found');
+assert.equal(model.statusLine({...baseStatus, notice:'', error:'', repos:[], cooldown:0, remaining:500, resetAt:now+1}, now).urgent, false);
+assert.equal(model.emptyText({repoCount:0, error:'oops', discoveryComplete:false, filter:''}), 'oops');
+assert.equal(model.emptyText({repoCount:0, error:'', discoveryComplete:false, filter:''}), 'Discovering repositories…');
+assert.equal(model.emptyText({repoCount:0, error:'', discoveryComplete:true, filter:''}), 'No repositories found for this account');
+assert.equal(model.emptyText({repoCount:2, error:'oops', discoveryComplete:true, filter:'ci'}), 'No match for "ci" · search covers loaded runs only');
+assert.deepEqual(JSON.parse(JSON.stringify(model.coverage([{summaryAt:'now'}, {runs:[{}]}, {summaryAt:0}, {summaryAt:'later'}]))),
+  {loaded:2, total:4});
+assert.equal(model.accessibleName({kind:'repo', title:'o/r', info:'2 running'}, false), 'repository: o/r, 2 running, collapsed');
+assert.equal(model.accessibleName({kind:'run', title:'CI', statusText:'running'}, true), 'run: CI, running, expanded');
+assert.equal(model.accessibleName({kind:'step', title:'Checkout', statusText:'passed'}, false), 'step: Checkout, passed');
+assert.equal(model.accessibleName({kind:'message', title:'Loading jobs…', statusText:''}, false), 'message: Loading jobs…');
+assert.equal(model.accessibleName({kind:'more', title:'More runs', statusText:''}, false), 'more: More runs');
 assert.equal(model.icon('cancelled'), '⊘');
 assert.equal(model.icon('failure'), '✕');
 assert.equal(model.reply('{"repos":[]}', 0, 5), '{"repos":[]}');
