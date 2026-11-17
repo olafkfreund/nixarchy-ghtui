@@ -106,6 +106,7 @@ ShellRoot {
     property int closedRequests: 0
     property bool touchSeen: false
     property bool copyChecked: false
+    property bool accChecked: false
     // Fires inside the reply handler, right after touch(): the run task still exists or is in flight.
     Connections {
         target: panel
@@ -177,8 +178,19 @@ ShellRoot {
             panel.filterText="no-match"
             check(panel.entries.length===0,"filter")
             panel.filterText="repo"
-            check(panel.cursor===0 && panel.entries.length===2,"search resets collapsed results")
+            check(panel.cursor===0 && panel.entries.length===3 && panel.entries[1].key==="one/repo:7","expansion survives filtering")
+            panel.move(1)
+            panel.filterText=""
+            check(panel.current.key==="one/repo:7","clearing the filter keeps the selected row")
+            panel.click(1)
+            check(panel.cursor===1 && panel.entries[2].title==="Loading jobs…","click selects and opens a run")
+            panel.click(1)
+            check(panel.entries.length===3,"second click collapses it")
+            panel.click(0)
+            check(panel.cursor===0 && panel.entries.length===2,"click toggles a repository")
+            panel.filterText="repo"
             panel.expand(false)
+            check(panel.entries.length===3,"expand repository again")
             panel.move(1)
             panel.expand(false)
             panel.page(1)
@@ -221,6 +233,14 @@ ShellRoot {
                 var step=panel.current.key
                 panel.enter()
                 check(panel.current.key===step,"enter leaves step alone")
+                var stepIndex=panel.cursor
+                at("one/repo:7")
+                panel.click(stepIndex)
+                check(panel.current.key===step && !panel.expanded[step],"click selects a step without toggling")
+                panel.confirm={text:"x",repo:"one/repo",run:"7"}
+                panel.click(0)
+                check(panel.current.key===step,"click does nothing while a confirmation is open")
+                panel.confirm=null
                 at("one/repo:7")
                 panel.copyLink()
                 if (Quickshell.env("MENU_SCENARIO") === "fresh") {
@@ -255,6 +275,17 @@ ShellRoot {
                 copyChecked=true
                 stage=1
             } else if(stage===1 && copyChecked) {
+                if (!accChecked) {
+                    panel.move(0)
+                    var item=panel.itemAt(panel.cursor)
+                    if (!item) return
+                    check(item.accessibleName.indexOf(panel.current.title)>=0,"accessible name holds the title")
+                    check(item.Accessible.role===Accessible.ListItem && item.Accessible.name===item.accessibleName,"delegate accessibility role and name")
+                    check(item.Accessible.selected===true && item.Accessible.focusable===true,"selected row is accessible-selected")
+                    var other=panel.itemAt(panel.cursor===0 ? 1 : 0)
+                    check(!other || other.Accessible.selected===false,"other rows are not selected")
+                    accChecked=true
+                }
                 check(panel.error==="","async API has no error")
                 check(panel.current.key===selected && panel.filterText==="repo","poll preserves searched selection")
                 check(panel.details["one/repo:7"].jobs[0].steps.length===1,"jobs and steps arrive")

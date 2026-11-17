@@ -47,8 +47,7 @@ Item {
     readonly property var current: entries[cursor] || null
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
     onFilterTextChanged: {
-        expanded = ({})
-        rebuild(true)
+        rebuild(filterText !== "")
         selectionChanged(false)
     }
     // ponytail: full rebuild at 1 Hz (~7 ms at 1650 rows in Node); skip when no entry has an open-ended duration if it ever shows in a profile
@@ -121,6 +120,14 @@ Item {
         if (bottom < 0) bottom = entries.length - 1
         move(dir * Math.max(1, bottom - top))
     }
+    function click(index) {
+        if (confirm) return
+        cursor = index
+        selectionChanged(false)
+        keys.forceActiveFocus()
+        expand(false)
+    }
+    function itemAt(index) { return list.itemAtIndex(index) }
     function enter() {
         var row = current
         if (!row || ["repo", "run", "job"].indexOf(row.kind) < 0) return
@@ -427,6 +434,7 @@ Item {
                         selectByMouse: true
                         selectionColor: Commons.Color.menu.selectedBackground
                         selectedTextColor: Commons.Color.menu.selectedText
+                        Accessible.name: "Search repositories"
                         rightPadding: coverageNote.implicitWidth + Style.spacing.md
                         Keys.onPressed: function(event) {
                             if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
@@ -491,10 +499,16 @@ Item {
                         clip: true
                         model: visibleRows
                         boundsBehavior: Flickable.StopAtBounds
+                        Accessible.role: Accessible.List
                         delegate: Rectangle {
                             required property var rowData
                             readonly property var modelData: rowData
                             required property int index
+                            readonly property string accessibleName: Model.accessibleName(modelData, !!root.expanded[modelData.key])
+                            Accessible.role: Accessible.ListItem
+                            Accessible.name: accessibleName
+                            Accessible.selected: index === root.cursor
+                            Accessible.focusable: true
                             width: list.width
                             height: modelData.subtitle ? Math.max(Style.space(64), Style.font.body + Style.font.caption + Style.space(16)) : Math.max(Style.space(40), Style.font.body + Style.space(12))
                             color: index === root.cursor ? Commons.Color.menu.selectedBackground : "transparent"
@@ -544,6 +558,7 @@ Item {
                                     textFormat: Text.PlainText
                                 }
                             }
+                            MouseArea { anchors.fill: parent; onClicked: root.click(index) }
                         }
                         Text {
                             anchors.centerIn: parent
