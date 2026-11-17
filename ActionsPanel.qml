@@ -27,6 +27,13 @@ Item {
     property var requestInfo: null
     property bool workerBusy: false
     property bool helperStarted: false
+    property var confirm: null
+    property bool actionBusy: false
+    property bool actionStarted: false
+    property string actionText: ""
+    property bool actionError: false
+    property int actionId: 0
+    property var actionInfo: null
     property double now: Date.now()
     readonly property bool discoveryComplete: polling.catalogueComplete
     readonly property string cooldownText: now < polling.cooldown ? "GitHub paused until " + new Date(polling.cooldown).toLocaleTimeString() : ""
@@ -56,6 +63,7 @@ Item {
         opened = false
         Polling.close(polling)
         requestProc.running = false
+        confirm = null
     }
     function toggle() { opened ? close() : open() }
     function status() {
@@ -63,7 +71,10 @@ Item {
             checked: checkedCount, discoveryComplete: discoveryComplete, error: error, updated: updated,
             requests: polling.requests, inFlight: workerBusy, cooldown: polling.cooldown,
             lastRequest: polling.lastRequest, lastStarted: polling.lastStarted,
-            filter: filterText, editing: filtering, selected: current ? current.key : "", scrollY: list.contentY})
+            filter: filterText, editing: filtering, selected: current ? current.key : "", scrollY: list.contentY,
+            pollSelected: polling.selected, pollInspected: polling.inspected, remaining: polling.remaining, resetAt: polling.resetAt,
+            action: actionText, actionBusy: actionBusy,
+            confirm: confirm ? {action: confirm.action, repo: confirm.repo, run: confirm.run} : null})
     }
 
     function rebuild(resetSelection) {
@@ -72,7 +83,8 @@ Item {
         var topItem = list.itemAtIndex(topIndex)
         var topKey = entries[topIndex] ? entries[topIndex].key : ""
         var topOffset = topItem ? topItem.y - list.contentY : 0
-        var next = Model.rows(repos, expanded, details, filterText, now)
+        var next = Model.rows(repos, expanded, details, filterText, now,
+            polling.selected && polling.inspected ? polling.selected + ":" + polling.inspected : "")
         var structureChanged = Model.syncRows(visibleRows, next)
         entries = next
         cursor = resetSelection ? 0 : Model.selection(entries, key, cursor)
@@ -119,15 +131,17 @@ Item {
     function selectionChanged(immediate) {
         if (!polling) return
         Polling.select(polling, current ? current.repo : "", current ? current.run : "", expanded, Date.now(), immediate)
+        rebuild()
     }
     function adopt() {
         repos = polling.repos.slice()
         details = Object.assign({}, polling.details)
-        error = polling.error
+        expanded = polling.expanded
+        error = polling.error || polling.catalogueBlocked
         // Reassign the state reference to notify bindings after pure-JS mutations.
         polling = Object.assign({}, polling)
         rebuild()
-        if (!polling.selected || !Polling.repoFor(polling, polling.selected)) selectionChanged(false)
+        selectionChanged(false)
     }
     function refresh(catalogue) {
         selectionChanged(true)
@@ -173,6 +187,63 @@ Item {
         if (current && Model.browsable(current.url))
             Quickshell.execDetached(["xdg-open", current.url])
     }
+    function say(text, error) {
+        actionText = text
+        actionError = !!error
+        actionTimer.restart()
+    }
+    function gate() {
+        if (Date.now() < polling.cooldown) return "GitHub paused until " + new Date(polling.cooldown).toLocaleTimeString() + ". Try again then."
+        return actionBusy ? "An action is already running" : ""
+    }
+    function askAction(action) {
+        if (confirm) return
+        var row = current
+        var run = row && row.kind === "run" ? Polling.runFor(polling, row.repo, row.run) : null
+        var why = Model.unavailable(action, run) || gate()
+        if (why) { say(why, true); return }
+        var d = Model.describe(action, row.repo, run)
+        actionText = ""
+        // Strings only: polling may rebuild or reorder rows before y arrives.
+        confirm = {action: action, repo: row.repo, run: row.run, text: d.confirm, done: d.done}
+    }
+    function answer(yes) {
+        var target = confirm
+        confirm = null
+        if (!yes || !target) return
+        var why = gate()
+        if (why) { say(why, true); return }
+        actionBusy = true
+        actionStarted = false
+        actionInfo = {requestId: ++actionId, repo: target.repo, run: target.run, done: target.done}
+        actionProc.command = ["python3", helper, "act", JSON.stringify({action: target.action, repo: target.repo, run: target.run, requestId: actionId})]
+        actionProc.running = true
+    }
+    function actionFailedToStart() {
+        console.warn("GitHub Actions helper: python3 failed to start")
+        actionBusy = false
+        receiveAction(Model.actionReply("", 127, actionInfo.requestId), actionInfo)
+    }
+    function receiveAction(text, info) {
+        var reply
+        try {
+            reply = JSON.parse(text)
+            if (!reply || reply.requestId !== info.requestId)
+                throw new Error("Workflow helper returned an invalid request identity")
+        } catch (e) {
+            console.warn("GitHub Actions helper reply rejected: " + String(text).slice(0, 300))
+            reply = JSON.parse(Model.actionReply("", 1, info.requestId))
+        }
+        Polling.noteWrite(polling, reply, Date.now())
+        if (reply.ok === true && !reply.errorType) {
+            say(info.done + (Date.now() < polling.cooldown ? " · refresh waits until " + new Date(polling.cooldown).toLocaleTimeString() : ""), false)
+            if (opened) {
+                Polling.touch(polling, info.repo, info.run, Date.now())
+                adopt()
+                pump()
+            }
+        } else say(String(reply.error || "Outcome unknown; check GitHub before retrying"), true)
+    }
 
     Component.onCompleted: {
         rebuild()
@@ -202,6 +273,21 @@ Item {
         // Quickshell 0.3.1: a failed start emits neither started nor exited, only running=false.
         onRunningChanged: if (!running && root.workerBusy && !root.helperStarted) root.failedToStart()
     }
+    // Writes have their own process: close() must not kill one in flight, and its reply must not be dropped.
+    Process {
+        id: actionProc
+        stdout: StdioCollector { id: actionOutput }
+        stderr: StdioCollector { id: actionErrors }
+        onExited: function(code) {
+            if (actionErrors.text.trim()) console.warn("GitHub Actions helper (exit " + code + "): " + actionErrors.text.trim())
+            // finally: an exception in receiveAction must not block later actions
+            try { root.receiveAction(Model.actionReply(actionOutput.text, code, root.actionInfo.requestId), root.actionInfo) }
+            finally { root.actionBusy = false }
+        }
+        onStarted: root.actionStarted = true
+        onRunningChanged: if (!running && root.actionBusy && !root.actionStarted) root.actionFailedToStart()
+    }
+    Timer { id: actionTimer; interval: 10000; onTriggered: root.actionText = "" }
 
     PanelWindow {
         id: window
@@ -234,6 +320,13 @@ Item {
                 focus: true
                 Keys.onPressed: function(event) {
                     event.accepted = true
+                    if (root.confirm) {
+                        if (!event.isAutoRepeat) {
+                            if (event.key === Qt.Key_Y) root.answer(true)
+                            else if (event.key === Qt.Key_N || event.key === Qt.Key_Escape) root.answer(false)
+                        }
+                        return
+                    }
                     if (event.key === Qt.Key_Escape) {
                         if (root.filterText) root.filterText = ""
                         else root.close()
@@ -250,6 +343,9 @@ Item {
                         root.refresh(!!(event.modifiers & Qt.ShiftModifier))
                     }
                     else if (event.key === Qt.Key_O) root.openBrowser()
+                    else if (event.key === Qt.Key_A) root.askAction("rerun")
+                    else if (event.key === Qt.Key_F) root.askAction("rerun-failed")
+                    else if (event.key === Qt.Key_C) root.askAction("cancel")
                     else event.accepted = false
                 }
 
@@ -372,9 +468,9 @@ Item {
                     Text {
                         id: footer
                         width: parent.width
-                        text: root.cooldownText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  Esc close"
-                        color: Commons.Color.menu.text
-                        opacity: 0.65
+                        text: root.confirm ? root.confirm.text : root.actionText || root.cooldownText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  Esc close"
+                        color: root.actionError && !root.confirm && root.actionText ? Commons.Color.urgent : Commons.Color.menu.text
+                        opacity: root.confirm || root.actionText ? 1 : 0.65
                         font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
                         elide: Text.ElideRight
                         textFormat: Text.PlainText

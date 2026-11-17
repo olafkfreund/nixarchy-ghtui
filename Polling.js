@@ -2,15 +2,19 @@
 var phases = ["recent", "in_progress", "queued", "waiting", "pending", "requested"];
 var TIMING = {settle:250, catalogue:300000, summary:60000, selected:10000, active:15000,
     idle:600000, followup:15000, jobs:5000, window:60000, perWindow:60, gap:1000,
-    rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000};
+    rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000, quotaEase:1000, quotaTight:300};
 function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
-        stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true,
-        error:"", requests:0, lastRequest:"", lastStarted:0};
+        stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true, catalogueBlocked:"",
+        account:"", accountChecked:false, remaining:null, resetAt:0, error:"", requests:0, lastRequest:"", lastStarted:0};
 }
 function key(kind, repo, run) { return kind + ":" + (repo || "") + ":" + (run || ""); }
 function age(at, interval) { return at === undefined ? -Infinity : at + interval; }
+function pace(s, now) {
+    if (typeof s.remaining!=="number" || now>=s.resetAt || s.remaining>=TIMING.quotaEase) return 1;
+    return s.remaining>=TIMING.quotaTight ? 3 : 10;
+}
 function repoFor(s, name) { return s.repos.filter(function(r) { return r.repo === name })[0]; }
 function runFor(s, repo, id) {
     var r = repoFor(s, repo);
@@ -26,8 +30,9 @@ function ensure(s, kind, repo, run, group, due) {
     return t;
 }
 function open(s, now) {
-    s.opened = true; s.generation++; s.auth = false;
-    if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue) s.discover = true;
+    s.opened = true; s.generation++; s.auth = false; s.accountChecked = false;
+    if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
+    if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue*pace(s,now)) s.discover = true;
     s.stableAt = now;
 }
 function close(s) {
@@ -40,18 +45,33 @@ function select(s, repo, run, expanded, now, immediate) {
 }
 function manual(s, now, catalogue) {
     s.auth = false;
+    if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
+    if (!s.accountChecked) {
+        var account=ensure(s,"account","","","interactive",now);
+        account.due=Math.min(account.due,now);
+    }
     if (catalogue) { s.discover = true; return; }
     var r = repoFor(s, s.selected);
     if (r) {
         r.blocked = false; r.error = ""; s.stableAt = now;
-        ensure(s, "summary", r.repo, "", "interactive", now);
+        var summary=ensure(s, "summary", r.repo, "", "interactive", now);
+        summary.due=Math.min(summary.due,now);
         if (s.inspected && s.expanded[r.repo + ":" + s.inspected]) {
             if (s.details[r.repo+":"+s.inspected]) s.details[r.repo+":"+s.inspected].unavailable=false;
-            ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
+            var jobs=ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
+            jobs.due=Math.min(jobs.due,now);
         }
     }
 }
+function touch(s, repo, run, now) {
+    var t=ensure(s,"run",repo,run,"interactive",now);
+    t.due=now;
+    if (s.flight && s.flight.key===t.key) t.again=true;
+    var r=repoFor(s,repo);
+    if (r) delete r.summaryAt;
+}
 function seed(s, now) {
+    if (!s.accountChecked) { ensure(s,"account","","","interactive",now); return; }
     Object.keys(s.tasks).forEach(function(id) {
         var t = s.tasks[id];
         if (s.flight && s.flight.key === id) return;
@@ -71,7 +91,7 @@ function seed(s, now) {
         var activityKey = key("activity",r.repo);
         if (summary && !(s.flight && s.flight.key === activityKey)) delete s.tasks[activityKey];
         if (!summary) {
-            var interval = selected ? TIMING.selected : r.active > 0 ? TIMING.active : TIMING.idle;
+            var interval = selected ? TIMING.selected : (r.active > 0 ? TIMING.active : TIMING.idle)*pace(s,now);
             var group = selected ? "interactive" : r.active > 0 ? "active" : "background";
             if (now >= age(r.activityAt, interval) && (group!=="background" || !backgroundQueued || s.tasks[activityKey])) {
                 ensure(s, "activity",r.repo,"",group,age(r.activityAt,interval));
@@ -100,7 +120,7 @@ function next(s, now) {
     if (s.starts.length >= TIMING.perWindow || s.starts.length && now - s.starts[s.starts.length-1] < TIMING.gap) return null;
     s.clock=now;
     seed(s,now);
-    var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now });
+    var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now && (s.accountChecked || t.kind === "account") });
     due.sort(function(a,b) { return a.due === b.due ? a.order-b.order : a.due-b.due });
     var group = ["interactive","interactive","interactive","active","background"][s.slot % 5];
     var t = due.filter(function(t) { return t.group === group })[0];
@@ -146,6 +166,11 @@ function recent(s,r,runs) {
 function kept(s,r,run) {
     return s.expanded[r.repo+":"+run.id] || r.repo===s.selected && String(run.id)===s.inspected;
 }
+function prune(s,r) {
+    var ids={}; (r.runs || []).forEach(function(run) { ids[String(run.id)]=true });
+    var prefix=r.repo+":";
+    Object.keys(s.details).forEach(function(id) { if (id.indexOf(prefix)===0 && !ids[id.slice(prefix.length)]) delete s.details[id]; });
+}
 function activity(s,r,items,now,total) {
     var ids={}; items.forEach(function(run) { ids[run.id]=true });
     var previous=r.runs || [], partial=total>items.length, dropped={};
@@ -163,30 +188,43 @@ function activity(s,r,items,now,total) {
     r.active=typeof total==="number" ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
     if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
     r.activityAt=now; r.checked=new Date(now).toISOString(); r.error="";
+    prune(s,r);
 }
-function complete(s,reply,now) {
-    var flight=s.flight;
-    if (!s.opened || !flight || flight.generation!==s.generation || reply.requestId!==flight.request.requestId) return false;
-    var t=s.tasks[flight.key]; s.flight=null;
-    if (!t) return false;
-    var okData=t.kind==="run" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
-        : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
-    if (!reply.errorType && !reply.error && !okData)
-        reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
+function cool(s,reply,now) {
     if (reply.errorType==="rate" || reply.remaining===0 || reply.retryAt>now) {
         var deadline=Math.max(reply.retryAt || 0,reply.remaining===0 ? reply.resetAt || 0 : 0);
         if (deadline<=now) deadline=now+Math.min(TIMING.rateMax,TIMING.rateBase*Math.pow(2,s.rateFailures));
         s.cooldown=Math.max(s.cooldown,deadline);
         if (reply.errorType==="rate") s.rateFailures++;
     }
+}
+function noteWrite(s,reply,now) { cool(s,reply,now); }
+function complete(s,reply,now) {
+    var flight=s.flight;
+    if (!s.opened || !flight || flight.generation!==s.generation || reply.requestId!==flight.request.requestId) return false;
+    var t=s.tasks[flight.key]; s.flight=null;
+    if (!t) return false;
+    if (typeof reply.remaining==="number") { s.remaining=reply.remaining; s.resetAt=reply.resetAt || 0; }
+    var okData=t.kind==="run" || t.kind==="account" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
+        : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
+    if (!reply.errorType && !reply.error && !okData)
+        reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
+    cool(s,reply,now);
+    if (t.kind==="account" && reply.errorType==="permission") {
+        s.accountChecked=true; s.error=""; delete s.tasks[t.key]; return true;
+    }
     var r=repoFor(s,t.repo);
     if (reply.errorType || reply.error) {
         s.error=reply.error || "Invalid GitHub response";
+        if (t.kind==="jobs") { var dk=t.repo+":"+t.run;
+            s.details[dk]=Object.assign({},s.details[dk]||{},{error:s.error});
+            if (reply.errorType==="permission") Object.assign(s.details[dk],{jobsAt:now,unavailable:true}); }
         // ponytail: s.auth now means "stopped until manual refresh"; rename if a third stop reason appears
         if (reply.errorType==="auth" || reply.errorType==="setup") s.auth=true;
         if (reply.errorType==="permission") {
-            if (r && t.kind!=="jobs" && t.kind!=="run") { r.blocked=true; r.error=s.error; }
-            else if (r && t.kind==="jobs") s.details[t.repo+":"+t.run]=Object.assign({},s.details[t.repo+":"+t.run] || {},{error:s.error,jobsAt:now,unavailable:true});
+            if (t.kind==="catalogue") { s.discover=false; s.catalogueBlocked=s.error; }
+            else if (r && t.kind!=="jobs" && t.kind!=="run") { r.blocked=true; r.error=s.error; }
+            else if (t.kind==="jobs") {} // Detail was written above.
             else if (r) { var failed=runFor(s,t.repo,t.run); if(failed){ failed.awaitingFinal=false; delete failed.followupAt; failed.lookupError=s.error; } }
             delete s.tasks[t.key];
         } else {
@@ -200,6 +238,13 @@ function complete(s,reply,now) {
     s.error=""; s.rateFailures=0; t.failures=0;
     if (r) r.error="";
     var data=reply.data;
+    if (t.kind==="account") {
+        if (s.account && s.account!==data.login) {
+            s.tasks={}; s.repos=[]; s.details={}; s.expanded={}; s.selected=""; s.inspected="";
+            s.catalogueComplete=false; s.catalogueBlocked=""; s.discover=true;
+        }
+        s.account=data.login; s.accountChecked=true; delete s.tasks[t.key]; return true;
+    }
     if (t.kind==="run") {
         if (r) {
             var resolved=Object.assign({},data,{awaitingFinal:false,followupAt:now});
@@ -208,7 +253,9 @@ function complete(s,reply,now) {
             if (resolved.status==="completed" && t.repo===s.selected && t.run===s.inspected && s.expanded[t.repo+":"+t.run])
                 ensure(s,"jobs",t.repo,t.run,"interactive",now);
         }
-        delete s.tasks[t.key]; return true;
+        if (t.again) { t.again=false; t.due=now; }
+        else delete s.tasks[t.key];
+        return true;
     }
     t.items=t.kind==="catalogue" ? t.items.concat(data) : union(t.items,data);
     if (t.kind==="catalogue") {
@@ -221,6 +268,7 @@ function complete(s,reply,now) {
     if (reply.nextPage) { t.page=reply.nextPage; t.due=now; t.order=++s.order; return true; }
     if (t.kind==="catalogue") {
         var names=t.items.map(function(repo) { return repo.repo });
+        s.repos.forEach(function(repo) { if (names.indexOf(repo.repo)<0) prune(s,{repo:repo.repo,runs:[]}); });
         s.repos=s.repos.filter(function(repo) { return names.indexOf(repo.repo)>=0 });
         // GitHub's pushed-descending catalogue order is retained across refreshes.
         s.repos.sort(function(a,b) { return names.indexOf(a.repo)-names.indexOf(b.repo) });
@@ -234,6 +282,11 @@ function complete(s,reply,now) {
         if (t.phase<phases.length) { t.due=now; t.order=++s.order; return true; }
         var keep=(r.runs || []).filter(function(run) { return run.awaitingFinal || kept(s,r,run) });
         r.runs=recent(s,r,union(t.all,keep));
+        var seen={}; t.all.forEach(function(run) { seen[String(run.id)]=true });
+        r.runs.forEach(function(run) {
+            if (run.status!=="completed" && !seen[String(run.id)]) { run.awaitingFinal=true; delete run.followupAt; }
+        });
+        prune(s,r);
         r.hidden=t.hidden || {};
         r.summaryAt=now;
     } else if (r && t.kind==="jobs") {
