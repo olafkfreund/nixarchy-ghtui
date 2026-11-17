@@ -23,6 +23,7 @@ r → Refresh selected repository, expanded run and activity
 Shift + R → Rediscover accessible repositories
 o → Open selected repository, run or job on GitHub
 v → Open the log of a failed run or finished job (failed steps only for a failed job)
+w → Watch the selected unfinished run and get a notification when it finishes (up to 5)
 y → Copy the selected row's link (needs wl-copy)
 ? → This keybindings list
 a → Rerun all jobs of the selected finished run (asks y/n)

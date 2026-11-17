@@ -448,6 +448,8 @@ ShellRoot {
                 at("one/repo:7")
                 panel.toggleWatch()
                 check(panel.notice==="Watching CI" && panel.watching,"w watches an unfinished run")
+                var watchedItem=panel.itemAt(panel.cursor)
+                check(!!watchedItem && watchedItem.accessibleName.indexOf(", watching")>0,"watched row is described as watching")
                 panel.polling.watches["one/repo:7"].at=0
                 panel.close()
                 closedRequests=panel.polling.requests

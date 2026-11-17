@@ -68,6 +68,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(model.coverage([{summaryAt:'now'}, {r
 assert.equal(model.accessibleName({kind:'repo', title:'o/r', statusText:'failed', info:'✕ 3h · 12 running · stale'}, false),
   'repository: o/r, failed, ✕ 3h · 12 running · stale, collapsed');
 assert.equal(model.accessibleName({kind:'run', title:'CI', statusText:'running'}, true), 'run: CI, running, expanded');
+assert.equal(model.accessibleName({kind:'run', title:'CI', statusText:'running', info:'1m 0s · watching'}, true), 'run: CI, running, watching, expanded');
 assert.equal(model.accessibleName({kind:'step', title:'Checkout', statusText:'passed'}, false), 'step: Checkout, passed');
 assert.equal(model.accessibleName({kind:'message', title:'Loading jobs…', statusText:''}, false), 'message: Loading jobs…');
 assert.equal(model.accessibleName({kind:'more', title:'More runs', statusText:''}, false), 'more: More runs');

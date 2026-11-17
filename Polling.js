@@ -105,7 +105,7 @@ function seed(s, now) {
     });
     Object.keys(s.watches).forEach(function(id) {
         var w=s.watches[id];
-        ensure(s,"run",w.repo,w.run,"active",Math.max(age(w.at,TIMING.watch),age((runFor(s,w.repo,w.run)||{}).followupAt,TIMING.followup)));
+        ensure(s,"run",w.repo,w.run,"active",Math.max(age(w.at,TIMING.watch*pace(s,now)),age((runFor(s,w.repo,w.run)||{}).followupAt,TIMING.followup)));
     });
     if (!s.opened) return;
     if (s.discover) ensure(s, "catalogue", "", "", "background", now);
@@ -307,7 +307,7 @@ function complete(s,reply,now) {
     if (t.kind==="account") {
         if (s.account && s.account!==data.login) {
             s.tasks={}; s.repos=[]; s.details={}; s.expanded={}; s.selected=""; s.inspected="";
-            s.catalogueComplete=false; s.catalogueBlocked=""; s.discover=true;
+            s.catalogueComplete=false; s.catalogueBlocked=""; s.discover=true; s.watches={};
         }
         s.account=data.login; s.accountChecked=true; delete s.tasks[t.key]; return true;
     }

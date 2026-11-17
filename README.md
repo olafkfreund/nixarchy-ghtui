@@ -1,6 +1,6 @@
 # GitHub Actions for Omarchy
 
-A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with failing repositories first, then running ones. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text, rows and spacing use the theme's sizes, like the other Omarchy menus, and the panel shrinks to fit smaller screens. The panel can also rerun or cancel a selected run, after a y/n confirmation. No buttons, background daemon, database or token storage.
+A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with failing repositories first, then running ones. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text, rows and spacing use the theme's sizes, like the other Omarchy menus, and the panel shrinks to fit smaller screens. The panel can also rerun or cancel a selected run, after a y/n confirmation. No buttons, background daemon, database or token storage; with the panel closed only runs you mark with `w` are polled, until they finish.
 
 ## Screenshots
 
@@ -148,6 +148,7 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | Shift + R | Rediscover repositories from GitHub |
 | o | Open selected repository/run/job on GitHub |
 | v | Open the log of a failed run or finished job (failed steps only for a failed job; needs `omarchy-launch-tui`, `less`) |
+| w | Watch the selected unfinished run: it polls while the panel is closed and a notification arrives when it finishes (needs `notify-send`); `w` again stops, up to 5 runs |
 | y | Copy the selected row's link (needs `wl-copy`) |
 | ? | Show this key list |
 | a | Rerun all jobs of the selected finished run (asks y/n) |
@@ -157,6 +158,8 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | Ctrl, Alt, Meta combinations | Left alone |
 
 Icons accompany status words (passed, failed, running, queued, …): ✓ passed, ✕ failed, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Passed has no colour of its own; only running and failure states are coloured. Job rows show completed/reported step counts. These are not estimates of remaining execution time. `v` opens the log of a failed run or a finished job after its run finishes; for a failed job it shows only failed steps, and for any other finished job it shows the full log. A step row opens its parent job's log.
+
+`w` watches an unfinished run (the row shows `watching`, the header `· N watched`). Watched runs keep polling every 30 seconds while the panel is closed, only `run` requests, at most 10 requests a minute for 5 watches, until they finish. A finished run sends a desktop notification through `notify-send` (`libnotify`) with the result as title and `repository · workflow` as body; if GitHub stops showing the run, "Watch stopped" is sent. If `gh` authentication fails while closed, one "Watching paused" notification is sent and polling resumes when you open the panel. Watches live in memory only: a shell restart or an account change drops them without a notification.
 
 ## Refresh and errors
 
@@ -178,11 +181,11 @@ Cached data remains usable during refresh. The activity check reads up to 30 rec
 
 GitHub retry/reset headers pause all work. Secondary rate limits without a deadline start with a `TIMING.rateBase` wait and back off up to `TIMING.rateMax`. Network/server errors back off the affected resource from `TIMING.retryBase` up to `TIMING.retryMax`; a permission failure leaves that repository unavailable until a catalogue or manual refresh, and a catalogue permission failure stops catalogue requests until `r`, `R` or reopen. Authentication failures pause polling until retry/reopen. Manual refresh never bypasses a server cooldown. Closing cancels the read helper and its gh child; a write already sent finishes, and its result stays in the footer for 10 seconds, so a quick reopen still shows it; reopening retains cached data, local request history and cooldowns. A shell restart clears local memory; GitHub’s quota remains authoritative.
 
-Below 1,000 remaining requests (`TIMING.quotaEase`) background checks of non-selected repositories slow 3x, and below 300 (`TIMING.quotaTight`) 10x, until GitHub's reset time. The selected repository and the inspected run keep full pace. On open the panel makes one extra request for the `gh` login: cached data shows first and is cleared if the login differs from the cached one. A switch while the panel is open is not detected.
+Below 1,000 remaining requests (`TIMING.quotaEase`) background checks of non-selected repositories slow 3x, and below 300 (`TIMING.quotaTight`) 10x, until GitHub's reset time. The selected repository and the inspected run keep full pace; watched runs slow the same way. On open the panel makes one extra request for the `gh` login: cached data shows first and is cleared, with any watches, if the login differs from the cached one. A switch while the panel is open is not detected.
 
 Writes (rerun, cancel) do not count toward that request ceiling and respect a GitHub cooldown. An outcome the panel could not confirm is never retried: check GitHub first.
 
-A request can take up to 25 seconds before timeout; a log fetch can take up to 90 seconds and occupies the shared worker, and counts as four requests against the polling budget, and shares the account’s GitHub quota with other tools. Refresh targets can therefore stretch under load, network failures or rate limits. No polling occurs while closed, and no token is extracted or stored by the plugin.
+A request can take up to 25 seconds before timeout; a log fetch can take up to 90 seconds and occupies the shared worker, and counts as four requests against the polling budget, and shares the account’s GitHub quota with other tools. Refresh targets can therefore stretch under load, network failures or rate limits. While closed, only runs marked with `w` are polled (at most 10 requests a minute, until they finish); nothing else is requested, and no token is extracted or stored by the plugin.
 
 ### Measured polling comparison
 

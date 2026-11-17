@@ -936,3 +936,15 @@ for (const fail of [false,true]) {
   assert.ok(times.length>=40 && times.length<=50,`five watches recover and poll about 50 times in five minutes (got ${times.length}, errors: ${fail})`);
 }
 console.log('Polling: closed-panel watches are capped, finish once and recover');
+
+// #44 step 11: #41 hooks. An account change drops watches; low quota stretches the watch interval.
+{
+  const acct=watchState(); acct.account='tester'; polling.open(acct,0);
+  const a=polling.next(acct,0); assert.equal(a.kind,'account');
+  polling.complete(acct,response(a,{login:'other'}),100);
+  assert.equal(polling.hasWatches(acct),false,'an account change clears watches');
+  const slow=watchState(); slow.remaining=400; slow.resetAt=900000;
+  assert.equal(polling.next(slow,60000),null,'quotaTight stretches the watch interval 10x');
+  assert.equal(polling.next(slow,300000).kind,'run');
+}
+console.log('Polling: account change clears watches, low quota stretches them');

@@ -129,6 +129,7 @@ function accessibleName(row, expanded) {
     var kind = row.kind === "repo" ? "repository" : row.kind;
     var tail = row.kind === "repo" ? [row.statusText, row.info].filter(Boolean).join(", ") : row.statusText;
     var name = kind + ": " + row.title + (tail ? ", " + tail : "");
+    if (row.kind === "run" && /watching$/.test(row.info || "")) name += ", watching";
     if (["repo", "run", "job"].indexOf(row.kind) >= 0) name += expanded ? ", expanded" : ", collapsed";
     return name;
 }
