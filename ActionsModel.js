@@ -36,6 +36,37 @@ function duration(item, now) {
     return seconds >= 60 ? Math.floor(seconds / 60) + "m " + seconds % 60 + "s" : seconds + "s";
 }
 
+function detail(run, now) {
+    if (!run || typeof run !== "object") return [{label: "", value: "Select a run"}];
+    function text(value) { return typeof value === "string" && value ? value : "unknown"; }
+    function line(label, read) {
+        try { return {label: label, value: text(read())}; }
+        catch (e) { return {label: label, value: "unknown"}; }
+    }
+    return [
+        line("Workflow", function() {
+            return [run.name, run.path].filter(function(value) { return typeof value === "string" && value; }).join(" · ");
+        }),
+        line("Result", function() { var result = state(run); return typeof result === "string" ? label(result) : "unknown"; }),
+        line("Branch", function() { return run.head_branch; }),
+        line("Commit", function() { return typeof run.head_sha === "string" && /^[0-9a-f]{40}$/.test(run.head_sha) ? run.head_sha.slice(0, 7) : "unknown"; }),
+        line("Event", function() { return run.event; }),
+        line("Actor", function() {
+            var actor = run.actor, trigger = run.triggering_login;
+            return text(actor) + (typeof trigger === "string" && trigger && trigger !== actor ? " (triggered by " + trigger + ")" : "");
+        }),
+        line("Attempt", function() { return Number.isInteger(run.run_attempt) && run.run_attempt >= 1 ? String(run.run_attempt) : "unknown"; }),
+        line("Started", function() { return typeof run.run_started_at === "string" && run.run_started_at ? age(run, now) : "unknown"; }),
+        line("Duration", function() { return typeof run.run_started_at === "string" && run.run_started_at ? duration(run, now) : "unknown"; })
+    ];
+}
+
+function paneHeight(total, avail, content, minList, line) {
+    var cap = Math.min(0.4 * total, avail - minList);
+    // The one-line floor never pushes the pane past the room it has (a card smaller than a line).
+    return Math.max(0, Math.min(avail, Math.max(line, Math.min(content, cap))));
+}
+
 var labels = {in_progress: "running", queued: "queued", requested: "queued", pending: "queued", waiting: "waiting",
     success: "passed", failure: "failed", timed_out: "timed out", startup_failure: "startup failed",
     cancelled: "cancelled", skipped: "skipped", neutral: "neutral", action_required: "needs action",

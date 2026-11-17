@@ -496,6 +496,22 @@ class PageTest(unittest.TestCase):
         self.assertEqual(result["errorType"], "network")
         self.assertIsNone(result["data"])
 
+    def test_account_login_pattern(self):
+        task = {"kind": "account", "requestId": 1}
+        # Underscores stay valid: managed-user (EMU) logins such as jdoe_acme use them.
+        for login in ("octo-cat", "dependabot[bot]", "jdoe_acme"):
+            with self.subTest(login=login), patch.object(actions, "request", return_value=(
+                    "HTTP/2.0 200 OK\n\n" + json.dumps({"login": login}), "", 0)):
+                reply = actions.read_page(task)
+            self.assertEqual(reply["errorType"], "")
+            self.assertEqual(reply["data"], {"login": login})
+        for login in ("", "a b", "x/y", "a" * 40, "a\nb", "<b>x</b>", "a&b", "a\u202eb"):
+            with self.subTest(login=login), patch.object(actions, "request", return_value=(
+                    "HTTP/2.0 200 OK\n\n" + json.dumps({"login": login}), "", 0)):
+                reply = actions.read_page(task)
+            self.assertEqual(reply["errorType"], "network")
+            self.assertIsNone(reply["data"])
+
     def test_catalogue_403_message(self):
         for status in (403, 404):
             with self.subTest(status=status), patch.object(actions, "request", return_value=(
@@ -527,8 +543,9 @@ class PageTest(unittest.TestCase):
                      {"kind": "summary", "repo": "a/b", "status": "recent"}]:
             with self.subTest(task=task):
                 row = page(task, {"total_count": 1, "workflow_runs": [dict(run)]})[0]
-                self.assertEqual(row, dict(run, **plain_run))
-        self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run)), dict(run, **plain_run))
+                self.assertEqual(row, dict(run, **plain_run, triggering_login=""))
+        self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run)),
+                         dict(run, **plain_run, triggering_login=""))
         self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run, display_title=emoji))["display_title"], emoji)
         for actor in (None, "str", [], {"login": 5}):
             with self.subTest(actor=actor):
@@ -550,6 +567,45 @@ class PageTest(unittest.TestCase):
         repos = page({"kind": "catalogue"}, [{"full_name": "o/r", "description": "d⁦e\r\nf", "default_branch": "ma\nin"},
                                               {"full_name": "o/s", "description": persian}])
         self.assertEqual([(r["repo"], r["description"]) for r in repos], [("o/r", "de f"), ("o/s", persian)])
+
+    def test_run_detail_text_is_plain(self):
+        run = {"id": 7, "status": "completed", "event": "pu\x07sh",
+               "path": ".github/\u202eworkflows/x.yml\n", "actor": {"login": "al\x07ice"},
+               "triggering_actor": {"login": "bo\u202eb"}}
+        tasks = ({"kind": "activity", "repo": "a/b"},
+                 {"kind": "summary", "repo": "a/b", "status": "queued"},
+                 {"kind": "summary", "repo": "a/b", "status": "recent"},
+                 {"kind": "run", "repo": "a/b", "run": "7"})
+
+        def page(task, body):
+            with patch.object(actions, "request", return_value=("HTTP/2.0 200 OK\n\n" + json.dumps(body), "", 0)):
+                reply = actions.read_page(dict(task, requestId=1))
+            self.assertEqual(reply["errorType"], "", task)
+            return reply["data"]
+
+        for task in tasks:
+            with self.subTest(task=task):
+                body = dict(run) if task["kind"] == "run" else {"total_count": 1, "workflow_runs": [dict(run)]}
+                row = page(task, body)
+                if task["kind"] != "run":
+                    row = row[0]
+                self.assertEqual((row["event"], row["path"], row["actor"], row["triggering_login"]),
+                                 ("push", ".github/workflows/x.yml", "alice", "bob"))
+                self.assertNotIn("triggering_actor", row)
+                for triggering_actor in (None, "x", [], {}):
+                    odd = dict(run, triggering_actor=triggering_actor)
+                    odd_body = odd if task["kind"] == "run" else {"total_count": 1, "workflow_runs": [odd]}
+                    odd_row = page(task, odd_body)
+                    if task["kind"] != "run":
+                        odd_row = odd_row[0]
+                    self.assertEqual(odd_row["triggering_login"], "")
+                missing = dict(run)
+                del missing["triggering_actor"]
+                missing_body = missing if task["kind"] == "run" else {"total_count": 1, "workflow_runs": [missing]}
+                missing_row = page(task, missing_body)
+                if task["kind"] != "run":
+                    missing_row = missing_row[0]
+                self.assertEqual(missing_row["triggering_login"], "")
 
 
 class WriteTest(unittest.TestCase):

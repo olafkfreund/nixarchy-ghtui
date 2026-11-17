@@ -20,12 +20,13 @@ branch:x actor:x is:failed → Filter the runs already loaded
 ↑ / ↓ while searching → Select a result without leaving search
 Enter while searching → Expand selected result and resume navigation
 Tab while searching → Resume navigation without expanding
-Esc while searching → Clear search and resume navigation
-Esc → Clear filter, then close
+Esc while searching → Close run details, otherwise clear search and resume navigation
+Esc → Close run details, then clear filter, then close
 r → Refresh selected repository, expanded run and activity
 Shift + R → Rediscover accessible repositories
 m → Load 30 more recent runs for the selected repository
 o → Open selected repository, run or job on GitHub
+i → Show or hide run details
 v → Open the log of a failed run or finished job (failed steps only for a failed job)
 w → Watch the selected unfinished run and get a notification when it finishes (up to 5)
 y → Copy the selected row's link (needs wl-copy)
