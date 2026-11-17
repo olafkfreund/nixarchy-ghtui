@@ -20,7 +20,7 @@ Press **Super+Alt+A**. Repositories sort failing first, then running; each row s
 
 - Omarchy shell with the panel plugin contract and `qs.Commons` / `qs.Ui` components.
 - `gh`, authenticated for your repositories with Actions read access. To rerun or cancel, the token must also write Actions: a classic token needs the `repo` scope, a fine-grained token needs Actions read and write plus Metadata read. A read-only token still works for everything else, and a refused action says which permission is missing.
-- Python 3, and `xdg-open` for the optional browser shortcut. `wl-copy` (`wl-clipboard`) for the optional copy shortcut.
+- Python 3, and `xdg-open` for the optional browser shortcut. `wl-copy` (`wl-clipboard`) for the optional copy shortcut. `less` to read logs, `notify-send` (`libnotify`) for notifications, and `omarchy-launch-tui` (from Omarchy) to open the log in a terminal.
 
 On NixOS, missing dependencies belong in your declarative configuration. Do not install them with pacman or an imperative Nix profile.
 
@@ -59,12 +59,12 @@ Import a NixOS module with the following content, replacing `YOUR_USER` with you
   home-manager.users.YOUR_USER = { pkgs, ... }: {
     programs.nixarchy.plugins."olafkfreund.github-actions".src =
       inputs.github-actions.packages.${pkgs.stdenv.hostPlatform.system}.default;
-    home.packages = [ pkgs.gh pkgs.python3 pkgs.xdg-utils pkgs.wl-clipboard pkgs.bash ];
+    home.packages = [ pkgs.gh pkgs.python3 pkgs.xdg-utils pkgs.wl-clipboard pkgs.less pkgs.libnotify pkgs.bash ];
   };
 }
 ```
 
-The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. The package lists these as `passthru.runtimeDeps` (`gh`, `python3`, `xdg-utils`, `wl-clipboard`). No second desktop stack or standalone Home Manager installation is needed.
+The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. The package lists these as `passthru.runtimeDeps` (`gh`, `python3`, `xdg-utils`, `wl-clipboard`, `less`, `libnotify`). No second desktop stack or standalone Home Manager installation is needed.
 
 Nix must have permission to fetch this repository. Your `gh auth login` is for runtime API access and does not automatically configure Nix's fetch credentials. An SSH input URL such as `git+ssh://git@github.com/olafkfreund/nixarchy-ghtui.git` is another option when your SSH access is configured. Never put tokens in `flake.nix` or `flake.lock`.
 
@@ -148,6 +148,7 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | Shift + R | Rediscover repositories from GitHub |
 | m | Load 30 more recent runs (up to 100) for the selected repository |
 | o | Open selected repository/run/job on GitHub |
+| v | Open the log of a failed run or finished job (failed steps only for a failed job; needs `omarchy-launch-tui`, `less`) |
 | y | Copy the selected row's link (needs `wl-copy`) |
 | ? | Show this key list |
 | a | Rerun all jobs of the selected finished run (asks y/n) |
@@ -156,7 +157,7 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | y / n / Esc | Confirm or cancel a pending action, while a confirmation is open; Enter does nothing |
 | Ctrl, Alt, Meta combinations | Left alone |
 
-Icons accompany status words (passed, failed, running, queued, …): ✓ passed, ✕ failed, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Passed has no colour of its own; only running and failure states are coloured. Job rows show completed/reported step counts. These are not estimates of remaining execution time. Open GitHub for full logs.
+Icons accompany status words (passed, failed, running, queued, …): ✓ passed, ✕ failed, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Passed has no colour of its own; only running and failure states are coloured. Job rows show completed/reported step counts. These are not estimates of remaining execution time. `v` opens the log of a failed run or a finished job after its run finishes; for a failed job it shows only failed steps, and for any other finished job it shows the full log. A step row opens its parent job's log.
 
 ## Refresh and errors
 
@@ -182,7 +183,7 @@ Below 1,000 remaining requests (`TIMING.quotaEase`) background checks of non-sel
 
 Writes (rerun, cancel) do not count toward that request ceiling and respect a GitHub cooldown. An outcome the panel could not confirm is never retried: check GitHub first.
 
-A request can take up to 25 seconds before timeout, and shares the account’s GitHub quota with other tools. Refresh targets can therefore stretch under load, network failures or rate limits. No polling occurs while closed, and no token is extracted or stored by the plugin.
+A request can take up to 25 seconds before timeout; a log fetch can take up to 90 seconds and occupies the shared worker, and counts as four requests against the polling budget, and shares the account’s GitHub quota with other tools. Refresh targets can therefore stretch under load, network failures or rate limits. No polling occurs while closed, and no token is extracted or stored by the plugin.
 
 ### Measured polling comparison
 

@@ -36,6 +36,8 @@
                 pkgs.python3
                 pkgs.xdg-utils
                 pkgs.wl-clipboard
+                pkgs.less
+                pkgs.libnotify
               ];
             }
             ''
