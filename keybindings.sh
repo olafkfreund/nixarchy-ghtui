@@ -14,6 +14,7 @@ Page Down / Page Up → Move one screenful
 Home / End / g / G → First or last row
 Click → Select a row and expand or collapse it
 / → Search repositories and workflows; select existing query
+branch:x actor:x is:failed → Filter the runs already loaded
 ↑ / ↓ while searching → Select a result without leaving search
 Enter while searching → Expand selected result and resume navigation
 Tab while searching → Resume navigation without expanding
@@ -21,6 +22,7 @@ Esc while searching → Clear search and resume navigation
 Esc → Clear filter, then close
 r → Refresh selected repository, expanded run and activity
 Shift + R → Rediscover accessible repositories
+m → Load 30 more recent runs for the selected repository
 o → Open selected repository, run or job on GitHub
 y → Copy the selected row's link (needs wl-copy)
 ? → This keybindings list

@@ -180,6 +180,12 @@ Item {
         Polling.manual(polling, Date.now(), !!catalogue)
         pump()
     }
+    function loadMore() {
+        if (!current || !current.repo) return
+        Polling.more(polling, current.repo, Date.now())
+        adopt()
+        pump()
+    }
     function pump() {
         if (!opened || workerBusy) return
         var request = Polling.next(polling, Date.now())
@@ -414,6 +420,7 @@ Item {
                     else if (event.key === Qt.Key_A) root.askAction("rerun")
                     else if (event.key === Qt.Key_F) root.askAction("rerun-failed")
                     else if (event.key === Qt.Key_C) root.askAction("cancel")
+                    else if (event.text === "m") root.loadMore()
                     else event.accepted = false
                 }
 

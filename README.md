@@ -120,7 +120,7 @@ For a symlink-managed or read-only `~/.config/omarchy/extensions/omarchy-menu.js
 
 No manual repository list is required. Opening the popup fetches every page of GitHub's authenticated `GET /user/repos` endpoint with owner, collaborator and organisation-member affiliations. This covers repositories associated with your account and visible to the current token, not every public repository on GitHub. Archived and disabled repositories remain searchable but are not polled for activity. Currently github.com only; local checkouts are not required.
 
-Press **/** and type an owner, repository name or description. Use **↑ / ↓** while typing to select a result, then **Enter** to expand it and resume navigation. **Tab** finishes editing without expanding. Repositories you have opened stay open while you type. Only runs already loaded are searched, plus each repository's name, description and running count: the note beside the search field reads “recent runs loaded for N of M repositories”, so other repositories match on name and description only. Rows read like `✕ 3h · 2 running`: the latest finished run on the default branch and its age, then the running count. Failing repositories (`failure`, `timed_out`, `startup_failure`) sort first, then those with running workflows, then the rest; a green result not confirmed for 30 minutes is marked `stale`, and a repository whose newest 30 runs are all on other branches reads `no result`. Unchecked repositories say **not checked**. A status line under the search field always shows errors, a GitHub pause with its end time, or scan progress, and the remaining API requests (with the reset time when few are left). Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
+Press **/** and type an owner, repository name or description. Use **↑ / ↓** while typing to select a result, then **Enter** to expand it and resume navigation. **Tab** finishes editing without expanding. Repositories you have opened stay open while you type. Three tokens narrow runs: `branch:<text>`, `actor:<text>` and `is:failed` (case-insensitive; all of them and any plain text must match, and a repository shows only if one loaded run matches every token). Tokens filter only the runs the panel already holds, so an unchecked repository never matches them; press **m** on a repository to load 30 more runs first. An unknown prefix such as `is:open` or an empty `branch:` is plain text. Only runs already loaded are searched, plus each repository's name, description and running count: the note beside the search field reads “recent runs loaded for N of M repositories”, so other repositories match on name and description only. Rows read like `✕ 3h · 2 running`: the latest finished run on the default branch and its age, then the running count. Failing repositories (`failure`, `timed_out`, `startup_failure`) sort first, then those with running workflows, then the rest; a green result not confirmed for 30 minutes is marked `stale`, and a repository whose newest 30 runs are all on other branches reads `no result`. Unchecked repositories say **not checked**. A status line under the search field always shows errors, a GitHub pause with its end time, or scan progress, and the remaining API requests (with the reset time when few are left). Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
 
 The catalogue and known activity stay in memory between openings. After `TIMING.catalogue`, reopening refreshes the repository catalogue; **Shift + R** refreshes it immediately when you gain access to another repository.
 
@@ -139,13 +139,14 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | Click | Select a row and expand or collapse it, like Enter |
 | Page Up / Down | Move one screenful |
 | Home / End, g / G | First or last row |
-| / | Filter repositories/runs by name, branch or state |
+| / | Filter repositories/runs by name, branch or state; `branch:x`, `actor:x`, `is:failed` |
 | ↑ / ↓ while filtering | Select a search result |
 | Enter while filtering | Expand selected result and resume navigation |
 | Tab while filtering | Resume navigation without expanding |
 | Esc | Clear filter, then close |
 | r | Refresh summaries and selected expanded run |
 | Shift + R | Rediscover repositories from GitHub |
+| m | Load 30 more recent runs (up to 100) for the selected repository |
 | o | Open selected repository/run/job on GitHub |
 | y | Copy the selected row's link (needs `wl-copy`) |
 | ? | Show this key list |

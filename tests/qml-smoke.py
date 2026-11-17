@@ -291,7 +291,13 @@ ShellRoot {
                 panel.copyLink()
                 check(panel.notice==="Nothing to copy","more row has no copyable link")
                 panel.polling.repos[0].hidden={}
+                panel.polling.repos[0].recentFetched=10
                 panel.adopt()
+                at("repo:one/repo")
+                // Polling.more() waits while a summary is queued for the repo (step 9); clear it so m is tested alone.
+                delete panel.polling.tasks["summary:one/repo:"]
+                panel.loadMore()
+                check(!!(panel.polling.tasks["more:one/repo:"] || (panel.polling.flight && panel.polling.flight.key === "more:one/repo:")),"m queues one more task")
                 at(selected)
                 copyChecked=true
                 stage=1
