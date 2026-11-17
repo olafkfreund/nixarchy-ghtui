@@ -1,33 +1,28 @@
-"""Exercise the real QML worker with a temporary fake API; no live GitHub requests."""
+"""Exercise the real QML worker with a temporary fake API in a private headless sway; no live GitHub requests."""
 import argparse
 import json
 import os
 from pathlib import Path
+import queue
 import shutil
 import subprocess
 import tempfile
-import tomllib
+import threading
+import time
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('plugin_dir', nargs='?', type=Path, default=Path(__file__).resolve().parents[1])
 source = parser.parse_args().plugin_dir.resolve()
-quickshell = shutil.which('quickshell')
 required = ('manifest.json', 'ActionsPanel.qml', 'ActionsModel.js', 'Polling.js',
             'actions.py', 'menu.py', 'menu.example.json', 'keybindings.sh')
 if not source.is_dir() or any(not (source / name).is_file() for name in required):
     parser.error('plugin_dir must contain the complete GitHub Actions plugin')
-shell = Path(os.environ['OMARCHY_PATH']) / 'shell'
-colors = tomllib.loads((Path.home() / '.local/state/omarchy/current/theme/colors.toml').read_text())
-for scenario in ('fresh', 'managed'):
-    with tempfile.TemporaryDirectory(prefix='actions-qml-') as directory:
-        root = Path(directory)
-        for name in ('Commons', 'Ui'):
-            (root / name).symlink_to(shell / name)
-        for name in ('ActionsPanel.qml', 'ActionsModel.js', 'Polling.js', 'menu.py', 'menu.example.json'):
-            (root / name).symlink_to(source / name)
-        # The fake replies with ~200 KiB (over the 64 KiB pipe buffer) in 4 KiB chunks and exits at once,
-        # so every run checks that a reply written right before exit reaches the panel whole (#36).
-        (root / 'actions.py').write_text('''import json, os, sys, time
+QUICKSHELL = shutil.which('quickshell')
+STUB_BACKGROUND = '#101315'
+
+# The fake replies with ~200 KiB (over the 64 KiB pipe buffer) in 4 KiB chunks and exits at once,
+# so every run checks that a reply written right before exit reaches the panel whole (#36).
+FAKE = '''import json, os, signal, sys, time
 request=json.loads(sys.argv[2])
 if sys.argv[1]=='act':
     open(os.environ['HOME']+'/act.log','a').write(sys.argv[2]+'\\n')
@@ -41,47 +36,28 @@ if sys.argv[1]=='log':
     os.write(1,(json.dumps({'requestId':request['requestId'],'data':{'path':path,'mode':'failed','cutShort':False,'lineCut':False},'error':'','errorType':'','remaining':4000})+'\\n').encode())
     os._exit(0)
 kind=request['kind']
+if os.environ.get('FAKE_LOG'):
+    with open(os.environ['FAKE_LOG'],'a') as log: log.write(json.dumps({'t':time.time(),'kind':kind,'repo':request.get('repo',''),'run':str(request.get('run','')),'status':request.get('status','')})+'\\n')
+if os.environ.get('FAKE_MODE')=='block':
+    with open(os.environ['FAKE_PID'],'w') as pid: pid.write(str(os.getpid()))
+    signal.pause()
 if os.path.exists(os.environ['HOME']+'/run-done'): open(os.environ['HOME']+'/closed-kinds.log','a').write(kind+'\\n')
 time.sleep(0.1)
 run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1,'html_url':'https://github.com/one/repo/actions/runs/7'}
+started=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(time.time()-5))
+runs=[run] if not os.environ.get('FAKE_RUNS') else [dict(run,id=i,run_number=i,run_started_at=started,html_url='https://github.com/one/repo/actions/runs/%d'%i) for i in range(7,7+int(os.environ['FAKE_RUNS']))]
 if kind=='catalogue': data=[{'repo':'one/repo'},{'repo':'two/repo'}]
 elif kind=='jobs': data=[{'id':8,'name':'build','status':'in_progress','html_url':'https://github.com/one/repo/actions/runs/7/job/8','steps':[{'number':1,'name':'Checkout','status':'completed','conclusion':'success'}]}]
-elif kind=='run': data=dict(run,status='completed',conclusion='success') if os.path.exists(os.environ['HOME']+'/run-done') else run
+elif kind=='run': data=dict(run,status='completed',conclusion='success') if os.path.exists(os.environ['HOME']+'/run-done') else runs[0]
 elif kind=='account': data={'login':'tester'}
-else: data=[run] if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
+else: data=runs if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
 reply=json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':'','errorType':'','remaining':4000,'padding':'x'*200000}).encode()+b'\\n'
 for i in range(0,len(reply),4096): os.write(1,reply[i:i+4096])
 os._exit(0)
-''')
-        home = root / 'home'
-        home.mkdir()
-        bin_dir = root / 'bin'
-        bin_dir.mkdir()
-        (bin_dir / 'python3').symlink_to(shutil.which('python3'))
-        # Stubs record their argv, one argument per line; the test never launches a terminal or notification.
-        for stub in ('omarchy-launch-tui', 'notify-send'):
-            (bin_dir / stub).write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >> "$HOME/' + stub + '.log"\n')
-            (bin_dir / stub).chmod(0o755)
-        if scenario == 'fresh':
-            (bin_dir / 'wl-copy').write_text('''#!/bin/sh
-printf '%s\\n' "$*" >> "$HOME/wl-copy.log"
-sleep 0.6
-if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
-''')
-            (bin_dir / 'wl-copy').chmod(0o755)
-        theme = home / '.local/state/omarchy/current/theme'
-        theme.parent.mkdir(parents=True)
-        theme.symlink_to(Path.home() / '.local/state/omarchy/current/theme')
-        (home / '.config').mkdir()
-        (home / '.config/fontconfig').symlink_to(Path.home() / '.config/fontconfig')
-        (home / '.config/omarchy').mkdir()
-        (home / '.config/omarchy/shell.toml').symlink_to(Path.home() / '.config/omarchy/shell.toml')
-        menu_path = home / '.config/omarchy/extensions/omarchy-menu.jsonc'
-        if scenario == 'managed':
-            menu_path.parent.mkdir(parents=True)
-            (home / 'managed-menu').write_text('{}\n')
-            menu_path.symlink_to(home / 'managed-menu')
-        (root / 'shell.qml').write_text('''
+'''
+
+# Programmatic feature checks (#41-#48): they call panel functions directly (plan deviation 3).
+FEATURES_QML = '''
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -99,7 +75,7 @@ ShellRoot {
         onFileChanged: reload()
     }
     Timer {
-        interval: 22000; running: true
+        interval: 40000; running: true
         onTriggered: {
             var missing = stage === 1 ? [panel.polling.requests>=6 ? "" : "requests>=6", panel.details["one/repo:7"] ? "" : "jobs one/repo:7",
                 panel.polling.catalogueComplete ? "" : "catalogueComplete"].filter(Boolean).join(",") : ""
@@ -546,28 +522,510 @@ ShellRoot {
         }
     }
 }
-''')
+'''
+
+# Key run: the panel is driven only by real key presses; QML just reports its state.
+KEYS_QML = '''
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import qs.Commons as Commons
+ShellRoot {
+    ActionsPanel { id: panel }
+    FileView {
+        id: menuFile
+        path: Quickshell.env("HOME") + "/.config/omarchy/extensions/omarchy-menu.jsonc"
+        watchChanges: true
+        blockLoading: true
+        printErrors: false
+        onFileChanged: reload()
+    }
+    property int seq: 0
+    property string previous: ""
+    property bool seeded: false
+    Timer {
+        interval: 50; running: true; repeat: true
+        onTriggered: {
+            if (!seeded) {
+                menuFile.reload()
+                if (Quickshell.env("MENU_SCENARIO") === "fresh" && menuFile.text().indexOf('"apps.github-actions"') < 0) return
+                if (panel.opened || panel.polling.requests !== 0) throw new Error("registration opened or polled")
+                seeded = true
+                panel.polling.repos = [{repo:"one/repo"},{repo:"two/repo"}]
+                panel.adopt()
+                panel.open()
+            }
+            var state = Object.assign(JSON.parse(panel.status()), {
+                cursor: panel.cursor, info: panel.current ? panel.current.info : "",
+                auth: panel.polling.auth, layout: JSON.parse(panel.layout()),
+                stubBackground: Commons.Color.background.toString()
+            })
+            var body = JSON.stringify(state)
+            if (body !== previous) {
+                previous = body
+                state.seq = ++seq
+                state.t = Date.now() / 1000
+                console.log("STATE " + JSON.stringify(state))
+            }
+        }
+    }
+}
+'''
+
+
+def collect(proc, lines, states=None):
+    def read():
+        for line in proc.stdout:
+            lines.append(line.rstrip())
+            if states is not None and 'STATE ' in line:
+                try:
+                    states.put(json.loads(line.split('STATE ', 1)[1]))
+                except json.JSONDecodeError:
+                    pass
+    threading.Thread(target=read, daemon=True).start()
+
+
+def stop(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
         try:
-            result=subprocess.run([quickshell,'-p',str(root),'--no-color'],capture_output=True,text=True,timeout=30,
-                                  env={**os.environ, 'PATH':str(bin_dir) + (os.pathsep + os.environ['PATH'] if scenario == 'fresh' else ''), 'HOME':str(home), 'MENU_SCENARIO':scenario, 'EXPECTED_BACKGROUND':colors['background'].lower()})
-        except subprocess.TimeoutExpired as error:
-            print(error.stdout, error.stderr)
-            raise
-        output=result.stdout+result.stderr
-        print(output)
-        if result.returncode or 'QML_CHECKS_PASSED' not in output or any(term in output for term in ('ERROR:', 'ReferenceError','TypeError','CHECK FAILED')):
-            raise SystemExit('QML smoke check failed')
-        assert len((home / 'log-req.log').read_text().splitlines()) == 1
-        assert (home / 'omarchy-launch-tui.log').read_text().splitlines() == ['--app-id=org.omarchy.github-actions-log', 'python3', str(root / 'actions.py'), 'view', str(home / 'fake-log.txt')], (home / 'omarchy-launch-tui.log').read_text()
-        assert (home / 'notify-send.log').read_text().splitlines() == ['--app-name=GitHub Actions', '--', 'succeeded', 'one/repo · CI'], (home / 'notify-send.log').read_text()
-        assert (home / 'closed-kinds.log').read_text().splitlines() == ['run'], (home / 'closed-kinds.log').read_text()
-        sent = [json.loads(line) for line in (home / 'act.log').read_text().splitlines()]
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def start_session(home, path, deadline):
+    directory = Path(tempfile.mkdtemp(prefix='actions-sway-'))
+    os.chmod(directory, 0o700)
+    conf = directory / 'sway.conf'
+    conf.write_text('output HEADLESS-1 resolution 1280x720 position 0 0\n')
+    env = {'XDG_RUNTIME_DIR': str(directory), 'HOME': str(home), 'PATH': path,
+           'WLR_BACKENDS': 'headless', 'WLR_RENDERER': 'pixman',
+           'WLR_LIBINPUT_NO_DEVICES': '1'}
+    sway_lines = []
+    sway = None
+    try:
+        sway = subprocess.Popen(['sway', '-c', str(conf)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        collect(sway, sway_lines)
+        while time.monotonic() < deadline:
+            wayland = [p for p in directory.glob('wayland-*') if p.is_socket()]
+            ipc = [p for p in directory.glob('sway-ipc.*.sock') if p.is_socket()]
+            if wayland and ipc:
+                for socket in (wayland[0], ipc[0]):
+                    if socket.resolve().parent != directory.resolve():
+                        raise RuntimeError('refusing to run: compositor socket outside the private directory')
+                child_env = {**env, 'WAYLAND_DISPLAY': wayland[0].name,
+                             'QT_QPA_PLATFORM': 'wayland', 'QT_QUICK_BACKEND': 'software'}
+                return directory, sway, sway_lines, ipc[0], child_env
+            if sway.poll() is not None:
+                break
+            time.sleep(0.05)
+        raise RuntimeError('timeout starting private sway: ' + '\n'.join(sway_lines[-30:]))
+    except BaseException:
+        stop(sway)
+        shutil.rmtree(directory)
+        raise
+
+
+def layout_error(state):
+    lay, rows = state['layout'], state['rows']
+    if rows <= 0:
+        return None
+    if not (lay['listWidth'] > 0 and lay['listHeight'] > 0):
+        return 'layout: empty (zero-size) list'
+    if lay['count'] != rows:
+        return f"layout: list count {lay['count']} != rows {rows}"
+    mine = [r for r in lay['rows'] if r['key'] == state['selected']]
+    if not mine:
+        return 'layout: selected row has no delegate'
+    r = mine[0]
+    if not (r['w'] > 0 and r['h'] > 0 and r['x'] >= 0 and r['x'] + r['w'] <= lay['listWidth']
+            and r['y'] >= -0.5 and r['y'] + r['h'] <= lay['listHeight'] + 0.5):
+        return f'layout: selected row outside the list: {r}'
+    ordered = sorted(lay['rows'], key=lambda row: row['i'])
+    for a, b in zip(ordered, ordered[1:]):
+        if a['y'] + a['h'] > b['y'] + 0.5:
+            return f'layout: rows overlap: {a} {b}'
+    return None
+
+
+def check_layout(state, fail):
+    error = layout_error(state)
+    if error:
+        fail(error)
+
+
+def read_log(path):
+    """The fake's request log; a last line still being written is skipped."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    entries = []
+    for i, line in enumerate(lines):
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            if i != len(lines) - 1:
+                raise
+    return entries
+
+
+WALK_ROWS = 27  # one/repo, its 25 runs, two/repo
+TIMELINE = []  # key run: when each stage was scheduled and when its state matched
+
+
+def K(*names):
+    return [arg for name in names for arg in ('-k', name)]
+
+
+def CTRL(name):
+    return ['-M', 'ctrl', '-k', name, '-m', 'ctrl']
+
+
+for scenario in ('fresh', 'managed'):
+    deadline = time.monotonic() + 150
+    with tempfile.TemporaryDirectory(prefix='actions-qml-') as temporary:
+        root = Path(temporary)
+        stubs = Path(__file__).resolve().parent / 'stubs'
+        for name in ('Commons', 'Ui'):
+            (root / name).symlink_to(stubs / name)
+        for name in ('ActionsPanel.qml', 'ActionsModel.js', 'Polling.js', 'menu.py', 'menu.example.json'):
+            (root / name).symlink_to(source / name)
+        (root / 'actions.py').write_text(FAKE)
+        home = root / 'home'
+        home.mkdir()
+        bin_dir = root / 'bin'
+        bin_dir.mkdir()
+        (bin_dir / 'python3').symlink_to(shutil.which('python3'))
+        # Stubs record their argv, one argument per line; the test never launches a terminal or notification.
+        for stub in ('omarchy-launch-tui', 'notify-send'):
+            (bin_dir / stub).write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >> "$HOME/' + stub + '.log"\n')
+            (bin_dir / stub).chmod(0o755)
         if scenario == 'fresh':
-            assert (home / 'wl-copy.log').read_text().splitlines() == ['-- https://github.com/one/repo/actions/runs/7'] * 2
-        assert [(task['action'], task['repo'], task['run']) for task in sent] == [('cancel', 'one/repo', '7'), ('rerun', 'one/repo', '9')], sent
+            (bin_dir / 'wl-copy').write_text('''#!/bin/sh
+printf '%s\\n' "$*" >> "$HOME/wl-copy.log"
+sleep 0.6
+if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
+''')
+            (bin_dir / 'wl-copy').chmod(0o755)
+        menu_path = home / '.config/omarchy/extensions/omarchy-menu.jsonc'
         if scenario == 'managed':
-            assert 'GitHub Actions menu registration failed:' in output and 'Menu is managed:' in output
-            assert menu_path.is_symlink() and menu_path.read_text() == '{}\n'
-        else:
-            assert 'menu registration failed' not in output
-            assert '"apps.github-actions"' in menu_path.read_text()
+            menu_path.parent.mkdir(parents=True)
+            (home / 'managed-menu').write_text('{}\n')
+            menu_path.symlink_to(home / 'managed-menu')
+        session = None
+        sway_lines = []
+        try:
+            directory, session, sway_lines, ipc, base_env = start_session(home, os.environ['PATH'], deadline)
+            menu_path_env = {'MENU_SCENARIO': scenario}
+
+            # --- Run 1: programmatic feature checks ---
+            (root / 'shell.qml').write_text(FEATURES_QML)
+            env = {**base_env, **menu_path_env, 'EXPECTED_BACKGROUND': STUB_BACKGROUND,
+                   'PATH': str(bin_dir) + (os.pathsep + base_env['PATH'] if scenario == 'fresh' else '')}
+            try:
+                result = subprocess.run([QUICKSHELL, '-p', str(root), '--no-color'], capture_output=True, text=True,
+                                        timeout=50, env=env)
+            except subprocess.TimeoutExpired as error:
+                print(error.stdout, error.stderr, '\n'.join(sway_lines[-30:]))
+                raise
+            output = result.stdout + result.stderr
+            if result.returncode or 'QML_CHECKS_PASSED' not in output or any(
+                    term in output for term in ('ERROR:', 'ReferenceError', 'TypeError', 'CHECK FAILED')):
+                print(output)
+                raise SystemExit(f'{scenario}: QML feature checks failed')
+            assert len((home / 'log-req.log').read_text().splitlines()) == 1
+            assert (home / 'omarchy-launch-tui.log').read_text().splitlines() == ['--app-id=org.omarchy.github-actions-log', 'python3', str(root / 'actions.py'), 'view', str(home / 'fake-log.txt')], (home / 'omarchy-launch-tui.log').read_text()
+            assert (home / 'notify-send.log').read_text().splitlines() == ['--app-name=GitHub Actions', '--', 'succeeded', 'one/repo · CI'], (home / 'notify-send.log').read_text()
+            assert (home / 'closed-kinds.log').read_text().splitlines() == ['run'], (home / 'closed-kinds.log').read_text()
+            sent = [json.loads(line) for line in (home / 'act.log').read_text().splitlines()]
+            if scenario == 'fresh':
+                assert (home / 'wl-copy.log').read_text().splitlines() == ['-- https://github.com/one/repo/actions/runs/7'] * 2
+            assert [(task['action'], task['repo'], task['run']) for task in sent] == [('cancel', 'one/repo', '7'), ('rerun', 'one/repo', '9')], sent
+            if scenario == 'managed':
+                assert 'GitHub Actions menu registration failed:' in output and 'Menu is managed:' in output
+                assert menu_path.is_symlink() and menu_path.read_text() == '{}\n'
+            else:
+                assert 'menu registration failed' not in output
+                assert '"apps.github-actions"' in menu_path.read_text()
+            (home / 'run-done').unlink(missing_ok=True)
+            print(f'{scenario}: feature checks passed')
+
+            # --- Run 2 (and failure runs): real key presses ---
+            (root / 'shell.qml').write_text(KEYS_QML)
+
+            def run_keys(label, extra_env, body):
+                TIMELINE.clear()
+                shell_lines = []
+                states = queue.Queue()
+                last = [None]
+                env = {**base_env, **menu_path_env, 'PATH': str(bin_dir) + os.pathsep + base_env['PATH'], **extra_env}
+                proc = subprocess.Popen([QUICKSHELL, '-p', str(root), '--no-color'], env=env,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                collect(proc, shell_lines, states)
+
+                def fail(what):
+                    raise AssertionError(f'{scenario}/{label}: {what}; last state={last[0]!r}\n'
+                                         f'sway output:\n{chr(10).join(sway_lines[-30:])}\n'
+                                         f'quickshell output:\n{chr(10).join(shell_lines[-40:])}'
+                                         + ('\nkey timeline (scheduled vs matched):\n' + '\n'.join(TIMELINE) if TIMELINE else ''))
+
+                def wait_state(what, pred, after_seq=0, timeout=10):
+                    end = min(deadline, time.monotonic() + timeout)
+                    while time.monotonic() < end:
+                        try:
+                            state = states.get(timeout=0.1)
+                        except queue.Empty:
+                            if proc.poll() is not None:
+                                fail(what + ': quickshell exited')
+                            continue
+                        last[0] = state
+                        if state['seq'] > after_seq and pred(state):
+                            return state
+                    fail(what + ': timeout')
+
+                try:
+                    body(env, wait_state, fail, last, states)
+                finally:
+                    stop(proc)
+                return shell_lines
+
+            def main_keys(env, wait_state, fail, last, states):
+                steady = wait_state('stubs load', lambda s: s['stubBackground'] == STUB_BACKGROUND and s['opened']
+                                    and s['rows'] == 2 and s['selected'] == 'repo:one/repo' and s['requests'] >= 2
+                                    and not s['inFlight'] and s['layout']['listHeight'] > 0, timeout=20)
+                print(f'{scenario}: stubs load')
+                # get_tree may omit layer-shell surfaces; the probe key transition is the focus check.
+                subprocess.run(['swaymsg', '-s', str(ipc), '-t', 'get_tree'], env=env, capture_output=True,
+                               text=True, timeout=3)
+                one, two = 'repo:one/repo', 'repo:two/repo'
+                sel = lambda key: lambda p, s: s['selected'] == key
+                steps = [
+                    ('readiness: probe j', K('j'), lambda p, s: s['cursor'] == 1 and s['selected'] == two, 500),
+                    ('readiness: probe k', K('k'), lambda p, s: s['cursor'] == 0 and s['selected'] == one, 2000),
+                    # r and R change no state line by themselves; the request log checks them after the run.
+                    ('r', K('r'), None, 1500),
+                    ('R', ['-M', 'shift', '-k', 'r', '-m', 'shift'], None, 1500),
+                    ('Down', K('Down'), sel(two), 400),
+                    ('Up', K('Up'), sel(one), 400),
+                    ('End', K('End'), sel(two), 400),
+                    ('Home', K('Home'), sel(one), 400),
+                    ('Right', K('Right'), lambda p, s: s['rows'] > 2 and s['selected'] == one, 500),
+                    ('Left', K('Left'), lambda p, s: s['rows'] == 2 and s['selected'] == one, 500),
+                    ('Return', K('Return'), lambda p, s: s['rows'] > 2 and s['selected'] == one, 500),
+                    ('Left again', K('Left'), lambda p, s: s['rows'] == 2, 500),
+                    ('/', K('slash'), lambda p, s: s['editing'], 400),
+                    ('type one', K('o', 'n', 'e'), lambda p, s: s['filter'] == 'one' and s['editing'], 400),
+                    ('Escape in search', K('Escape'), lambda p, s: s['filter'] == '' and not s['editing'] and s['opened'], 400),
+                    ('/ one Return', K('slash', 'o', 'n', 'e', 'Return'),
+                     lambda p, s: s['filter'] == 'one' and not s['editing'] and s['rows'] > 1, 500),
+                    ('Escape with filter', K('Escape'), lambda p, s: s['filter'] == '' and s['opened'] and s['rows'] > 2, 500),
+                    ('Ctrl+=', CTRL('equal'), lambda p, s: s['textStep'] == 1, 500),
+                    ('Ctrl+0', CTRL('0'), lambda p, s: s['textStep'] == 0, 500),
+                    ('End before g', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1 and s['rows'] > 2, 300),
+                    ('g', K('g'), lambda p, s: s['cursor'] == 0, 300),
+                    ('walk j', [], None, 150),
+                    ('Home after walk', K('Home'), lambda p, s: s['cursor'] == 0, 400),
+                    ('End after walk', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1
+                     and s['layout']['contentHeight'] > s['layout']['listHeight'] and s['scrollY'] > 0, 400),
+                    ('Home before G', K('Home'), lambda p, s: s['cursor'] == 0, 400),
+                    # wtype's -k G types "g" (case-insensitive name, one-level keymap); text mode types "G".
+                    # Keep it the only text argument: wtype prefixes later text arguments with a space.
+                    ('G', ['G'], lambda p, s: s['cursor'] == s['rows'] - 1, 400),
+                    ('j to run', K('g', 'j'), lambda p, s: s['cursor'] == 1 and s['selected'].startswith('one/repo:'), 400),
+                    ('Return on run', K('Return'), lambda p, s: s['rows'] > p['rows'] and s['selected'] == p['selected'], 4500),
+                    ('Escape closes', K('Escape'), lambda p, s: not s['opened'], 2000),
+                ]
+                # Plan step 4: r must not land inside the opening summary chain (its pages run 1 s apart),
+                # so start typing once that chain has finished and the request log is quiet.
+                log_path = root / 'fake.log'
+                end = time.monotonic() + 30
+                while True:
+                    entries = read_log(log_path)
+                    done = any(e['kind'] == 'summary' and e['status'] == 'requested' for e in entries)
+                    if done and time.time() - entries[-1]['t'] >= 1.5:
+                        break
+                    if time.monotonic() > end:
+                        fail('opening summary chain did not finish')
+                    time.sleep(0.2)
+                while True:
+                    try:
+                        last[0] = states.get_nowait()
+                    except queue.Empty:
+                        break
+                steady = last[0]
+                if steady['inFlight'] or steady['selected'] != 'repo:one/repo' or steady['rows'] != 2:
+                    steady = wait_state('steady after opening chain', lambda s: not s['inFlight'] and s['rows'] == 2
+                                        and s['selected'] == 'repo:one/repo', steady['seq'] - 1, timeout=5)
+                assert len({step[0] for step in steps}) == len(steps), 'stage labels must be unique'
+                # One wtype for the whole run: one virtual keyboard and one keymap (plan: option B).
+                # The walk sends exactly one j per move from the top to the last of the 27 rows,
+                # so a lost key leaves the cursor short of the last row.
+                argv = ['wtype', '-s', '300']
+                times, offset = {}, 0.3
+                for label, keys, pred, pause in steps:
+                    times[label] = offset
+                    if label == 'walk j':
+                        for _ in range(WALK_ROWS - 1):
+                            argv += ['-k', 'j', '-s', str(pause)]
+                            offset += pause / 1000
+                    else:
+                        argv += keys + ['-s', str(pause)]
+                        offset += sum(int(keys[i + 1]) for i in range(len(keys)) if keys[i] == '-s') / 1000 + pause / 1000
+                start = time.time()
+                TIMELINE.clear()
+                typist = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                try:
+                    prev = steady
+                    for label, keys, pred, pause in steps:
+                        if label == 'walk j':
+                            cur = prev
+                            while cur['cursor'] < cur['rows'] - 1:
+                                # Two presses can land between 50 ms samples, so any forward move counts.
+                                nxt = wait_state('key walk j', lambda s, c=cur: s['cursor'] != c['cursor']
+                                                 or s['layout'] != c['layout'], cur['seq'], timeout=3)
+                                if nxt['cursor'] < cur['cursor']:
+                                    fail(f"key walk j: cursor went back {cur['cursor']} -> {nxt['cursor']}")
+                                check_layout(nxt, fail)
+                                cur = nxt
+                            if cur['rows'] != WALK_ROWS or cur['cursor'] != WALK_ROWS - 1:
+                                fail(f"walk: ended on row {cur['cursor']} of {cur['rows']}; expected the last of {WALK_ROWS} "
+                                     "(two repositories and the expanded repository's 25 runs)")
+                            prev = cur
+                            print(f'{scenario}: key walk j: {cur["rows"]} rows, layout checked on each')
+                            continue
+                        if pred is None:
+                            TIMELINE.append(f'{label}: sent ~{times[label]:.1f}s, checked in the request log')
+                            print(f'{scenario}: key {label} sent')
+                            continue
+                        prev = wait_state(f'key {label}', lambda s, p=prev, f=pred: f(p, s), prev['seq'],
+                                          timeout=max(times[label] - (time.time() - start) + 6, 2))
+                        if label.startswith('Ctrl+') and layout_error(prev):
+                            # A size change relayouts on the next frame (Qt.callLater); judge the settled state.
+                            step, first = prev['textStep'], layout_error(prev)
+                            try:
+                                prev = wait_state(f'key {label}: settled layout', lambda s: s['textStep'] == step
+                                                  and not layout_error(s), prev['seq'], timeout=2)
+                            except AssertionError:
+                                fail(first)
+                        check_layout(prev, fail)
+                        # Open loop: a dead key shows up as a later stage failing; the timeline says which key it was.
+                        TIMELINE.append(f"{label}: sent ~{times[label]:.1f}s, matched {prev['t'] - start:.1f}s")
+                        print(f'{scenario}: key {label}')
+                        if label == 'Return on run':
+                            run_key, opened = prev['selected'], prev
+                            # Jobs arrived: the job row replaced "Loading jobs…" (the Return state may already show it).
+                            arrived = lambda s: s['error'] == '' and any(r['key'] == run_key + ':8' for r in s['layout']['rows']) \
+                                and not any(r['key'] == run_key + ':message' for r in s['layout']['rows'])
+                            if not arrived(opened):
+                                opened = wait_state('jobs arrive under the run', arrived, opened['seq'], timeout=5)
+                            check_layout(opened, fail)
+                            # Duration tick: the selected run's info changes while selection and scroll stay.
+                            ticked = wait_state('running duration ticks', lambda s: s['selected'] == run_key
+                                                and s['scrollY'] == opened['scrollY'] and s['info'] != opened['info']
+                                                and s['t'] - opened['t'] >= 1, opened['seq'], timeout=5)
+                            prev = ticked
+                    closed = prev
+                    time.sleep(6)  # longer than the 5 s jobs interval, the shortest polling interval
+                    while True:
+                        try:
+                            last[0] = states.get_nowait()
+                        except queue.Empty:
+                            break
+                except AssertionError as error:
+                    stop(typist)
+                    raise AssertionError(f'{error}\nwtype exit={typist.returncode} output:\n{typist.stdout.read()}') from None
+                finally:
+                    stop(typist)
+                if typist.returncode != 0:
+                    fail(f'wtype exit {typist.returncode}: {typist.stdout.read()}')
+                log = read_log(root / 'fake.log')
+                # A summary is a chain of pages; only its first page (status "recent") marks a new summary.
+                chain = lambda e: e['kind'] == 'summary' and e['repo'] == 'one/repo' and e['status'] == 'recent'
+                for label, match in (('r', chain), ('R', lambda e: e['kind'] == 'catalogue')):
+                    t0 = start + times[label]
+                    if not any(match(e) and t0 - 0.1 <= e['t'] <= t0 + 5 for e in log):
+                        fail(f'key {label}: expected a new request within 5 s of the key; log={log[-12:]}')
+                t0 = start + times['r']
+                # Automatic summaries come 60 s apart, so one started in the 55 s before r rules them out of the window.
+                if not any(chain(e) and t0 - 55 <= e['t'] < t0 - 0.1 for e in log):
+                    fail('key r: no summary started before r, so an automatic one could explain the window')
+                run_id = run_key.split(':')[-1]
+                if not any(e['kind'] == 'jobs' and e['run'] == run_id for e in log):
+                    fail(f'jobs for run {run_id} were never requested; log={log[-12:]}')
+                if any(e['t'] > closed['t'] + 0.5 for e in log):
+                    fail(f'closed panel started requests: {[e for e in log if e["t"] > closed["t"] + 0.5]}')
+                if last[0]['requests'] != closed['requests'] or last[0]['opened']:
+                    fail('closed panel changed its request count or reopened')
+                print(f'{scenario}: refresh keys, jobs, duration tick and close checked')
+
+            shell_lines = run_keys('keys', {'FAKE_LOG': str(root / 'fake.log'), 'FAKE_RUNS': '25'}, main_keys)
+            if scenario == 'managed':
+                assert any('GitHub Actions menu registration failed:' in line and 'Menu is managed:' in line
+                           for line in shell_lines)
+            if scenario == 'fresh':
+                def settle(states, last, seconds):
+                    time.sleep(seconds)
+                    while True:
+                        try:
+                            last[0] = states.get_nowait()
+                        except queue.Empty:
+                            return last[0]
+
+                def no_python(env, wait_state, fail, last, states):
+                    seen = wait_state('helper cannot start', lambda s: s['opened'] and s['error'] == 'python3 not found'
+                                      and not s['inFlight'] and s['auth'], timeout=15)
+                    if settle(states, last, 2)['requests'] != seen['requests']:
+                        fail('requests kept rising after the helper failed to start')
+                    print('fresh: failure: helper cannot start')
+                empty_bin = root / 'empty-bin'
+                empty_bin.mkdir()
+                run_keys('no python3', {'PATH': str(empty_bin)}, no_python)
+
+                pid_file = root / 'fake.pid'
+
+                def read_pid():
+                    try:
+                        return int(pid_file.read_text())
+                    except (FileNotFoundError, ValueError):
+                        return None  # not written yet, or half written
+
+                def blocked(env, wait_state, fail, last, states):
+                    busy = wait_state('request in flight', lambda s: s['opened'] and s['inFlight'] and read_pid() is not None, timeout=15)
+                    pid = read_pid()
+                    typed = subprocess.run(['wtype', '-s', '300', '-k', 'Escape'], env=env, timeout=10,
+                                           capture_output=True, text=True)
+                    if typed.returncode:
+                        fail(f'wtype exit {typed.returncode}: {typed.stdout}{typed.stderr}')
+                    shut = wait_state('Escape closes during a request', lambda s: not s['opened'] and not s['inFlight'], busy['seq'])
+                    end = time.monotonic() + 3
+                    while time.monotonic() < end:
+                        try:
+                            os.kill(pid, 0)
+                        except ProcessLookupError:
+                            break
+                        time.sleep(0.05)
+                    else:
+                        fail(f'helper {pid} still running after close')
+                    pid_file.unlink()  # dead: never signal a pid that may be reused
+                    if settle(states, last, 6)['requests'] != shut['requests']:
+                        fail('closed panel started requests')
+                    print('fresh: failure: close while a request runs')
+                try:
+                    run_keys('close during request', {'FAKE_MODE': 'block', 'FAKE_PID': str(pid_file),
+                                                      'FAKE_LOG': str(root / 'block.log')}, blocked)
+                finally:
+                    # The file is unlinked once the helper is seen dead; a live blocked helper is always killed.
+                    end = time.monotonic() + 1
+                    while pid_file.exists() and read_pid() is None and time.monotonic() < end:
+                        time.sleep(0.05)
+                    if read_pid() is not None:
+                        try:
+                            os.kill(read_pid(), 9)
+                        except ProcessLookupError:
+                            pass
+            print('QML_CHECKS_PASSED')
+        finally:
+            stop(session)
+            if session is not None:
+                shutil.rmtree(directory)

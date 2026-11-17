@@ -108,6 +108,11 @@ Item {
             action: actionText, actionBusy: actionBusy,
             confirm: confirm ? {action: confirm.action, repo: confirm.repo, run: confirm.run} : null})
     }
+    function layout() {  // test hook: geometry of the delegates that exist
+        var rows = []
+        for (var i = 0; i < list.count; i++) { var item = list.itemAtIndex(i); if (item) rows.push({i: i, key: entries[i].key, x: item.x, y: item.y - list.contentY, w: item.width, h: item.height}) }
+        return JSON.stringify({listWidth: list.width, listHeight: list.height, contentHeight: list.contentHeight, count: list.count, rows: rows})
+    }
 
     function rebuild(resetSelection) {
         var key = current ? current.key : ""
