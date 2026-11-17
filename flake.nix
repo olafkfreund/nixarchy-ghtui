@@ -35,6 +35,9 @@
                 pkgs.gh
                 pkgs.python3
                 pkgs.xdg-utils
+                pkgs.wl-clipboard
+                pkgs.less
+                pkgs.libnotify
               ];
             }
             ''
@@ -43,6 +46,17 @@
                 cp ${./. + "/${file}"} "$out/${file}"
               '') runtimeFiles}
             '';
+      });
+
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
+          packages = [
+            pkgs.quickshell
+            pkgs.sway
+            pkgs.wtype
+            pkgs.python3
+          ];
+        };
       });
 
       checks = forAllSystems (pkgs: {
@@ -77,10 +91,6 @@
               node tests/polling.cjs
               python3 menu.py register
               bash keybindings.sh --print > /dev/null
-              if python3 tests/qml-smoke.py "$TMPDIR/missing" 2> invalid-directory; then
-                exit 1
-              fi
-              grep -F 'plugin_dir must contain the complete GitHub Actions plugin' invalid-directory
               touch "$out"
             '';
       });

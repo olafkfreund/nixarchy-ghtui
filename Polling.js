@@ -1,16 +1,22 @@
 // One page at a time; all time is injected so scheduling can be tested without Qt.
 var phases = ["recent", "in_progress", "queued", "waiting", "pending", "requested"];
+var ACTIVITY_PAGE = 30; // Must match actions.py's activity per_page=30.
 var TIMING = {settle:250, catalogue:300000, summary:60000, selected:10000, active:15000,
     idle:600000, followup:15000, jobs:5000, window:60000, perWindow:60, gap:1000,
-    rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000};
+    rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000, quotaEase:1000, quotaTight:300, watch:30000};
 function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
-        stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true,
-        error:"", requests:0, lastRequest:"", lastStarted:0};
+        stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true, catalogueBlocked:"",
+        account:"", accountChecked:false, remaining:null, resetAt:0, error:"", log:null, watches:{}, notices:[], paused:false,
+        requests:0, lastRequest:"", lastStarted:0};
 }
 function key(kind, repo, run) { return kind + ":" + (repo || "") + ":" + (run || ""); }
 function age(at, interval) { return at === undefined ? -Infinity : at + interval; }
+function pace(s, now) {
+    if (typeof s.remaining!=="number" || now>=s.resetAt || s.remaining>=TIMING.quotaEase) return 1;
+    return s.remaining>=TIMING.quotaTight ? 3 : 10;
+}
 function repoFor(s, name) { return s.repos.filter(function(r) { return r.repo === name })[0]; }
 function runFor(s, repo, id) {
     var r = repoFor(s, repo);
@@ -26,52 +32,107 @@ function ensure(s, kind, repo, run, group, due) {
     return t;
 }
 function open(s, now) {
-    s.opened = true; s.generation++; s.auth = false;
-    if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue) s.discover = true;
+    if (!s.opened) s.flight=null;
+    s.opened = true; s.generation++; s.auth = false; s.accountChecked = false;
+    s.paused=false;
+    if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
+    if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue*pace(s,now)) s.discover = true;
     s.stableAt = now;
 }
 function close(s) {
-    s.opened = false; s.generation++; s.tasks = {}; s.flight = null;
+    if (s.auth && hasWatches(s) && !s.paused) { s.notices.push({kind:"paused"}); s.paused=true; }
+    s.opened = false; s.generation++; s.tasks = {}; s.flight = null; s.log = null;
+}
+function hasWatches(s) { return Object.keys(s.watches).length>0; }
+function watch(s,repo,run,name,now) {
+    var id=repo+":"+run, task=key("run",repo,run);
+    if (s.watches[id]) {
+        delete s.watches[id];
+        if ((!s.flight || s.flight.key!==task) && !(s.opened && (runFor(s,repo,run)||{}).awaitingFinal)) delete s.tasks[task];
+        return "off";
+    }
+    if (Object.keys(s.watches).length>=5) return "full";
+    s.watches[id]={repo:repo,run:String(run),name:name,at:now};
+    return "on";
 }
 function select(s, repo, run, expanded, now, immediate) {
-    if (s.selected !== repo) s.stableAt = now + (immediate ? 0 : TIMING.settle);
+    if (s.selected !== repo) {
+        var previous=repoFor(s,s.selected);
+        if (previous) { delete previous.recentLimit; delete previous.recentFetched; }
+        s.stableAt = now + (immediate ? 0 : TIMING.settle);
+    }
     else if (immediate) s.stableAt = now;
     s.selected = repo || ""; s.inspected = String(run || ""); s.expanded = expanded || {};
 }
 function manual(s, now, catalogue) {
     s.auth = false;
+    if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
+    if (!s.accountChecked) {
+        var account=ensure(s,"account","","","interactive",now);
+        account.due=Math.min(account.due,now);
+    }
     if (catalogue) { s.discover = true; return; }
     var r = repoFor(s, s.selected);
     if (r) {
         r.blocked = false; r.error = ""; s.stableAt = now;
-        ensure(s, "summary", r.repo, "", "interactive", now);
+        if (!s.tasks[key("more",r.repo)]) {
+            var summary=ensure(s, "summary", r.repo, "", "interactive", now);
+            summary.due=Math.min(summary.due,now);
+        }
         if (s.inspected && s.expanded[r.repo + ":" + s.inspected]) {
             if (s.details[r.repo+":"+s.inspected]) s.details[r.repo+":"+s.inspected].unavailable=false;
-            ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
+            var jobs=ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
+            jobs.due=Math.min(jobs.due,now);
         }
     }
 }
+function more(s, repo, now) {
+    var r=repoFor(s,repo);
+    if (!r || s.tasks[key("more",repo)] || s.tasks[key("summary",repo)]) return false;
+    r.recentLimit=Math.min(100,(r.recentLimit || 10)+30);
+    ensure(s,"more",repo,"","interactive",now);
+    return true;
+}
+function requestLog(s,target,now) {
+    if (Object.keys(s.tasks).some(function(id) { return s.tasks[id].kind==="log" })) return false;
+    var t=ensure(s,"log",target.repo,target.run,"interactive",now);
+    t.job=target.job || ""; t.mode=target.mode;
+    return true;
+}
+function touch(s, repo, run, now) {
+    var t=ensure(s,"run",repo,run,"interactive",now);
+    t.due=now;
+    if (s.flight && s.flight.key===t.key) t.again=true;
+    var r=repoFor(s,repo);
+    if (r) delete r.summaryAt;
+}
 function seed(s, now) {
+    if (s.opened && !s.accountChecked) { ensure(s,"account","","","interactive",now); return; }
     Object.keys(s.tasks).forEach(function(id) {
         var t = s.tasks[id];
         if (s.flight && s.flight.key === id) return;
         var owner=repoFor(s,t.repo);
-        if (owner && owner.blocked) { delete s.tasks[id]; return; }
+        if (owner && owner.blocked && t.kind!=="log") { delete s.tasks[id]; return; }
         if ((t.kind === "summary" && t.repo !== s.selected) ||
             (t.kind === "jobs" && (t.repo !== s.selected || t.run !== s.inspected || !s.expanded[t.repo + ":" + t.run])))
             delete s.tasks[id];
     });
+    Object.keys(s.watches).forEach(function(id) {
+        var w=s.watches[id];
+        ensure(s,"run",w.repo,w.run,"active",Math.max(age(w.at,TIMING.watch*pace(s,now)),age((runFor(s,w.repo,w.run)||{}).followupAt,TIMING.followup)));
+    });
+    if (!s.opened) return;
     if (s.discover) ensure(s, "catalogue", "", "", "background", now);
     var backgroundQueued=Object.keys(s.tasks).some(function(id) { var t=s.tasks[id]; return t.kind==="activity" && t.group==="background" });
     s.repos.slice().sort(function(a,b) { return (a.activityAt === undefined ? -Infinity : a.activityAt) - (b.activityAt === undefined ? -Infinity : b.activityAt) }).forEach(function(r) {
         if (r.archived || r.disabled || r.blocked) return;
         var selected = r.repo === s.selected && now >= s.stableAt;
-        if (selected && now >= age(r.summaryAt, TIMING.summary)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,TIMING.summary));
+        if (selected && !s.tasks[key("more",r.repo)] && now >= age(r.summaryAt, TIMING.summary)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,TIMING.summary));
         var summary = s.tasks[key("summary",r.repo)];
         var activityKey = key("activity",r.repo);
         if (summary && !(s.flight && s.flight.key === activityKey)) delete s.tasks[activityKey];
         if (!summary) {
-            var interval = selected ? TIMING.selected : r.active > 0 ? TIMING.active : TIMING.idle;
+            var interval = selected ? TIMING.selected : (r.active > 0 ? TIMING.active : TIMING.idle)*pace(s,now);
             var group = selected ? "interactive" : r.active > 0 ? "active" : "background";
             if (now >= age(r.activityAt, interval) && (group!=="background" || !backgroundQueued || s.tasks[activityKey])) {
                 ensure(s, "activity",r.repo,"",group,age(r.activityAt,interval));
@@ -95,12 +156,14 @@ function seed(s, now) {
     });
 }
 function next(s, now) {
-    if (!s.opened || s.flight || s.auth || now < s.cooldown) return null;
+    if ((!s.opened && !hasWatches(s)) || s.flight || s.auth || now < s.cooldown) return null;
     s.starts = s.starts.filter(function(at) { return now - at < TIMING.window });
     if (s.starts.length >= TIMING.perWindow || s.starts.length && now - s.starts[s.starts.length-1] < TIMING.gap) return null;
     s.clock=now;
     seed(s,now);
-    var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now });
+    var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now && (s.accountChecked || !s.opened || t.kind === "account") });
+    if (!s.opened) due=due.filter(function(t) { return t.kind==="run" && s.watches[t.repo+":"+t.run] });
+    due = due.filter(function(t) { return t.kind!=="log" || s.starts.length+4<=TIMING.perWindow });
     due.sort(function(a,b) { return a.due === b.due ? a.order-b.order : a.due-b.due });
     var group = ["interactive","interactive","interactive","active","background"][s.slot % 5];
     var t = due.filter(function(t) { return t.group === group })[0];
@@ -108,9 +171,18 @@ function next(s, now) {
         ["interactive","active","background"].some(function(g) { t=due.filter(function(t) { return t.group===g })[0]; return !!t });
     }
     if (!t) return null;
-    s.slot++; s.starts.push(now); s.requests++; s.lastStarted=now; s.lastRequest=t.kind + (t.repo ? " " + t.repo : "");
+    s.slot++;
+    if (t.kind==="log") for (var i=0;i<4;i++) s.starts.push(now+i*TIMING.gap);
+    else s.starts.push(now);
+    s.requests++; s.lastStarted=now; s.lastRequest=t.kind + (t.repo ? " " + t.repo : "");
     var request = {kind:t.kind,repo:t.repo,run:t.run,page:t.page,requestId:++s.serial};
     if (t.kind === "summary") request.status = phases[t.phase];
+    if (t.kind === "more") request.status = "recent";
+    if (request.status === "recent") {
+        var r=repoFor(s,t.repo);
+        if (r && r.recentLimit) request.limit=r.recentLimit;
+    }
+    if (t.kind === "log") { if (t.job) request.job=t.job; request.mode=t.mode; }
     s.flight = {key:t.key, request:request, generation:s.generation};
     return request;
 }
@@ -132,7 +204,7 @@ function invalidateJobs(s,r,incoming) {
 function mergeRuns(s,r,incoming) {
     incoming.forEach(function(run) {
         var old=runFor(s,r.repo,run.id);
-        if (old && old.status!=="completed" && run.status==="completed" && s.selected===r.repo && s.inspected===String(run.id) && s.expanded[r.repo+":"+run.id])
+        if (s.opened && old && old.status!=="completed" && run.status==="completed" && s.selected===r.repo && s.inspected===String(run.id) && s.expanded[r.repo+":"+run.id])
             ensure(s,"jobs",r.repo,run.id,"interactive",s.clock || 0);
     });
     invalidateJobs(s,r,incoming);
@@ -141,17 +213,36 @@ function mergeRuns(s,r,incoming) {
 function recent(s,r,runs) {
     var completed=0;
     return runs.sort(function(a,b) { return (a.status==="completed")-(b.status==="completed") || b.id-a.id })
-        .filter(function(run) { return run.status!=="completed" || ++completed<=10 || kept(s,r,run) });
+        .filter(function(run) { return run.status!=="completed" || ++completed<=(r.recentLimit || 10) || kept(s,r,run) });
 }
 function kept(s,r,run) {
-    return s.expanded[r.repo+":"+run.id] || r.repo===s.selected && String(run.id)===s.inspected;
+    return s.expanded[r.repo+":"+run.id] || r.repo===s.selected && String(run.id)===s.inspected || r.last && run.id===r.last.id;
 }
-function activity(s,r,items,now,total) {
+function lastResult(r,runs,now,page,size) {
+    if (r.last && r.last.branch!==r.default_branch) delete r.last;
+    if (!r.default_branch) return;
+    var candidate=runs.filter(function(run) { return run.status==="completed" && run.head_branch===r.default_branch; })
+        .sort(function(a,b) { return b.id-a.id; })[0];
+    if (candidate && (!r.last || candidate.id>r.last.id || candidate.id===r.last.id &&
+        (!isFinite(Date.parse(candidate.updated_at)) || !isFinite(Date.parse(r.last.at)) || Date.parse(candidate.updated_at)>=Date.parse(r.last.at))))
+        r.last={id:candidate.id,conclusion:candidate.conclusion,at:candidate.updated_at,url:candidate.html_url,
+            branch:r.default_branch,confirmedAt:now};
+    if (r.last && (candidate && candidate.id>=r.last.id || page && (page.length<size || page.some(function(run) { return run.id<=r.last.id; }))))
+        r.last.confirmedAt=now;
+}
+function prune(s,r) {
+    var ids={}; (r.runs || []).forEach(function(run) { ids[String(run.id)]=true });
+    var prefix=r.repo+":";
+    Object.keys(s.details).forEach(function(id) { if (id.indexOf(prefix)===0 && !ids[id.slice(prefix.length)]) delete s.details[id]; });
+}
+function activity(s,r,items,now,total,unfiltered) {
     var ids={}; items.forEach(function(run) { ids[run.id]=true });
-    var previous=r.runs || [], partial=total>items.length, dropped={};
+    var previous=r.runs || [], partial=total>items.length || unfiltered && typeof total!=="number" && items.length>=ACTIVITY_PAGE, dropped={};
+    var summaryAuthoritative=unfiltered && s.selected===r.repo && r.summaryAt!==undefined;
+    if (unfiltered) lastResult(r,items,now,items,ACTIVITY_PAGE);
     mergeRuns(s,r,items);
-    previous.forEach(function(run) {
-        if (run.status === "in_progress" && !ids[run.id]) {
+    if (!summaryAuthoritative) previous.forEach(function(run) {
+        if ((unfiltered ? run.status!=="completed" : run.status==="in_progress") && !ids[run.id]) {
             var missing=r.runs.filter(function(x) { return x.id===run.id })[0];
             // A partial page can't tell finished from not fetched: look up only runs the user is looking at.
             if (partial && missing && !kept(s,r,missing)) dropped[run.id]=true;
@@ -159,38 +250,70 @@ function activity(s,r,items,now,total) {
         }
     });
     r.runs=r.runs.filter(function(run) { return !dropped[run.id] });
-    items.forEach(function(run) { var cached=runFor(s,r.repo,run.id); delete cached.awaitingFinal; delete cached.followupAt; });
-    r.active=typeof total==="number" ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
-    if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
+    items.forEach(function(run) { var cached=runFor(s,r.repo,run.id); if (cached) { delete cached.awaitingFinal; delete cached.followupAt; } });
+    if (!summaryAuthoritative) r.active=typeof total==="number" ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
+    if (unfiltered && s.selected!==r.repo) r.hidden={};
+    else if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
     r.activityAt=now; r.checked=new Date(now).toISOString(); r.error="";
+    prune(s,r);
 }
-function complete(s,reply,now) {
-    var flight=s.flight;
-    if (!s.opened || !flight || flight.generation!==s.generation || reply.requestId!==flight.request.requestId) return false;
-    var t=s.tasks[flight.key]; s.flight=null;
-    if (!t) return false;
-    var okData=t.kind==="run" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
-        : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
-    if (!reply.errorType && !reply.error && !okData)
-        reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
+function cool(s,reply,now) {
     if (reply.errorType==="rate" || reply.remaining===0 || reply.retryAt>now) {
         var deadline=Math.max(reply.retryAt || 0,reply.remaining===0 ? reply.resetAt || 0 : 0);
         if (deadline<=now) deadline=now+Math.min(TIMING.rateMax,TIMING.rateBase*Math.pow(2,s.rateFailures));
         s.cooldown=Math.max(s.cooldown,deadline);
         if (reply.errorType==="rate") s.rateFailures++;
     }
+}
+function noteWrite(s,reply,now) { cool(s,reply,now); }
+function complete(s,reply,now) {
+    var flight=s.flight;
+    if ((!s.opened && !hasWatches(s)) || !flight || flight.generation!==s.generation || reply.requestId!==flight.request.requestId) return false;
+    var t=s.tasks[flight.key]; s.flight=null;
+    if (!t) return false;
+    if (typeof reply.remaining==="number") { s.remaining=reply.remaining; s.resetAt=reply.resetAt || 0; }
+    var okData=t.kind==="run" || t.kind==="account" || t.kind==="log" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
+        : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
+    if (!reply.errorType && !reply.error && !okData)
+        reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
+    cool(s,reply,now);
+    if (t.kind==="log") {
+        if (reply.errorType || reply.error) {
+            s.log={error:reply.error || "Invalid GitHub response"};
+            if (reply.errorType==="auth" || reply.errorType==="setup") { s.auth=true; s.error=s.log.error; }
+        } else s.log=Object.assign({repo:t.repo,run:t.run,job:t.job},reply.data);
+        delete s.tasks[t.key]; return true;
+    }
+    if (t.kind==="account" && reply.errorType==="permission") {
+        s.accountChecked=true; s.error=""; delete s.tasks[t.key]; return true;
+    }
     var r=repoFor(s,t.repo);
     if (reply.errorType || reply.error) {
         s.error=reply.error || "Invalid GitHub response";
+        var watchId=t.repo+":"+t.run, watched=t.kind==="run" && s.watches[watchId];
+        if (watched) {
+            if (reply.errorType==="permission") {
+                s.notices.push({kind:"lost",repo:t.repo,name:watched.name});
+                delete s.watches[watchId];
+            } else watched.at=now;
+        }
+        if (!s.opened && !s.paused && (reply.errorType==="auth" || reply.errorType==="setup")) {
+            s.notices.push({kind:"paused"}); s.paused=true;
+        }
+        if (t.kind==="jobs") { var dk=t.repo+":"+t.run;
+            s.details[dk]=Object.assign({},s.details[dk]||{},{error:s.error});
+            if (reply.errorType==="permission") Object.assign(s.details[dk],{jobsAt:now,unavailable:true}); }
         // ponytail: s.auth now means "stopped until manual refresh"; rename if a third stop reason appears
         if (reply.errorType==="auth" || reply.errorType==="setup") s.auth=true;
         if (reply.errorType==="permission") {
-            if (r && t.kind!=="jobs" && t.kind!=="run") { r.blocked=true; r.error=s.error; }
-            else if (r && t.kind==="jobs") s.details[t.repo+":"+t.run]=Object.assign({},s.details[t.repo+":"+t.run] || {},{error:s.error,jobsAt:now,unavailable:true});
+            if (t.kind==="catalogue") { s.discover=false; s.catalogueBlocked=s.error; }
+            else if (r && t.kind!=="jobs" && t.kind!=="run") { r.blocked=true; r.error=s.error; }
+            else if (t.kind==="jobs") {} // Detail was written above.
             else if (r) { var failed=runFor(s,t.repo,t.run); if(failed){ failed.awaitingFinal=false; delete failed.followupAt; failed.lookupError=s.error; } }
             delete s.tasks[t.key];
         } else {
             t.failures++; t.due=reply.errorType==="rate" ? s.cooldown : now+Math.min(TIMING.retryMax,TIMING.retryBase*Math.pow(2,t.failures-1));
+            if (watched) t.due=Math.max(t.due,now+TIMING.watch*pace(s,now));
             // Retry a failed snapshot from page one; keep already published cache data.
             t.page=1; t.phase=0; t.items=[]; t.all=[];
             if (r) r.error=s.error;
@@ -200,40 +323,72 @@ function complete(s,reply,now) {
     s.error=""; s.rateFailures=0; t.failures=0;
     if (r) r.error="";
     var data=reply.data;
+    if (t.kind==="account") {
+        if (s.account && s.account!==data.login) {
+            s.tasks={}; s.repos=[]; s.details={}; s.expanded={}; s.selected=""; s.inspected="";
+            s.catalogueComplete=false; s.catalogueBlocked=""; s.discover=true; s.watches={};
+        }
+        s.account=data.login; s.accountChecked=true; delete s.tasks[t.key]; return true;
+    }
     if (t.kind==="run") {
         if (r) {
             var resolved=Object.assign({},data,{awaitingFinal:false,followupAt:now});
+            lastResult(r,[resolved],now,null,0);
             mergeRuns(s,r,[resolved]);
             r.active=(r.runs || []).filter(function(run) { return run.status==="in_progress" && !run.awaitingFinal }).length;
-            if (resolved.status==="completed" && t.repo===s.selected && t.run===s.inspected && s.expanded[t.repo+":"+t.run])
+            if (s.opened && resolved.status==="completed" && t.repo===s.selected && t.run===s.inspected && s.expanded[t.repo+":"+t.run])
                 ensure(s,"jobs",t.repo,t.run,"interactive",now);
         }
-        delete s.tasks[t.key]; return true;
+        var w=s.watches[t.repo+":"+t.run];
+        if (w) {
+            if (data.status==="completed") {
+                s.notices.push({kind:"done",repo:t.repo,name:data.name || w.name,conclusion:data.conclusion});
+                delete s.watches[t.repo+":"+t.run];
+            } else w.at=now;
+        }
+        if (t.again) { t.again=false; t.due=now; }
+        else delete s.tasks[t.key];
+        return true;
     }
     t.items=t.kind==="catalogue" ? t.items.concat(data) : union(t.items,data);
     if (t.kind==="catalogue") {
         data.forEach(function(repo) {
             var existing=repoFor(s,repo.repo);
-            if (existing) { Object.assign(existing,repo); existing.blocked=false; existing.error=""; }
+            if (existing) { if (existing.default_branch!==repo.default_branch) delete existing.last;
+                Object.assign(existing,repo); existing.blocked=false; existing.error=""; }
             else s.repos.push(repo);
         });
     } else if (r && t.kind==="summary") mergeRuns(s,r,data);
+    else if (r && t.kind==="more") {
+        lastResult(r,data,now,data,r.recentLimit || 10);
+        mergeRuns(s,r,data);
+        prune(s,r);
+        r.recentFetched=data.length;
+    }
     if (reply.nextPage) { t.page=reply.nextPage; t.due=now; t.order=++s.order; return true; }
     if (t.kind==="catalogue") {
         var names=t.items.map(function(repo) { return repo.repo });
+        s.repos.forEach(function(repo) { if (names.indexOf(repo.repo)<0) prune(s,{repo:repo.repo,runs:[]}); });
         s.repos=s.repos.filter(function(repo) { return names.indexOf(repo.repo)>=0 });
         // GitHub's pushed-descending catalogue order is retained across refreshes.
         s.repos.sort(function(a,b) { return names.indexOf(a.repo)-names.indexOf(b.repo) });
         s.catalogueComplete=true; s.catalogueAt=now; s.discover=false;
-    } else if (r && t.kind==="activity") activity(s,r,t.items,now,reply.total);
+    } else if (r && t.kind==="activity") activity(s,r,t.items,now,reply.total,true);
     else if (r && t.kind==="summary") {
         t.all=union(t.all,t.items);
         if (phases[t.phase]==="in_progress") activity(s,r,t.items,now,reply.total);
         if (typeof reply.total==="number") (t.hidden=t.hidden || {})[phases[t.phase]]=Math.max(0,reply.total-t.items.length);
+        if (phases[t.phase]==="recent") { t.recent=t.items; r.recentFetched=t.items.length; }
         t.phase++; t.items=[]; t.page=1;
         if (t.phase<phases.length) { t.due=now; t.order=++s.order; return true; }
+        lastResult(r,t.all,now,t.recent,r.recentLimit || 10);
         var keep=(r.runs || []).filter(function(run) { return run.awaitingFinal || kept(s,r,run) });
         r.runs=recent(s,r,union(t.all,keep));
+        var seen={}; t.all.forEach(function(run) { seen[String(run.id)]=true });
+        r.runs.forEach(function(run) {
+            if (run.status!=="completed" && !seen[String(run.id)]) { run.awaitingFinal=true; delete run.followupAt; }
+        });
+        prune(s,r);
         r.hidden=t.hidden || {};
         r.summaryAt=now;
     } else if (r && t.kind==="jobs") {
