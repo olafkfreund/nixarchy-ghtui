@@ -14,9 +14,10 @@ function state(item) {
     return item.awaitingFinal ? "awaiting final status" : item.lookupError ? "unavailable" : item.conclusion || item.status || "unknown";
 }
 
+var failedStatuses = ["failure", "timed_out", "startup_failure"];
 function icon(status) {
     if (status === "success") return "✓";
-    if (["failure", "timed_out", "startup_failure"].indexOf(status) >= 0) return "✕";
+    if (failedStatuses.indexOf(status) >= 0) return "✕";
     if (status === "in_progress") return "◷";
     if (status === "cancelled") return "⊘";
     if (["skipped", "neutral"].indexOf(status) >= 0) return "−";
@@ -152,11 +153,11 @@ function rows(repos, expanded, details, filter, now, live) {
                 var steps = job.steps || [];
                 var done = steps.filter(function(step) { return step.status === "completed"; }).length;
                 result.push({key: jobKey, parent: runKey, kind: "job", depth: 2, title: job.name, subtitle: "",
-                    status: state(job), statusText: label(state(job)), info: done + "/" + steps.length + " steps · " + duration(job, at), repo: repo.repo, run: String(run.id), url: job.html_url});
+                    status: state(job), statusText: label(state(job)), info: done + "/" + steps.length + " steps · " + duration(job, at), repo: repo.repo, run: String(run.id), job: String(job.id), url: job.html_url});
                 if (!expanded[jobKey]) return;
                 steps.forEach(function(step) {
                     result.push({key: jobKey + ":" + step.number, parent: jobKey, kind: "step", depth: 3, title: step.name, subtitle: "",
-                        status: state(step), statusText: label(state(step)), info: duration(step, at), repo: repo.repo, run: String(run.id), url: job.html_url});
+                        status: state(step), statusText: label(state(step)), info: duration(step, at), repo: repo.repo, run: String(run.id), job: String(job.id), url: job.html_url});
                 });
             });
         });
@@ -165,6 +166,23 @@ function rows(repos, expanded, details, filter, now, live) {
             title: repo.summaryAt ? "No workflow runs" : "Loading runs…", subtitle: "", status: "", statusText: "", info: "", repo: repo.repo});
     });
     return result;
+}
+
+function logTarget(row, details, runs) {
+    if (!row) return null;
+    if (row.kind === "job" || row.kind === "step") {
+        var detail = details[row.repo + ":" + row.run];
+        var job = ((detail && detail.jobs) || []).find(function(item) { return String(item.id) === row.job; });
+        if (!job || job.status !== "completed") return {error: "Logs are available when the job finishes"};
+        return {repo: row.repo, run: row.run, job: row.job,
+            mode: failedStatuses.indexOf(job.conclusion) >= 0 ? "failed" : "full"};
+    }
+    if (row.kind === "run") {
+        var run = runs.find(function(item) { return String(item.id) === row.run; });
+        return run && run.status === "completed" && failedStatuses.indexOf(run.conclusion) >= 0
+            ? {repo: row.repo, run: row.run, mode: "failed"} : {error: "Select a job to read its log"};
+    }
+    return null;
 }
 
 function selection(rows, key, previous) {
