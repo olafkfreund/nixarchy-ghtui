@@ -834,10 +834,11 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                         if label == 'walk j':
                             cur = prev
                             while cur['cursor'] < cur['rows'] - 1:
-                                nxt = wait_state('key walk j', lambda s, c=cur: s['cursor'] in (c['cursor'], c['cursor'] + 1)
-                                                 and (s['cursor'] != c['cursor'] or s['layout'] != c['layout']), cur['seq'], timeout=3)
-                                if nxt['cursor'] not in (cur['cursor'], cur['cursor'] + 1):
-                                    fail(f"key walk j: cursor jumped {cur['cursor']} -> {nxt['cursor']}")
+                                # Two presses can land between 50 ms samples, so any forward move counts.
+                                nxt = wait_state('key walk j', lambda s, c=cur: s['cursor'] != c['cursor']
+                                                 or s['layout'] != c['layout'], cur['seq'], timeout=3)
+                                if nxt['cursor'] < cur['cursor']:
+                                    fail(f"key walk j: cursor went back {cur['cursor']} -> {nxt['cursor']}")
                                 check_layout(nxt, fail)
                                 cur = nxt
                             if cur['rows'] < 27:

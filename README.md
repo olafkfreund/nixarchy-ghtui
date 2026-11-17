@@ -208,7 +208,7 @@ Run from the repository root:
 python3 -m unittest discover -s tests -v
 node tests/model.cjs
 node tests/polling.cjs
-python3 tests/qml-smoke.py
+nix develop -c python3 tests/qml-smoke.py
 ```
 
 The flake checks the built runtime files and runs the Python/model/polling suites without a graphical session or live GitHub requests:
@@ -217,14 +217,14 @@ The flake checks the built runtime files and runs the Python/model/polling suite
 nix flake check
 nix build .#default
 omarchy plugin validate "$(readlink -f result)"
-python3 tests/qml-smoke.py ./result
+nix develop -c python3 tests/qml-smoke.py ./result
 ```
 
 The validator rejects a symlinked plugin folder, so it is given the resolved store path rather than the `result` link. The QML test accepts an optional plugin directory; without one it tests this source checkout. The `result` link is only a build output and does not install the plugin into your desktop.
 
-Node is only used by tests. The QML check requires a graphical session, Quickshell and `OMARCHY_PATH`; it uses shared components and a fake API in a temporary configuration, briefly exercising the panel window without installing the plugin or requesting live GitHub data.
+Node is only used by tests. The QML check starts its own headless sway, loads the panel on small stubs of `qs.Commons` and `qs.Ui` (in `tests/stubs`) with a fake API, and drives it with real key presses through `wtype`. It needs no desktop and never touches yours, installs nothing and makes no live GitHub request. The stubs do not follow Omarchy's components, so checking the panel on a real desktop before a release stays a manual step.
 
-CI runs `nix flake check` on every push and pull request; the QML check runs only locally.
+CI runs `nix flake check` and, as a separate `qml-smoke` job, `nix develop -c python3 tests/qml-smoke.py` on every push and pull request.
 
 ## Remove
 
