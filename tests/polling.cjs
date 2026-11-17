@@ -100,7 +100,7 @@ const currentReq=polling.next(staleAccount,1000); assert.equal(currentReq.kind,'
 assert.equal(polling.complete(staleAccount,response(staleReq,{login:'tester'}),1000),false);
 assert.equal(staleAccount.accountChecked,false);
 assert.equal(staleAccount.flight.request.requestId,currentReq.requestId);
-function simulation(activeCount=0, duration=1800000) {
+function simulation(activeCount=0, duration=1800000, pageBuilder) {
   const s=polling.create(), repos=Array.from({length:137},(_,i)=>({repo:`org/r${i}`}));
   reopen(s,0); polling.select(s,'org/r0',activeCount ? '1' : '',activeCount ? {'org/r0:1':true} : {},0,false);
   let flight=null, cold=null, summary=null, catalogue=null;
@@ -111,6 +111,7 @@ function simulation(activeCount=0, duration=1800000) {
       const req=flight.req; let data=[],next=0;
       const i=Number(req.repo.split('r').pop());
       if(req.kind==='catalogue') { data=req.page===1?repos.slice(0,100):repos.slice(100); next=req.page===1?2:0; }
+      else if(req.kind==='activity' && pageBuilder) data=pageBuilder(req,i,activeCount);
       else if(req.kind==='activity' || req.kind==='summary' && ['recent','in_progress'].includes(req.status)) data=i<activeCount?[run(i)]:[];
       else if(req.kind==='jobs') data=[{id:1,status:'in_progress',steps:[]}];
       polling.complete(s,response(req,data,next),now); flight=null;
@@ -247,11 +248,12 @@ req=polling.next(ordered,700000); assert.equal(req.repo,'oldest/check','idle bac
 console.log('Polling: overload preserves budget/fairness; idle data ordered by freshness');
 
 const overlap=polling.create(); reopen(overlap,0); overlap.discover=false; overlap.catalogueComplete=true;
-overlap.repos=[{repo:'a/b',summaryAt:0}]; polling.select(overlap,'a/b','',{},0,true);
+overlap.repos=[{repo:'a/b',summaryAt:0,active:1}]; polling.select(overlap,'a/b','',{},0,true);
 req=polling.next(overlap,0); polling.complete(overlap,response(req,[{id:7,status:'in_progress'}],2),100);
 assert.equal(overlap.repos[0].checked,undefined);
 req=polling.next(overlap,1000); polling.complete(overlap,response(req,[{id:7,status:'in_progress'}]),1100);
 assert.equal(overlap.repos[0].active,1,'overlapping pages cannot double-count active workflows');
+assert.equal(overlap.repos[0].runs.length,1,'overlapping pages keep one copy of each run');
 console.log('Polling: overlapping pages deduplicate workflow IDs');
 
 // Setup errors and malformed data stop polling until a manual refresh; stale ones are ignored.
@@ -311,8 +313,52 @@ const act=selectedRepo([]);
 polling.ensure(act,'activity','a/b','','active',0); req=polling.next(act,0);
 assert.equal(req.kind,'activity');
 polling.complete(act,response(req,Array.from({length:100},(_,i)=>({id:i+1,status:'in_progress'})),0,250),100);
-assert.equal(act.repos[0].active,250); assert.equal(act.repos[0].hidden.in_progress,150);
+assert.equal(act.repos[0].active,250); assert.equal(Object.keys(act.repos[0].hidden).length,0);
 assert.equal(act.requests,1);
+
+const full=selectedRepo([]);
+polling.ensure(full,'activity','a/b','','active',0); req=polling.next(full,0);
+assert.doesNotThrow(()=>polling.complete(full,response(req,Array.from({length:30},(_,i)=>({id:i+1,status:'completed'}))),100));
+assert.equal(full.repos[0].runs.filter(r=>r.status==='completed').length,10);
+
+function missingFromActivity(status, count) {
+  const p=selectedRepo([{id:1,status}]);
+  polling.ensure(p,'activity','a/b','','active',0);
+  const request=polling.next(p,0);
+  const page=Array.from({length:count},(_,i)=>({id:i+2,status:'completed'}));
+  polling.complete(p,response(request,page),100);
+  return p;
+}
+for (const status of ['queued','in_progress']) {
+  const p=missingFromActivity(status,30);
+  assert.equal(polling.runFor(p,'a/b',1),undefined,`${status} missing from a full page is dropped`);
+  assert.equal(Object.values(p.tasks).some(t=>t.kind==='run'),false);
+}
+const shortPage=missingFromActivity('queued',1);
+assert.equal(polling.runFor(shortPage,'a/b',1).awaitingFinal,true);
+const completedOnPage=selectedRepo([{id:1,status:'in_progress'}]);
+polling.ensure(completedOnPage,'activity','a/b','','active',0); req=polling.next(completedOnPage,0);
+polling.complete(completedOnPage,response(req,[{id:1,status:'completed'}]),100);
+assert.equal(Object.values(completedOnPage.tasks).some(t=>t.kind==='run'),false);
+const filtered=selectedRepo([{id:1,status:'queued'}]);
+polling.activity(filtered,filtered.repos[0],[],100,0,false);
+assert.equal(polling.runFor(filtered,'a/b',1).status,'queued');
+assert.equal(polling.runFor(filtered,'a/b',1).awaitingFinal,undefined);
+
+const idleFull=simulation(0,1800000,()=>Array.from({length:30},(_,i)=>({id:i+1,status:'completed'})));
+assert.equal(idleFull.history.length,idle.history.length,'full idle pages cost the same as empty pages');
+const pageVisits={};
+const mixedPage=(_,i,activeCount)=>{
+  if (i===0) return [{id:1,status:'in_progress',run_attempt:1,name:'CI'}];
+  if (i>=activeCount) return [];
+  const offset=100*(pageVisits[i] || 0);
+  pageVisits[i]=(pageVisits[i] || 0)+1;
+  return Array.from({length:30},(_,n)=>({id:n+1+offset,
+    status:n===29?'queued':n<19?'in_progress':'completed'}));
+};
+const mixed=simulation(4,180000,mixedPage);
+assert.equal(mixed.history.filter(h=>h.kind==='run').length,0,'full mixed pages need no lookups');
+assert.equal(mixed.history.length,busy.history.length,'mixed running pages keep the same request count');
 
 function partialActivity(total) {
   const p=selectedRepo([1,2,3].map(id=>({id,status:'in_progress'})));
@@ -336,8 +382,108 @@ assert.equal(keep.repos[0].runs.length,11);
 const plain=selectedRepo([]);
 polling.ensure(plain,'activity','a/b','','active',0); req=polling.next(plain,0);
 polling.complete(plain,response(req,[{id:1,status:'in_progress'}]),100);
-assert.deepEqual(plain.repos[0].hidden || {},{}); assert.equal(plain.repos[0].active,1);
+assert.equal(Object.keys(plain.repos[0].hidden || {}).length,0); assert.equal(plain.repos[0].active,1);
+const summaryCounts=selectedRepo(Array.from({length:100},(_,i)=>({id:i+1,status:'in_progress'}))
+  .concat(Array.from({length:40},(_,i)=>({id:i+101,status:'queued'}))));
+summaryCounts.repos[0].summaryAt=100; summaryCounts.repos[0].active=250;
+summaryCounts.repos[0].hidden={in_progress:150,queued:0};
+const queuedPage=Array.from({length:30},(_,i)=>({id:i+300,status:'queued'}));
+polling.select(summaryCounts,'a/b','',{'repo:a/b':true},0,true);
+polling.activity(summaryCounts,summaryCounts.repos[0],queuedPage,10000,undefined,true);
+assert.equal(summaryCounts.repos[0].active,250,'selected summary running total survives activity');
+assert.deepEqual({...summaryCounts.repos[0].hidden},{in_progress:150,queued:0});
+assert.equal(summaryCounts.repos[0].runs.length,170,'selected activity does not drop held runs');
+assert.ok(polling.runFor(summaryCounts,'a/b',1));
+polling.select(summaryCounts,'other/repo','',{},11000,true);
+polling.activity(summaryCounts,summaryCounts.repos[0],queuedPage,20000,undefined,true);
+assert.equal(summaryCounts.repos[0].active,0,'non-selected activity uses its page count');
+assert.equal(Object.keys(summaryCounts.repos[0].hidden).length,0,'non-selected activity clears stale summary counts');
+assert.equal(summaryCounts.repos[0].runs.length,30,'non-selected activity drops missing unfinished runs');
 console.log('Polling: one page per unfinished status, hidden counts and kept runs');
+
+// The latest completed default-branch run is the repository's last result.
+function result(id, branch='main', conclusion='success', updated_at='2026-01-01T00:00:00Z') {
+  return {id,status:'completed',head_branch:branch,conclusion,updated_at,html_url:`https://github.com/a/b/actions/runs/${id}`};
+}
+const health=selectedRepo([]); health.repos[0].default_branch='main';
+polling.activity(health,health.repos[0],[result(4),result(9,'feature'),result(7,'main','cancelled'),
+  {id:10,status:'queued',head_branch:'main'}, {id:11,status:'in_progress',head_branch:'main'}],100,undefined,true);
+assert.equal(health.repos[0].last.id,7);
+assert.equal(health.repos[0].last.conclusion,'cancelled');
+assert.equal(health.repos[0].last.branch,'main');
+assert.equal(health.repos[0].last.url,'https://github.com/a/b/actions/runs/7');
+assert.equal(health.repos[0].last.confirmedAt,100);
+polling.activity(health,health.repos[0],[result(15,'feature')],200,undefined,true);
+assert.equal(health.repos[0].last.id,7,'a page without a default-branch result keeps the old result');
+polling.activity(health,health.repos[0],[result(3)],300,undefined,true);
+assert.equal(health.repos[0].last.id,7,'an older id never replaces a newer result');
+polling.activity(health,health.repos[0],[result(7,'main','failure','2026-01-02T00:00:00Z')],400,undefined,true);
+assert.equal(health.repos[0].last.conclusion,'failure','a rerun can change the same id');
+polling.activity(health,health.repos[0],[result(7,'main','success','2025-12-31T00:00:00Z')],500,undefined,true);
+assert.equal(health.repos[0].last.conclusion,'failure','an older update cannot undo a rerun');
+
+const stale=selectedRepo([]); stale.repos[0].default_branch='main';
+stale.repos[0].last={id:5,branch:'main',conclusion:'failure',confirmedAt:10};
+const featurePage=Array.from({length:30},(_,i)=>result(i+6,'feature'));
+for (const now of [100,200]) {
+  polling.activity(stale,stale.repos[0],featurePage,now,undefined,true);
+  assert.equal(stale.repos[0].last.confirmedAt,10,'full newer feature pages do not confirm the result');
+  assert.equal(stale.repos[0].activityAt,now);
+}
+polling.activity(stale,stale.repos[0],[...featurePage.slice(0,29),result(5,'feature')],300,undefined,true);
+assert.equal(stale.repos[0].last.confirmedAt,300,'a page reaching the last id confirms it');
+polling.activity(stale,stale.repos[0],featurePage.slice(0,29),400,undefined,true);
+assert.equal(stale.repos[0].last.confirmedAt,400,'a short page confirms it');
+polling.activity(stale,stale.repos[0],[...featurePage.slice(0,29),result(40)],500,undefined,true);
+assert.equal(stale.repos[0].last.id,40);
+assert.equal(stale.repos[0].last.confirmedAt,500,'a qualifying result confirms it');
+
+const retained=selectedRepo([]); retained.repos[0].default_branch='main';
+polling.activity(retained,retained.repos[0],[result(1),...Array.from({length:10},(_,i)=>result(i+2,'feature'))],100,undefined,true);
+assert.ok(polling.runFor(retained,'a/b',1),'last result survives the ten newer completed runs');
+assert.equal(retained.repos[0].runs.length,11);
+const noBranch=selectedRepo([]);
+polling.activity(noBranch,noBranch.repos[0],[result(1)],100,undefined,true);
+assert.equal(noBranch.repos[0].last,undefined,'an empty default branch has no result');
+
+const catalogueLast=polling.create(); reopen(catalogueLast,0);
+catalogueLast.repos=[{repo:'a/b',default_branch:'main',last:{id:1,branch:'main'}}];
+req=polling.next(catalogueLast,0); assert.equal(req.kind,'catalogue');
+polling.complete(catalogueLast,response(req,[{repo:'a/b',default_branch:'develop'}]),100);
+assert.equal(catalogueLast.repos[0].last,undefined,'catalogue refresh clears a changed default branch immediately');
+
+const lookedUp=selectedRepo([{id:7,status:'queued',head_branch:'main'}]);
+lookedUp.repos[0].default_branch='main';
+for (const conclusion of ['failure','success']) {
+  polling.ensure(lookedUp,'run','a/b',7,'interactive',0);
+  req=polling.next(lookedUp,conclusion==='failure'?0:1000); assert.equal(req.kind,'run');
+  polling.complete(lookedUp,response(req,result(7,'main',conclusion,conclusion==='failure'?'2026-01-01T00:00:00Z':'2026-01-02T00:00:00Z')),conclusion==='failure'?100:1100);
+  assert.equal(lookedUp.repos[0].last.conclusion,conclusion,'single-run lookup updates the result');
+}
+lookedUp.repos[0].last.confirmedAt=1100;
+polling.ensure(lookedUp,'run','a/b',6,'interactive',2000);
+req=polling.next(lookedUp,2000); assert.equal(req.kind,'run');
+polling.complete(lookedUp,response(req,result(6,'main','failure')),2100);
+assert.equal(lookedUp.repos[0].last.id,7);
+assert.equal(lookedUp.repos[0].last.confirmedAt,1100,'older lookup does not confirm newest result');
+
+const summaryLast=selectedRepo([]); summaryLast.repos[0].default_branch='main';
+summaryLast.repos[0].last={id:0,branch:'main',conclusion:'failure',confirmedAt:5};
+polling.select(summaryLast,'a/b','',{},0,true);
+let summaryNow=0;
+for (const phase of polling.phases) {
+  req=polling.next(summaryLast,summaryNow); assert.equal(req.status,phase);
+  const data=phase==='recent' ? [result(1),...Array.from({length:10},(_,i)=>result(i+2,'feature'))]
+    : phase==='in_progress' ? [{id:30,status:'in_progress',head_branch:'main'}] : [];
+  polling.complete(summaryLast,response(req,data,0,phase==='in_progress'?1:undefined),summaryNow+100);
+  if (phase==='in_progress') {
+    assert.equal(summaryLast.repos[0].last.id,0,'filtered phase cannot set a result');
+    assert.equal(summaryLast.repos[0].last.confirmedAt,5,'filtered phase cannot confirm a result');
+  }
+  summaryNow+=1000;
+}
+assert.equal(summaryLast.repos[0].last.id,1,'summary uses all runs');
+assert.ok(polling.runFor(summaryLast,'a/b',1),'summary protects the last result before trimming');
 
 // Catalogue permission stops discovery until a manual refresh or reopen.
 function blockedCatalogue() {

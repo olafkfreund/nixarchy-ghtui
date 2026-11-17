@@ -65,7 +65,8 @@ assert.equal(model.emptyText({repoCount:0, error:'', discoveryComplete:true, fil
 assert.equal(model.emptyText({repoCount:2, error:'oops', discoveryComplete:true, filter:'ci'}), 'No match for "ci" · search covers loaded runs only');
 assert.deepEqual(JSON.parse(JSON.stringify(model.coverage([{summaryAt:'now'}, {runs:[{}]}, {summaryAt:0}, {summaryAt:'later'}]))),
   {loaded:2, total:4});
-assert.equal(model.accessibleName({kind:'repo', title:'o/r', info:'2 running'}, false), 'repository: o/r, 2 running, collapsed');
+assert.equal(model.accessibleName({kind:'repo', title:'o/r', statusText:'failed', info:'✕ 3h · 12 running · stale'}, false),
+  'repository: o/r, failed, ✕ 3h · 12 running · stale, collapsed');
 assert.equal(model.accessibleName({kind:'run', title:'CI', statusText:'running'}, true), 'run: CI, running, expanded');
 assert.equal(model.accessibleName({kind:'step', title:'Checkout', statusText:'passed'}, false), 'step: Checkout, passed');
 assert.equal(model.accessibleName({kind:'message', title:'Loading jobs…', statusText:''}, false), 'message: Loading jobs…');
@@ -125,7 +126,8 @@ assert.equal(JSON.parse(model.reply('', 127, 5)).error, 'python3 not found');
 }
 const ranked = model.rows([{repo:'z/idle', checked:'now', active:0}, {repo:'a/unchecked'}, {repo:'b/running', active:2, checked:'now'}], {}, {}, '', Date.now());
 assert.equal(ranked[0].title, 'b/running');
-assert.equal(ranked[0].info, '2 running');
+assert.equal(ranked[0].info, 'no result · 2 running');
+assert.equal(ranked[1].info, 'no result · 0 running');
 assert.equal(ranked[2].info, 'not checked');
 assert.equal(model.rows([{repo:'a/b', description:'find this project'}], {}, {}, 'find this', Date.now()).length, 1);
 const backing = [];
@@ -307,4 +309,48 @@ console.log('Model: rows subtitle, statusText and message row passed');
   press(Qt.Key_N, 'n');
   press(Qt.Key_Escape, '');
   assert.deepEqual(calls, ['copy', 'yes', 'no', 'no']);
+}
+
+// #43: repository health row and sort.
+{
+  const t = Date.UTC(2026, 0, 2, 12, 0, 0), h = 3600000, min = 60000;
+  const last = (conclusion, confirmedAt = t) => ({id: 1, conclusion, at: new Date(t - 3 * h - 40 * min).toISOString(), confirmedAt});
+  const one = repo => { const r = model.rows([{checked: 'x', active: 0, ...repo}], {}, {}, '', t)[0]; return [r.status, r.info]; };
+  assert.deepEqual(one({repo: 'a/a', active: 2, last: last('failure')}), ['failure', '✕ 3h · 2 running']);
+  assert.deepEqual(one({repo: 'a/a', last: last('timed_out')}), ['failure', '✕ 3h · 0 running']);
+  assert.deepEqual(one({repo: 'a/a', last: last('success')}), ['success', '✓ 3h · 0 running']);
+  assert.deepEqual(one({repo: 'a/a', last: last('success', t - 31 * min)}), ['neutral', '✓ 3h · 0 running · stale']);
+  assert.deepEqual(one({repo: 'a/a', last: last('success', t - 29 * min)}), ['success', '✓ 3h · 0 running']);
+  assert.deepEqual(one({repo: 'a/a', last: last('failure', t - 31 * min)}), ['failure', '✕ 3h · 0 running · stale']);
+  assert.deepEqual(one({repo: 'a/a', last: last('cancelled')}), ['neutral', '⊘ 3h · 0 running']);
+  assert.deepEqual(one({repo: 'a/a'}), ['neutral', 'no result · 0 running']);
+  assert.deepEqual(one({repo: 'a/a', error: 'x', last: last('failure')}), ['error', 'unavailable']);
+  assert.deepEqual(one({repo: 'a/a', archived: true, last: last('failure')}), ['neutral', 'archived']);
+  assert.deepEqual(one({repo: 'a/a', disabled: true}), ['neutral', 'disabled']);
+  assert.deepEqual(one({repo: 'a/a', checked: undefined}), ['neutral', 'not checked']);
+  assert.equal(model.rows([{repo: 'a/a', checked: 'x', last: last('failure')}], {}, {}, '', t)[0].statusText, 'failed');
+  assert.equal(model.rows([{repo: 'a/a', checked: 'x', last: last('success')}], {}, {}, '', t)[0].statusText, 'passed');
+  assert.equal(model.rows([{repo: 'a/a', checked: 'x'}], {}, {}, '', t)[0].statusText, 'neutral');
+  for (const [seconds, expected] of [[59, '59s'], [60, '1m'], [3600, '1h'], [3 * 3600 + 40 * 60, '3h']])
+    assert.equal(model.ago(new Date(t - seconds * 1000).toISOString(), t), expected);
+  const order = (list, now = t) => Array.from(model.rows(list, {}, {}, '', now), row => row.title).join(' ');
+  const mix = [{repo: 'a/idle', checked: 'x', active: 0}, {repo: 'b/run1', checked: 'x', active: 1}, {repo: 'c/fail', checked: 'x', active: 0, last: last('failure')},
+    {repo: 'd/run3', checked: 'x', active: 3}, {repo: 'e/fail', checked: 'x', active: 0, last: last('failure')}, {repo: 'f/failrun', checked: 'x', active: 1, last: last('failure')},
+    {repo: 'g/new'}];
+  assert.equal(order(mix), 'c/fail e/fail f/failrun d/run3 b/run1 a/idle g/new');
+  assert.equal(order(mix, t + 40 * min), order(mix), 'time never reorders');
+  vm.runInContext('var nativeSort = Array.prototype.sort; Array.prototype.sort = function(compare) { this.reverse(); return nativeSort.call(this, compare); }', model);
+  try { assert.equal(order(mix), 'c/fail e/fail f/failrun d/run3 b/run1 a/idle g/new', 'ties follow catalogue order even with unstable sort'); }
+  finally { vm.runInContext('Array.prototype.sort = nativeSort', model); }
+  const vmPoll = {};
+  vm.createContext(vmPoll);
+  vm.runInContext(fs.readFileSync('Polling.js', 'utf8'), vmPoll);
+  assert.equal(model.STALE, 3 * vmPoll.TIMING.idle);
+  // syncRows: a repository turning failing gives the same rows as a fresh build.
+  const healthy = [{repo: 'a/a', checked: 'x', active: 0, last: last('success')}, {repo: 'b/b', checked: 'x', active: 0}];
+  const failing = [{...healthy[0], last: last('failure')}, healthy[1]];
+  const sync = counted();
+  model.syncRows(sync, model.rows(healthy, {}, {}, '', t));
+  model.syncRows(sync, model.rows(failing, {}, {}, '', t));
+  assert.deepEqual(JSON.parse(JSON.stringify(sync.store.map(r => r.rowData))), JSON.parse(JSON.stringify(model.rows(failing, {}, {}, '', t))));
 }

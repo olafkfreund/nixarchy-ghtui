@@ -94,7 +94,9 @@ def page_endpoint(task):
         if task["kind"] == "run":
             return f"{base}/{run}"
         return f"{base}/{run}/jobs?filter=latest&per_page=100&page={number}"
-    status = "in_progress" if task["kind"] == "activity" else task.get("status", "recent")
+    if task["kind"] == "activity":
+        return f"{base}?per_page=30"  # Polling.js ACTIVITY_PAGE must match
+    status = task.get("status", "recent")
     if status == "recent":
         return f"{base}?per_page=10"
     if status not in ACTIVE:
@@ -217,6 +219,7 @@ def read_page(task):
             if any(not isinstance(row, dict) for row in body):
                 raise ValueError("Invalid repository entry")
             result["data"] = [{"repo": repo_name(row["full_name"]), "description": plain(row.get("description") or ""),
+                               "default_branch": plain(row.get("default_branch") or ""),
                                "archived": bool(row.get("archived")), "disabled": bool(row.get("disabled"))} for row in body]
         elif kind == "account":
             result["data"] = None
@@ -244,7 +247,7 @@ def read_page(task):
                 for step in row.get("steps", []) if kind == "jobs" else []:
                     plain_fields(step, ("name",))
             result["data"] = body[key]
-            if kind == "activity" or task.get("status") in ACTIVE:
+            if task.get("status") in ACTIVE:
                 # One page per unfinished status (#30); total_count says how many runs were left out.
                 total = body.get("total_count")
                 if type(total) is not int or total < 0:

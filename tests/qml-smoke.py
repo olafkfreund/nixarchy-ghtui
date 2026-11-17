@@ -107,6 +107,15 @@ ShellRoot {
     property bool touchSeen: false
     property bool copyChecked: false
     property bool accChecked: false
+    property bool healthChecked: false
+    function textWith(item, text) {
+        if (item.text === text) return item
+        for (var i = 0; i < item.children.length; i++) {
+            var found = textWith(item.children[i], text)
+            if (found) return found
+        }
+        return null
+    }
     // Fires inside the reply handler, right after touch(): the run task still exists or is in flight.
     Connections {
         target: panel
@@ -301,6 +310,24 @@ ShellRoot {
                     var other=panel.itemAt(panel.cursor===0 ? 1 : 0)
                     check(!other || other.Accessible.selected===false,"other rows are not selected")
                     accChecked=true
+                }
+                if (!healthChecked) {
+                    // #43: a failing repository sorts first. Seeded and undone inside one turn so polling never sees it.
+                    var two=panel.polling.repos[1], expect="✕ 3h · 12 running · stale"
+                    two.checked=Date.now(); two.active=12
+                    two.last={id:1,conclusion:"failure",at:new Date(panel.now-3*3600000-300000).toISOString(),confirmedAt:panel.now-31*60000}
+                    panel.adopt()
+                    var failing=panel.entries.find(function(row) { return row.key==="repo:two/repo" })
+                    check(panel.entries[0].key==="repo:two/repo" && failing.info===expect && failing.status==="failure","failing repository first with its result")
+                    panel.listView.forceLayout()
+                    var failItem=panel.itemAt(0), infoText=failItem && textWith(failItem, expect)
+                    check(infoText,"failing row rendered")
+                    // The info Text caps at 0.35 of the list width; 640 px leaves 224 px.
+                    check(infoText.implicitWidth<=0.35*640,"longest repository info fits a 640 px panel (" + infoText.implicitWidth + ")")
+                    delete two.last; delete two.active; delete two.checked
+                    panel.adopt()
+                    check(panel.current.key===selected,"seeding the failing row keeps the selection")
+                    healthChecked=true
                 }
                 check(panel.error==="","async API has no error")
                 check(panel.current.key===selected && panel.filterText==="repo","poll preserves searched selection")

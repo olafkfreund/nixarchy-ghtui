@@ -159,8 +159,24 @@ class PageTest(unittest.TestCase):
                                   {"total_count":2000, "workflow_runs":[{"id":7,"status":"queued"}]})
         self.assertEqual((result["errorType"], result["nextPage"], result.get("total")), ("", 0, 2000))
 
-    def test_activity_page_does_not_follow_next(self):
+    def test_activity_endpoint_is_unfiltered(self):
+        self.assertEqual(actions.page_endpoint({"kind":"activity", "repo":"a/b", "requestId":1}),
+                         "repos/a/b/actions/runs?per_page=30")
+
+    def test_activity_reply_has_no_total(self):
         result = self.status_page({"kind":"activity", "repo":"a/b", "requestId":1},
+                                  {"total_count":250, "workflow_runs":[{"id":7,"status":"completed"}]})
+        self.assertEqual(result["errorType"], "")
+        self.assertNotIn("total", result)
+
+    def test_catalogue_default_branch(self):
+        with patch.object(actions, "request", return_value=("HTTP/2.0 200 OK\n\n" + json.dumps(
+                [{"full_name":"o/r", "default_branch":"ma\nin\x07"}, {"full_name":"o/s"}]), "", 0)):
+            data = actions.read_page({"kind":"catalogue", "requestId":1})["data"]
+        self.assertEqual([r["default_branch"] for r in data], ["ma in", ""])
+
+    def test_activity_page_does_not_follow_next(self):
+        result = self.status_page({"kind":"summary", "status":"in_progress", "repo":"a/b", "requestId":1},
                                   {"total_count":250, "workflow_runs":[{"id":7,"status":"in_progress"}]})
         self.assertEqual((result["errorType"], result["nextPage"], result.get("total")), ("", 0, 250))
 
@@ -269,7 +285,7 @@ class PageTest(unittest.TestCase):
         self.assertEqual(page({"kind": "jobs", "repo": "a/b", "run": "7"}, {"jobs": [job]})[0],
                          dict(job, name="x[31my", steps=[{"number": 1, "status": "completed", "name": "s t"}]))
 
-        repos = page({"kind": "catalogue"}, [{"full_name": "o/r", "description": "d⁦e\r\nf"},
+        repos = page({"kind": "catalogue"}, [{"full_name": "o/r", "description": "d⁦e\r\nf", "default_branch": "ma\nin"},
                                               {"full_name": "o/s", "description": persian}])
         self.assertEqual([(r["repo"], r["description"]) for r in repos], [("o/r", "de f"), ("o/s", persian)])
 
