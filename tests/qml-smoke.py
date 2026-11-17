@@ -179,6 +179,12 @@ ShellRoot {
             check(panel.entries.length===0,"filter")
             panel.filterText="repo"
             check(panel.cursor===0 && panel.entries.length===3 && panel.entries[1].key==="one/repo:7","expansion survives filtering")
+            panel.polling.error=""
+            panel.polling.catalogueBlocked="Catalogue blocked"
+            panel.adopt()
+            check(panel.statusInfo.text.indexOf("Catalogue blocked")>=0 && panel.statusInfo.urgent,"blocked catalogue remains urgent while filtering")
+            panel.polling.catalogueBlocked=""
+            panel.adopt()
             panel.move(1)
             panel.filterText=""
             check(panel.current.key==="one/repo:7","clearing the filter keeps the selected row")
@@ -209,6 +215,16 @@ ShellRoot {
             check(panel.cursor===panel.entries.length-1,"page down stays at bottom")
             panel.page(-1)
             check(panel.cursor<panel.entries.length-1 && panel.cursor>=0,"page up advances through mixed row heights")
+            panel.filterText="Long run 39"
+            panel.move(1)
+            var lowKey=panel.current.key
+            panel.filterText=""
+            var view=panel.listView
+            view.forceLayout()
+            var lowItem=panel.itemAt(panel.cursor)
+            check(panel.current.key===lowKey && lowItem && lowItem.y>=view.contentY && lowItem.y<view.contentY+Math.max(1,view.height),
+                "clearing a filter keeps a low selected row visible")
+            panel.filterText="repo"
             panel.polling.repos[0].runs=originalRuns
             panel.adopt()
             panel.move(-panel.entries.length)

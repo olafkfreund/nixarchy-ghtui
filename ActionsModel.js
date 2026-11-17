@@ -70,7 +70,7 @@ function clock(ms, seconds) {
 
 function quotaText(remaining, resetAt, now) {
     if (typeof remaining !== "number" || !(now < resetAt)) return "";
-    return remaining.toLocaleString("en-US") + " API requests left" + (remaining < 500 ? " · resets " + clock(resetAt) : "");
+    return String(remaining).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " API requests left" + (remaining < 500 ? " · resets " + clock(resetAt) : "");
 }
 
 function statusLine(s, now) {
@@ -161,7 +161,7 @@ function rows(repos, expanded, details, filter, now, live) {
             });
         });
         if (more) result.push(more);
-        else if (!(repo.runs || []).length && !repo.error) result.push({key: repoKey + ":message", parent: repoKey, kind: "message", depth: 1,
+        else if (!(repo.runs || []).length && !repo.error && !repo.archived && !repo.disabled && !repo.blocked) result.push({key: repoKey + ":message", parent: repoKey, kind: "message", depth: 1,
             title: repo.summaryAt ? "No workflow runs" : "Loading runs…", subtitle: "", status: "", statusText: "", info: "", repo: repo.repo});
     });
     return result;

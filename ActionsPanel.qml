@@ -38,7 +38,7 @@ Item {
     readonly property bool discoveryComplete: polling.catalogueComplete
     property string notice: ""
     property double noticeUntil: 0
-    readonly property var statusInfo: Model.statusLine({notice: notice, noticeUntil: noticeUntil, error: polling.error, repos: repos,
+    readonly property var statusInfo: Model.statusLine({notice: notice, noticeUntil: noticeUntil, error: root.error, repos: repos,
         cooldown: polling.cooldown, discoveryComplete: discoveryComplete, checkedCount: checkedCount, repoCount: repos.length,
         remaining: polling.remaining, resetAt: polling.resetAt}, now)
     readonly property var coverage: Model.coverage(repos)
@@ -48,6 +48,7 @@ Item {
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
     onFilterTextChanged: {
         rebuild(filterText !== "")
+        if (filterText === "") list.positionViewAtIndex(cursor, ListView.Contain)
         selectionChanged(false)
     }
     // ponytail: full rebuild at 1 Hz (~7 ms at 1650 rows in Node); skip when no entry has an open-ended duration if it ever shows in a profile
@@ -128,6 +129,7 @@ Item {
         expand(false)
     }
     function itemAt(index) { return list.itemAtIndex(index) }
+    readonly property alias listView: list
     function enter() {
         var row = current
         if (!row || ["repo", "run", "job"].indexOf(row.kind) < 0) return
@@ -376,7 +378,7 @@ Item {
                 Keys.onPressed: function(event) {
                     if (root.confirm) {
                         event.accepted = true
-                        if (!event.isAutoRepeat) {
+                        if (!event.isAutoRepeat && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
                             if (event.key === Qt.Key_Y) root.answer(true)
                             else if (event.key === Qt.Key_N || event.key === Qt.Key_Escape) root.answer(false)
                         }
@@ -387,6 +389,7 @@ Item {
                         return
                     }
                     event.accepted = true
+                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?")) return
                     if (event.key === Qt.Key_Escape) {
                         if (root.filterText) root.filterText = ""
                         else root.close()

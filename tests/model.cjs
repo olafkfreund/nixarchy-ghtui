@@ -217,7 +217,7 @@ console.log('Model: more row, linear syncRows and random-order equivalence passe
   const view = (r, d, live, open = {'repo:o/r': true, 'o/r:7': true}, t = now) =>
     model.rows([{repo: 'o/r', runs: [r]}], open, d ? {'o/r:7': d} : {}, '', t, live);
   const stale = {jobs: [job], updated: at(4 * 60000)};
-  assert.ok(view(run, stale, 'o/r:9')[1].subtitle.includes('jobs 4m old, not refreshing'));
+  assert.equal(view(run, stale, 'o/r:9')[1].subtitle, 'jobs 4m old, not refreshing');
   const frozen = view(run, stale, 'o/r:9')[2].info;
   assert.equal(view(run, stale, 'o/r:9', undefined, now + 600000)[2].info, frozen, 'timer stays at the last fetch');
   const fresh = view(run, stale, 'o/r:7');
@@ -243,6 +243,9 @@ console.log('Model: not-refreshing marker passed');
   const view = (r, open = {}, filter = '', repo = {}) =>
     model.rows([{repo: 'o/r', ...repo, runs: [r]}], {'repo:o/r': true, ...open}, {}, filter, t);
   assert.equal(view(run)[1].subtitle, 'main · push · bob · 5m ago · Fix');
+  const staleSubtitle = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true, 'o/r:7': true},
+    {'o/r:7': {jobs: [], updated: new Date(t - 4 * 60000).toISOString()}}, '', t, 'o/r:9')[1].subtitle;
+  assert.equal(staleSubtitle, 'main · push · bob · 5m ago · jobs 4m old, not refreshing · Fix');
   assert.ok(!view(run)[1].subtitle.includes('#') && !view(run)[1].subtitle.includes('jobs fetched'));
   const long = {...run, head_branch: 'b'.repeat(40), actor: 'a'.repeat(30), event: 'e'.repeat(30)};
   assert.deepEqual(view(long)[1].subtitle.split(' · ').slice(0, 3), ['b'.repeat(27) + '…', 'e'.repeat(13) + '…', 'a'.repeat(15) + '…']);
@@ -251,17 +254,19 @@ console.log('Model: not-refreshing marker passed');
     assert.equal(view(long, {}, q).length, 2, q);
   assert.equal(view({...run, status: 'in_progress', conclusion: null}, {}, 'in_progress').length, 2);
   const job = {id: 8, name: 'build', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/job/8',
-    steps: [{number: 4, name: 'Go', status: 'completed', conclusion: 'success'}]};
+    steps: [{number: 4, name: 'Go', status: 'completed', conclusion: 'failure'}]};
   const full = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true, 'o/r:7': true, 'o/r:7:8': true}, {'o/r:7': {jobs: [job]}}, '', t);
   assert.deepEqual([...full.map(row => row.kind)], ['repo', 'run', 'job', 'step']);
   assert.equal(full[3].url, job.html_url);
-  assert.deepEqual([...full.map(row => row.statusText)], ['neutral', 'failed', 'passed', 'passed']);
+  assert.deepEqual([...full.map(row => row.statusText)], ['neutral', 'failed', 'passed', 'failed']);
   const msg = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true, 'o/r:7': true}, {}, '', t);
   assert.deepEqual([msg[2].kind, msg[2].statusText], ['message', '']);
   // message row for an expanded repository without runs
   const empty = (repo, filter = '') => model.rows([{repo: 'o/r', ...repo}], {'repo:o/r': true}, {}, filter, t);
   assert.deepEqual([empty({runs: []})[1].kind, empty({runs: []})[1].title, empty({runs: []})[1].statusText], ['message', 'Loading runs…', '']);
   assert.equal(empty({runs: [], summaryAt: 1})[1].title, 'No workflow runs');
+  for (const flag of ['archived', 'disabled', 'blocked'])
+    assert.equal(empty({runs: [], [flag]: true}).length, 1, flag + ' repositories have no loading row');
   assert.equal(empty({}, 'o/r').length, 2, 'filter-matched empty repository keeps its message');
   assert.equal(empty({runs: [], error: 'boom'}).length, 1);
   assert.equal(empty({runs: [], hidden: {queued: 2}})[1].kind, 'more');
@@ -278,3 +283,28 @@ console.log('Model: not-refreshing marker passed');
   assert.equal(ops, 1);
 }
 console.log('Model: rows subtitle, statusText and message row passed');
+
+// Exercise the QML key handler as JavaScript without a display.
+{
+  const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
+    .split('\n                }\n\n                Column {')[0];
+  const calls = [];
+  const root = {confirm:null, copyLink:() => calls.push('copy'), answer:yes => calls.push(yes ? 'yes' : 'no')};
+  const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_Y:89, Key_N:78, Key_Escape:27};
+  const handler = vm.runInNewContext('(function(event) {' + body + '\n})',
+    {root, Qt, Quickshell:{execDetached:() => calls.push('keys')}});
+  const press = (key, text, modifiers = 0, isAutoRepeat = false) => handler({key, text, modifiers, isAutoRepeat});
+  press(Qt.Key_Y, 'y', 0, true);
+  press(0, '?', 0, true);
+  assert.deepEqual(calls, []);
+  press(Qt.Key_Y, 'y');
+  assert.deepEqual(calls, ['copy']);
+  root.confirm = {text:'confirm'};
+  press(Qt.Key_Y, 'y', Qt.ControlModifier);
+  press(Qt.Key_Y, 'y', 0, true);
+  assert.deepEqual(calls, ['copy']);
+  press(Qt.Key_Y, 'y');
+  press(Qt.Key_N, 'n');
+  press(Qt.Key_Escape, '');
+  assert.deepEqual(calls, ['copy', 'yes', 'no', 'no']);
+}
