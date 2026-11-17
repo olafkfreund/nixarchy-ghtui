@@ -1,10 +1,15 @@
 """GitHub Actions data and a closed set of run actions, using gh's existing authentication."""
 import argparse
 import json
+import os
 import re
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 import unicodedata
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -260,6 +265,144 @@ def read_page(task):
     return result
 
 
+def clean_log(text):
+    text = re.sub(r"\x1b\].*?(?:\x07|\x1b\\|$)", "", text, flags=re.DOTALL)
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    text = re.sub(r"\x1b.?", "", text, flags=re.DOTALL).replace("\r", "")
+    lines = []
+    cut = 0
+    for line in text.splitlines(keepends=True):
+        line = "".join(c for c in line if c in "\n\t" or c in JOINERS
+                       or unicodedata.category(c) not in ("Cc", "Cf"))
+        ending = "\n" if line.endswith("\n") else ""
+        content = line[:-1] if ending else line
+        if len(content) > 2000:
+            content = content[:2000] + "…"
+            cut += 1
+        lines.append(content + ending)
+    return "".join(lines), cut
+
+
+def log_dir():
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    if not os.path.isabs(runtime):
+        raise ValueError("Log directory unavailable")
+    directory = os.path.join(runtime, "nixarchy-ghtui")
+    if os.path.islink(directory):
+        raise ValueError("Log directory unavailable")
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
+    return directory
+
+
+def read_log(task, timeout=90):
+    if not isinstance(task, dict) or type(task.get("requestId")) is not int or task["requestId"] < 1:
+        raise ValueError("Invalid request identity")
+    repo = repo_name(task.get("repo"))
+    run = run_id(task)
+    job = task.get("job")
+    if job is not None:
+        if not re.fullmatch(r"[0-9]+", str(job)) or int(job) < 1:
+            raise ValueError("Invalid job ID")
+        job = str(job)
+    mode = task.get("mode")
+    if mode not in ("failed", "full") or mode == "full" and not job:
+        raise ValueError("Invalid log mode")
+    directory = log_dir()
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        info = os.lstat(path)
+        if stat.S_ISREG(info.st_mode) and info.st_mtime < time.time() - 86400:
+            os.unlink(path)
+    result = {"requestId": task["requestId"], "httpStatus": 0, "nextPage": 0,
+              "data": None, "error": "", "errorType": "", "retryAt": 0,
+              "remaining": None, "resetAt": 0}
+    command = ["gh", "run", "view"] + (["--job", job] if job else [run]) + [
+        "--log-failed" if mode == "failed" else "--log", "-R", "github.com/" + repo]
+    try:
+        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError:
+        result.update(errorType="setup", error="Install gh (GitHub CLI)")
+        return result
+    tail = bytearray()
+    errors = bytearray()
+    total = 0
+
+    def read_stdout():
+        nonlocal total
+        while chunk := os.read(child.stdout.fileno(), 65536):
+            total += len(chunk)
+            tail.extend(chunk)
+            if len(tail) > 1048576:
+                del tail[:-1048576]
+
+    def read_stderr():
+        while chunk := os.read(child.stderr.fileno(), 65536):
+            errors.extend(chunk)
+
+    readers = [threading.Thread(target=read_stdout), threading.Thread(target=read_stderr)]
+    for reader in readers:
+        reader.start()
+    try:
+        code = child.wait(timeout=timeout)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+        for reader in readers:
+            reader.join()
+        child.stdout.close()
+        child.stderr.close()
+    if code:
+        stderr = errors.decode("utf-8", "replace").lower()
+        if any(term in stderr for term in ("rate limit", "http 429", "secondary rate")):
+            result.update(errorType="rate", error="GitHub rate limit")
+        elif "auth login" in stderr or "http 401" in stderr:
+            result.update(errorType="auth", error="Authenticate with gh auth login")
+        elif "http 403" in stderr or "http 404" in stderr:
+            result.update(errorType="permission", error="Log unavailable or expired")
+        else:
+            result.update(errorType="network", error="GitHub log request failed")
+        return result
+    text, lines_cut = clean_log(tail.decode("utf-8", "replace"))
+    result["data"] = {"path": "", "mode": mode, "cutShort": total > 1048576, "lineCut": bool(lines_cut)}
+    if not text:
+        result["error"] = "No failed steps in this log." if mode == "failed" else "This log is empty."
+        return result
+    cuts = []
+    if total > 1048576:
+        cuts.append(f"cut short: showing the last 1 MiB of {(total + 1048575) // 1048576} MiB")
+    if lines_cut:
+        cuts.append(f"lines cut: {lines_cut} lines longer than 2,000 characters were shortened")
+    header = f"{repo} · run {run}" + (f" · job {job}" if job else "") + f" · {mode}\n"
+    header += "; ".join(cuts) if cuts else "complete"
+    fd, path = tempfile.mkstemp(dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            output.write(header + "\n\n" + text)
+    except BaseException:
+        os.unlink(path)
+        raise
+    result["data"]["path"] = path
+    return result
+
+
+def view(argv):
+    if len(argv) != 1:
+        return 1
+    path = argv[0]
+    try:
+        directory = log_dir()
+        if os.path.dirname(path) != directory or not stat.S_ISREG(os.lstat(path).st_mode):
+            return 1
+    except (OSError, ValueError):
+        return 1
+    try:
+        return subprocess.run(["less", "--", path], check=False).returncode
+    finally:
+        os.unlink(path)
+
+
 def write_action(task):
     endpoint = write_endpoint(task)
     result = {"requestId": task["requestId"], "action": task["action"], "httpStatus": 0,
@@ -300,9 +443,11 @@ def write_action(task):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("page", "act"))
+    parser.add_argument("mode", choices=("page", "act", "log", "view"))
     parser.add_argument("targets", nargs="+")
     args = parser.parse_args()
+    if args.mode == "view":
+        return view(args.targets)
 
     def cancelled(*_):
         raise SystemExit(0)
@@ -313,7 +458,7 @@ def main():
         if len(args.targets) != 1:
             raise ValueError(f"{args.mode} requires one JSON request")
         task = json.loads(args.targets[0])
-        data = read_page(task) if args.mode == "page" else write_action(task)
+        data = read_page(task) if args.mode == "page" else read_log(task) if args.mode == "log" else write_action(task)
         data["updated"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(data))
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as exc:
