@@ -790,8 +790,9 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                 steps = [
                     ('readiness: probe j', K('j'), lambda p, s: s['cursor'] == 1 and s['selected'] == two, 500),
                     ('readiness: probe k', K('k'), lambda p, s: s['cursor'] == 0 and s['selected'] == one, 2000),
-                    ('r', K('r'), lambda p, s: s['requests'] > p['requests'], 1500),
-                    ('R', ['-M', 'shift', '-k', 'r', '-m', 'shift'], lambda p, s: s['requests'] > p['requests'], 1500),
+                    # r and R change no state line by themselves; the request log checks them after the run.
+                    ('r', K('r'), None, 1500),
+                    ('R', ['-M', 'shift', '-k', 'r', '-m', 'shift'], None, 1500),
                     ('Down', K('Down'), sel(two), 400),
                     ('Up', K('Up'), sel(one), 400),
                     ('End', K('End'), sel(two), 400),
@@ -808,16 +809,40 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     ('Escape with filter', K('Escape'), lambda p, s: s['filter'] == '' and s['opened'] and s['rows'] > 2, 500),
                     ('Ctrl+=', CTRL('equal'), lambda p, s: s['textStep'] == 1, 500),
                     ('Ctrl+0', CTRL('0'), lambda p, s: s['textStep'] == 0, 500),
-                    ('g', K('End') + ['-s', '300'] + K('g'), lambda p, s: s['cursor'] == 0, 300),
+                    ('End before g', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1 and s['rows'] > 2, 300),
+                    ('g', K('g'), lambda p, s: s['cursor'] == 0, 300),
                     ('walk j', K(*['j'] * 35), None, 150),
-                    ('Home', K('Home'), lambda p, s: s['cursor'] == 0, 400),
-                    ('End', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1
+                    ('Home after walk', K('Home'), lambda p, s: s['cursor'] == 0, 400),
+                    ('End after walk', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1
                      and s['layout']['contentHeight'] > s['layout']['listHeight'] and s['scrollY'] > 0, 400),
-                    ('G', K('Home') + ['-s', '300'] + K('G'), lambda p, s: s['cursor'] == s['rows'] - 1, 400),
+                    ('Home before G', K('Home'), lambda p, s: s['cursor'] == 0, 400),
+                    ('G', K('G'), lambda p, s: s['cursor'] == s['rows'] - 1, 400),
                     ('j to run', K('g', 'j'), lambda p, s: s['cursor'] == 1 and s['selected'].startswith('one/repo:'), 400),
                     ('Return on run', K('Return'), lambda p, s: s['rows'] > p['rows'] and s['selected'] == p['selected'], 4500),
                     ('Escape closes', K('Escape'), lambda p, s: not s['opened'], 2000),
                 ]
+                # Plan step 4: r must not land inside the opening summary chain (its pages run 1 s apart),
+                # so start typing once that chain has finished and the request log is quiet.
+                log_path = root / 'fake.log'
+                end = time.monotonic() + 30
+                while True:
+                    lines = log_path.read_text().splitlines() if log_path.exists() else []
+                    done = any(json.loads(l)['kind'] == 'summary' and json.loads(l)['status'] == 'requested' for l in lines)
+                    if done and time.time() - json.loads(lines[-1])['t'] >= 1.5:
+                        break
+                    if time.monotonic() > end:
+                        fail('opening summary chain did not finish')
+                    time.sleep(0.2)
+                while True:
+                    try:
+                        last[0] = states.get_nowait()
+                    except queue.Empty:
+                        break
+                steady = last[0]
+                if steady['inFlight'] or steady['selected'] != 'repo:one/repo' or steady['rows'] != 2:
+                    steady = wait_state('steady after opening chain', lambda s: not s['inFlight'] and s['rows'] == 2
+                                        and s['selected'] == 'repo:one/repo', steady['seq'] - 1, timeout=5)
+                assert len({step[0] for step in steps}) == len(steps), 'stage labels must be unique'
                 # One wtype for the whole run: one virtual keyboard and one keymap (plan: option B).
                 # The walk sends one j per pause; extra presses at the bottom change nothing.
                 argv = ['wtype', '-s', '300']
@@ -851,6 +876,10 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                                 fail(f"walk: only {cur['rows']} rows; expected the expanded repository's 25 runs")
                             prev = cur
                             print(f'{scenario}: key walk j: {cur["rows"]} rows, layout checked on each')
+                            continue
+                        if pred is None:
+                            TIMELINE.append(f'{label}: sent ~{times[label]:.1f}s, checked in the request log')
+                            print(f'{scenario}: key {label} sent')
                             continue
                         prev = wait_state(f'key {label}', lambda s, p=prev, f=pred: f(p, s), prev['seq'],
                                           timeout=times[label] - (time.time() - start) + 6)
