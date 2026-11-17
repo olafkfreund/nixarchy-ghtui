@@ -1,6 +1,6 @@
 # GitHub Actions for Omarchy
 
-A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with failing repositories first, then running ones. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text, rows and spacing use the theme's sizes, like the other Omarchy menus, and the panel shrinks to fit smaller screens. The panel can also rerun or cancel a selected run, after a y/n confirmation. No buttons, background daemon, database or token storage; with the panel closed only runs you mark with `w` are polled, until they finish.
+A flat, keyboard-driven Quickshell popup for repositories → workflow runs → jobs → steps. Automatically discover and search repositories visible to your GitHub account, with failing repositories first, then running ones. Hosted inside `omarchy-shell`, with the current Omarchy menu colours, fonts, spacing, border and corner radius. Text, rows and spacing are theme-sized by default, like the other Omarchy menus, adjustable with Ctrl+= / Ctrl+- / Ctrl+0, and the panel shrinks to fit smaller screens. The panel can also rerun or cancel a selected run, after a y/n confirmation. No buttons, background daemon, database or token storage; with the panel closed only runs you mark with `w` are polled, until they finish.
 
 ## Screenshots
 
@@ -139,6 +139,7 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | Click | Select a row and expand or collapse it, like Enter |
 | Page Up / Down | Move one screenful |
 | Home / End, g / G | First or last row |
+| Ctrl + = / Ctrl + - / Ctrl + 0 | Bigger, smaller, theme text size: 70% to 150%, kept until the shell restarts, works in the search field too |
 | / | Filter repositories/runs by name, branch or state; `branch:x`, `actor:x`, `is:failed` |
 | ↑ / ↓ while filtering | Select a search result |
 | Enter while filtering | Expand selected result and resume navigation |
@@ -156,7 +157,7 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | f | Rerun failed jobs of the selected failed run (asks y/n) |
 | c | Cancel the selected unfinished run (asks y/n) |
 | y / n / Esc | Confirm or cancel a pending action, while a confirmation is open; Enter does nothing |
-| Ctrl, Alt, Meta combinations | Left alone |
+| Other Ctrl, Alt, Meta combinations | Left alone, except the three text size keys above |
 
 Icons accompany status words (passed, failed, running, queued, …): ✓ passed, ✕ failed, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Passed has no colour of its own; only running and failure states are coloured. Job rows show completed/reported step counts. These are not estimates of remaining execution time. `v` opens the log of a failed run or a finished job after its run finishes; for a failed job it shows only failed steps, and for any other finished job it shows the full log. A step row opens its parent job's log.
 

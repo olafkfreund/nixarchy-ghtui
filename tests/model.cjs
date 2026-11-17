@@ -388,6 +388,41 @@ console.log('Model: log targets passed');
 }
 console.log('Model: view guard passed');
 
+{
+  for (let px = 0; px <= 40; px++) assert.equal(model.zoomed(px, 0), px);
+  assert.equal(model.zoomed(12, 5), 18);
+  assert.equal(model.zoomed(12, -3), 8);
+  assert.equal(model.zoomed(10, -3), 7);
+  assert.equal(model.zoomed(10, 5), 15);
+  for (let px = 1; px <= 40; px++) {
+    let previous = 0;
+    for (let step = -3; step <= 5; step++) {
+      const size = model.zoomed(px, step);
+      assert.ok(size >= 1);
+      assert.ok(size >= previous);
+      previous = size;
+    }
+  }
+  for (let step = -3; step <= 5; step++) assert.equal(model.zoomed(0, step), 0);
+  assert.equal(model.clampStep(9), 5);
+  assert.equal(model.clampStep(-9), -3);
+  assert.equal(model.clampStep(-4), -3);
+  assert.equal(model.clampStep(NaN), 0);
+  assert.equal(model.clampStep('3'), 3);
+  assert.equal(model.clampStep(undefined), 0);
+  assert.equal(model.zoomed(12, 99), model.zoomed(12, 5));
+  assert.equal(model.zoomed(12, -99), model.zoomed(12, -3));
+  let step = 0;
+  for (let i = 0; i < 5; i++) step = model.clampStep(step + 1);
+  assert.equal(step, 5);
+  assert.equal(model.clampStep(step + 1), step);
+  for (let i = 0; i < 5; i++) step = model.clampStep(step - 1);
+  assert.equal(step, 0);
+  for (let i = 0; i < 3; i++) step = model.clampStep(step - 1);
+  assert.equal(step, -3);
+  assert.equal(model.clampStep(step - 1), step);
+}
+console.log('Model: text size passed');
 // #44 step 9: watched run marker and notification text.
 {
   const run = {id: 7, status: 'in_progress', name: 'Build'};
@@ -423,7 +458,8 @@ console.log('Model: watched rows and notices passed');
   const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
     .split('\n                }\n\n                Column {')[0];
   const calls = [];
-  const root = {confirm:null, copyLink:() => calls.push('copy'), toggleWatch:() => calls.push('watch'), loadMore:() => calls.push('more'), answer:yes => calls.push(yes ? 'yes' : 'no')};
+  const root = {confirm:null, textKey:event => { if (event.key === 61 && event.modifiers === 1) { calls.push('zoom'); return true; } return false; },
+    copyLink:() => calls.push('copy'), toggleWatch:() => calls.push('watch'), loadMore:() => calls.push('more'), answer:yes => calls.push(yes ? 'yes' : 'no')};
   const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_W:87, Key_Y:89, Key_N:78, Key_Escape:27};
   const handler = vm.runInNewContext('(function(event) {' + body + '\n})',
     {root, Qt, Quickshell:{execDetached:() => calls.push('keys')}});
@@ -437,10 +473,19 @@ console.log('Model: watched rows and notices passed');
   assert.deepEqual(calls, ['more']);
   assert.equal(press(77, 'm', Qt.ControlModifier), false);
   assert.deepEqual(calls, ['more']);
+  assert.equal(press(61, '=', Qt.ControlModifier), true);
+  assert.deepEqual(calls, ['more', 'zoom']);
+  const searchBody = fs.readFileSync('ActionsPanel.qml', 'utf8').split('id: searchField')[1]
+    .split('Keys.onPressed: function(event) {')[1].split('\n                        }\n                        Text {')[0];
+  const searchHandler = vm.runInNewContext('(function(event) {' + searchBody + '\n})', {root, Qt});
+  const searchEvent = {key:61, text:'=', modifiers:Qt.ControlModifier, accepted:false};
+  searchHandler(searchEvent);
+  assert.equal(searchEvent.accepted, true, 'search field accepts Ctrl+=');
+  assert.deepEqual(calls, ['more', 'zoom', 'zoom'], 'search field calls textKey');
   assert.equal(press(77, 'M'), false, 'Shift+M passes through');
   press(Qt.Key_Y, 'y');
   press(Qt.Key_W, 'w');
-  assert.deepEqual(calls, ['more', 'copy', 'watch']);
+  assert.deepEqual(calls, ['more', 'zoom', 'zoom', 'copy', 'watch']);
   const ctrlWatch = {key:Qt.Key_W, text:'w', modifiers:Qt.ControlModifier, isAutoRepeat:false};
   handler(ctrlWatch);
   assert.equal(ctrlWatch.accepted,false);
@@ -449,11 +494,22 @@ console.log('Model: watched rows and notices passed');
   assert.equal(press(77, 'm'), true);
   press(Qt.Key_Y, 'y', Qt.ControlModifier);
   press(Qt.Key_Y, 'y', 0, true);
-  assert.deepEqual(calls, ['more', 'copy', 'watch']);
+  assert.deepEqual(calls, ['more', 'zoom', 'zoom', 'copy', 'watch']);
   press(Qt.Key_Y, 'y');
   press(Qt.Key_N, 'n');
   press(Qt.Key_Escape, '');
-  assert.deepEqual(calls, ['more', 'copy', 'watch', 'yes', 'no', 'no']);
+  assert.deepEqual(calls, ['more', 'zoom', 'zoom', 'copy', 'watch', 'yes', 'no', 'no']);
+}
+
+{
+  const qml = fs.readFileSync('ActionsPanel.qml', 'utf8');
+  assert.doesNotMatch(qml, /pixelSize:\s*Style\.font\b/);
+  assert.deepEqual(qml.split('\n').filter(line => line.includes('Style.space(')).map(line => line.trim()), [
+    'function sp(n) { return Model.zoomed(Style.space(n), textStep) }',
+    'width: Math.min(Style.space(900), window.width - Style.gapsOut * 2)',
+    'height: Math.min(Style.space(680), window.height - Style.gapsOut * 2)',
+    'borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border, Math.max(1, Style.space(2)))'
+  ]);
 }
 
 // Exercise the panel lifecycle and fixed watch messages without a display.

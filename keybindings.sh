@@ -12,6 +12,8 @@ Enter / Space → Expand or collapse repository, run or job
 ← / h → Collapse or select parent
 Page Down / Page Up → Move one screenful
 Home / End / g / G → First or last row
+Ctrl + = / Ctrl + - → Bigger or smaller text (10% a step, 70% to 150% of the theme size)
+Ctrl + 0 → Theme text size
 Click → Select a row and expand or collapse it
 / → Search repositories and workflows; select existing query
 branch:x actor:x is:failed → Filter the runs already loaded
@@ -32,7 +34,7 @@ a → Rerun all jobs of the selected finished run (asks y/n)
 f → Rerun failed jobs of the selected failed run (asks y/n)
 c → Cancel the selected unfinished run (asks y/n)
 y / n / Esc → Confirm or cancel a pending action; Enter does nothing
-Ctrl / Alt / Meta combinations → Left alone
+Other Ctrl, Alt and Meta combinations → Left alone
 Search editing → Native cursor movement, selection, Backspace and Delete
 KEYS
 }

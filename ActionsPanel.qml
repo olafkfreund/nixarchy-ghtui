@@ -39,6 +39,26 @@ Item {
     property int actionId: 0
     property var actionInfo: null
     property double now: Date.now()
+    property int textStep: 0
+    readonly property int fTitle: Model.zoomed(Style.font.title, textStep)
+    readonly property int fBody: Model.zoomed(Style.font.body, textStep)
+    readonly property int fCaption: Model.zoomed(Style.font.caption, textStep)
+    function sp(n) { return Model.zoomed(Style.space(n), textStep) }
+    function textKey(event) {
+        var m = event.modifiers
+        if (!(m & Qt.ControlModifier) || (m & (Qt.AltModifier | Qt.MetaModifier))) return false
+        if (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) setTextStep(textStep + 1)
+        else if (event.key === Qt.Key_Minus) setTextStep(textStep - 1)
+        else if (event.key === Qt.Key_0) setTextStep(0)
+        else return false
+        return true
+    }
+    function setTextStep(n) {
+        textStep = Model.clampStep(n)
+        // After the new row heights are laid out, or the selected row can end up partly below the view.
+        Qt.callLater(function() { list.forceLayout(); list.positionViewAtIndex(cursor, ListView.Contain) })
+        showNotice("Text size " + (100 + 10 * textStep) + "%")
+    }
     readonly property bool discoveryComplete: polling.catalogueComplete
     property string notice: ""
     property double noticeUntil: 0
@@ -84,7 +104,7 @@ Item {
             requests: polling.requests, inFlight: workerBusy, cooldown: polling.cooldown,
             lastRequest: polling.lastRequest, lastStarted: polling.lastStarted,
             filter: filterText, editing: filtering, selected: current ? current.key : "", scrollY: list.contentY,
-            pollSelected: polling.selected, pollInspected: polling.inspected, remaining: polling.remaining, resetAt: polling.resetAt,
+            textStep: textStep, pollSelected: polling.selected, pollInspected: polling.inspected, remaining: polling.remaining, resetAt: polling.resetAt,
             action: actionText, actionBusy: actionBusy,
             confirm: confirm ? {action: confirm.action, repo: confirm.repo, run: confirm.run} : null})
     }
@@ -470,6 +490,7 @@ Item {
                         }
                         return
                     }
+                    if (root.textKey(event)) { event.accepted = true; return }
                     if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) {
                         event.accepted = false
                         return
@@ -513,7 +534,8 @@ Item {
                         width: parent.width
                         text: "GitHub Actions  ·  " + root.repos.length + (root.repos.length === 1 ? " repository" : " repositories") + (root.watching ? "  ·  " + Object.keys(root.polling.watches).length + " watched" : "")
                         color: Commons.Color.menu.text
-                        font { family: Style.font.menuFamily; pixelSize: Style.font.title; bold: true }
+                        font { family: Style.font.menuFamily; pixelSize: root.fTitle; bold: true }
+                        elide: Text.ElideRight
                         textFormat: Text.PlainText
                     }
                     TextInput {
@@ -521,7 +543,7 @@ Item {
                         width: parent.width
                         height: Math.ceil(font.pixelSize * 1.4)
                         color: Commons.Color.menu.text
-                        font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
+                        font { family: Style.font.menuFamily; pixelSize: root.fCaption }
                         clip: true
                         selectByMouse: true
                         selectionColor: Commons.Color.menu.selectedBackground
@@ -529,6 +551,7 @@ Item {
                         Accessible.name: "Search repositories"
                         rightPadding: coverageNote.implicitWidth + Style.spacing.md
                         Keys.onPressed: function(event) {
+                            if (root.textKey(event)) { event.accepted = true; return }
                             if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
                                 root.move(event.key === Qt.Key_Up ? -1 : 1)
                             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -569,7 +592,7 @@ Item {
                             width: parent.width - quotaNote.implicitWidth - (quotaNote.text ? Style.spacing.md : 0)
                             text: root.statusInfo.text
                             color: root.statusInfo.urgent ? Commons.Color.urgent : Commons.Color.menu.text
-                            font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
+                            font { family: Style.font.menuFamily; pixelSize: root.fCaption }
                             elide: Text.ElideRight
                             textFormat: Text.PlainText
                         }
@@ -579,7 +602,7 @@ Item {
                             text: root.statusInfo.quota
                             color: Commons.Color.menu.text
                             opacity: 0.65
-                            font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
+                            font { family: Style.font.menuFamily; pixelSize: root.fCaption }
                             textFormat: Text.PlainText
                         }
                     }
@@ -602,29 +625,29 @@ Item {
                             Accessible.selected: index === root.cursor
                             Accessible.focusable: true
                             width: list.width
-                            height: modelData.subtitle ? Math.max(Style.space(64), Style.font.body + Style.font.caption + Style.space(16)) : Math.max(Style.space(40), Style.font.body + Style.space(12))
+                            height: modelData.subtitle ? Math.max(root.sp(64), root.fBody + root.fCaption + root.sp(16)) : Math.max(root.sp(40), root.fBody + root.sp(12))
                             color: index === root.cursor ? Commons.Color.menu.selectedBackground : "transparent"
                             radius: 0
                             Row {
                                 anchors.fill: parent
-                                anchors.leftMargin: Style.space(8) + modelData.depth * Style.space(18)
-                                anchors.rightMargin: Style.space(8)
+                                anchors.leftMargin: root.sp(8) + modelData.depth * root.sp(18)
+                                anchors.rightMargin: root.sp(8)
                                 spacing: Style.spacing.sm
                                 Text {
-                                    width: Style.space(18)
+                                    width: root.sp(18)
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: Model.icon(modelData.status)
                                     color: root.statusColor(modelData.status)
-                                    font { family: Style.font.menuFamily; pixelSize: Style.font.body }
+                                    font { family: Style.font.menuFamily; pixelSize: root.fBody }
                                 }
                                 Column {
-                                    width: Math.max(0, parent.width - Style.space(26) - info.width - parent.spacing * 2)
+                                    width: Math.max(0, parent.width - root.sp(26) - info.width - parent.spacing * 2)
                                     anchors.verticalCenter: parent.verticalCenter
                                     Text {
                                         width: parent.width
                                         text: (["repo", "run", "job"].indexOf(modelData.kind) >= 0 ? (root.expanded[modelData.key] ? "▾ " : "▸ ") : "") + modelData.title
                                         color: index === root.cursor ? Commons.Color.menu.selectedText : Commons.Color.menu.text
-                                        font { family: Style.font.menuFamily; pixelSize: Style.font.body; bold: modelData.kind === "repo" }
+                                        font { family: Style.font.menuFamily; pixelSize: root.fBody; bold: modelData.kind === "repo" }
                                         elide: Text.ElideRight
                                         textFormat: Text.PlainText
                                     }
@@ -634,7 +657,7 @@ Item {
                                         text: modelData.subtitle || ""
                                         color: index === root.cursor ? Commons.Color.menu.selectedText : Commons.Color.menu.text
                                         opacity: 0.65
-                                        font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
+                                        font { family: Style.font.menuFamily; pixelSize: root.fCaption }
                                         elide: Text.ElideRight
                                         textFormat: Text.PlainText
                                     }
@@ -645,7 +668,7 @@ Item {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: modelData.kind === "repo" ? modelData.info : modelData.statusText + (modelData.info ? " · " + modelData.info : "")
                                     color: root.statusColor(modelData.status)
-                                    font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
+                                    font { family: Style.font.menuFamily; pixelSize: root.fCaption }
                                     elide: Text.ElideRight
                                     textFormat: Text.PlainText
                                 }
@@ -657,7 +680,7 @@ Item {
                             visible: root.entries.length === 0
                             text: Model.emptyText({repoCount: root.repos.length, error: root.error, discoveryComplete: root.discoveryComplete, filter: root.filterText})
                             color: Commons.Color.menu.text
-                            font { family: Style.font.menuFamily; pixelSize: Style.font.body }
+                            font { family: Style.font.menuFamily; pixelSize: root.fBody }
                             textFormat: Text.PlainText
                         }
                     }
@@ -667,8 +690,10 @@ Item {
                         text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  v log  w watch  y copy  ? keys  Esc close"
                         color: root.actionError && !root.confirm && root.actionText ? Commons.Color.urgent : Commons.Color.menu.text
                         opacity: root.confirm || root.actionText ? 1 : 0.65
-                        font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
+                        font { family: Style.font.menuFamily; pixelSize: root.fCaption }
                         elide: Text.ElideRight
+                        maximumLineCount: 2
+                        wrapMode: root.textStep > 0 ? Text.WordWrap : Text.NoWrap
                         textFormat: Text.PlainText
                     }
                 }

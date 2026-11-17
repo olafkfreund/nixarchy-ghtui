@@ -119,6 +119,24 @@ ShellRoot {
     property bool copyChecked: false
     property bool accChecked: false
     property bool healthChecked: false
+    property int zoomStage: 0
+    property string zoomKey: ""
+    property string zoomExpanded: ""
+    property string zoomFilter: ""
+    property var zoomRepos: []
+    property var zoomOriginalExpanded: ({})
+    function checkZoomLayout() {
+        var view=panel.listView, item=view.itemAtIndex(panel.cursor), previous=null
+        check(panel.current.key===zoomKey && JSON.stringify(panel.expanded)===zoomExpanded && panel.filterText===zoomFilter,"zoom keeps selection, expansion and filter")
+        check(view.height>0 && item && item.y>=view.contentY && item.y<view.contentY+view.height && (item.height>view.height || item.y+item.height<=view.contentY+view.height),"zoom keeps selected row visible (fully, when it fits)")
+        for (var i=0; i<panel.entries.length; i++) {
+            var row=view.itemAtIndex(i)
+            if (row && previous) check(row.y>=previous.y+previous.height,"zoom rows do not overlap")
+            previous=row
+        }
+        if (panel.textStep===-3 || panel.textStep===0 || panel.textStep===5)
+            console.log("TEXT_SIZE_LAYOUT step=" + panel.textStep + " list=" + view.height + " row=" + item.height)
+    }
     function textWith(item, text) {
         if (item.text === text) return item
         for (var i = 0; i < item.children.length; i++) {
@@ -163,7 +181,26 @@ ShellRoot {
         interval: 1000; running: true
         onTriggered: {
             check(Commons.Color.background.toString()===Quickshell.env("EXPECTED_BACKGROUND"),"active Omarchy theme")
-            check(panel.textScale===undefined,"no panel scale factor")
+            check(panel.textStep===0 && panel.fTitle===Style.font.title && panel.fBody===Style.font.body && panel.fCaption===Style.font.caption && panel.sp(18)===Style.space(18) && panel.sp(64)===Style.space(64),"default text size is the theme size")
+            check(panel.textKey({key:Qt.Key_Equal,modifiers:Qt.ControlModifier}) && panel.textStep===1 && panel.notice==="Text size 110%","Ctrl+= grows text")
+            check(panel.textKey({key:Qt.Key_Plus,modifiers:Qt.ControlModifier|Qt.ShiftModifier}) && panel.textStep===2 && panel.notice==="Text size 120%","Ctrl+Shift+= grows text")
+            check(panel.textKey({key:Qt.Key_Minus,modifiers:Qt.ControlModifier}) && panel.textStep===1 && panel.notice==="Text size 110%","Ctrl+- shrinks text")
+            check(panel.textKey({key:Qt.Key_0,modifiers:Qt.ControlModifier}) && panel.textStep===0 && panel.notice==="Text size 100%","Ctrl+0 restores text")
+            check(!panel.textKey({key:Qt.Key_Equal,modifiers:0}) && panel.textStep===0,"plain = ignored")
+            check(!panel.textKey({key:Qt.Key_Plus,modifiers:Qt.ShiftModifier}) && panel.textStep===0,"plain + ignored")
+            check(!panel.textKey({key:Qt.Key_Minus,modifiers:0}) && panel.textStep===0,"plain - ignored")
+            check(!panel.textKey({key:Qt.Key_0,modifiers:0}) && panel.textStep===0,"plain 0 ignored")
+            check(!panel.textKey({key:Qt.Key_Equal,modifiers:Qt.ControlModifier|Qt.AltModifier}) && panel.textStep===0,"Ctrl+Alt ignored")
+            check(!panel.textKey({key:Qt.Key_Equal,modifiers:Qt.ControlModifier|Qt.MetaModifier}) && panel.textStep===0,"Ctrl+Meta ignored")
+            check(!panel.textKey({key:Qt.Key_R,modifiers:Qt.ControlModifier}) && panel.textStep===0,"other Ctrl key ignored")
+            panel.setTextStep(99)
+            check(panel.textStep===5 && panel.fBody===Math.round(Style.font.body*1.5) && panel.notice==="Text size 150%","upper text size bound")
+            panel.setTextStep(-99)
+            check(panel.textStep===-3 && panel.notice==="Text size 70%","lower text size bound")
+            panel.setTextStep(-4)
+            check(panel.textStep===-3 && panel.notice==="Text size 70%","minus four clamps to minus three")
+            panel.setTextStep(0)
+            check(panel.fBody===Style.font.body && panel.notice==="Text size 100%","reset restores theme body")
             menuFile.reload()
             check(!panel.opened && panel.polling.requests===0,"registration does not open or poll")
             if (Quickshell.env("MENU_SCENARIO") === "fresh")
@@ -329,6 +366,22 @@ ShellRoot {
                 copyChecked=true
                 stage=1
             } else if(stage===1 && copyChecked) {
+                if (zoomStage===0) {
+                    zoomRepos=panel.polling.repos
+                    zoomOriginalExpanded=panel.polling.expanded
+                    panel.filterText="o/r"
+                    panel.polling.repos=zoomRepos.concat(Array.from({length:40},function(_,i) { return {repo:"o/r"+i} }))
+                    panel.polling.expanded={"repo:one/repo":true}
+                    panel.adopt()
+                    panel.move(panel.entries.length)
+                    zoomKey=panel.current.key
+                    zoomExpanded=JSON.stringify(panel.expanded)
+                    zoomFilter=panel.filterText
+                    panel.setTextStep(5)
+                    zoomStage=1
+                    stage=20  // #48 zoom stage; 10-12 belong to #44's watch stages
+                    return
+                }
                 if (!accChecked) {
                     panel.move(0)
                     var item=panel.itemAt(panel.cursor)
@@ -405,6 +458,17 @@ ShellRoot {
                 check(panel.actionText==="An action is already running","second write refused while busy")
                 at("repo:one/repo")
                 stage=5
+            } else if(stage===20) {
+                checkZoomLayout()
+                if (zoomStage===1) { panel.now=panel.now+3000; zoomStage=2; return }
+                if (zoomStage===2) { panel.setTextStep(-3); zoomStage=3; return }
+                if (zoomStage===3) { panel.setTextStep(0); zoomStage=4; return }
+                panel.polling.repos=zoomRepos
+                panel.polling.expanded=zoomOriginalExpanded
+                panel.adopt()
+                panel.filterText="repo"
+                at(selected)
+                stage=1
             } else if(stage===5 && !panel.actionBusy) {
                 check(panel.actionText.indexOf("Cancel requested")===0 && !panel.actionError,"cancel result shown")
                 check(touchSeen,"touch used the pinned repository and run")
@@ -431,6 +495,7 @@ ShellRoot {
                 panel.open()
                 check(panel.actionText.indexOf("Rerun requested")===0 && !panel.actionError,"result of a write sent before close is kept")
                 check(JSON.parse(panel.status()).actionBusy===false,"status shows no write")
+                panel.setTextStep(2)
                 panel.close()
                 closedRequests=panel.polling.requests
                 closedAt=Date.now()
@@ -441,6 +506,8 @@ ShellRoot {
                 var history=panel.polling.starts.length
                 panel.open()
                 check(panel.polling.starts.length>=history,"reopen preserves budget")
+                check(panel.textStep===2,"reopen preserves text size")
+                panel.setTextStep(0)
                 ensureRun9()
                 at("one/repo:7")
                 panel.viewLog()
