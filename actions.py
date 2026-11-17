@@ -41,7 +41,15 @@ def plain_fields(row, fields):
     return row
 
 
-RUN_TEXT = ("name", "display_title", "head_branch")
+RUN_TEXT = ("name", "display_title", "head_branch", "event")
+
+
+def clean_run(row):
+    plain_fields(row, RUN_TEXT)
+    actor = row.get("actor")
+    login = actor.get("login") if isinstance(actor, dict) else None
+    row["actor"] = plain(login) if isinstance(login, str) else ""
+    return row
 
 
 def request(endpoint, include=False, method=None):
@@ -219,7 +227,7 @@ def read_page(task):
         elif kind == "run":
             if not isinstance(body, dict) or str(body.get("id")) != str(task["run"]) or "status" not in body:
                 raise ValueError("Invalid run response")
-            plain_fields(body, RUN_TEXT)
+            clean_run(body)
         else:
             key = "jobs" if kind == "jobs" else "workflow_runs"
             if not isinstance(body, dict) or not isinstance(body.get(key), list):
@@ -229,7 +237,10 @@ def read_page(task):
             if kind == "jobs" and any(not isinstance(row.get("steps", []), list) or any(not isinstance(step, dict) for step in row.get("steps", [])) for row in body[key]):
                 raise ValueError("Invalid job steps")
             for row in body[key]:
-                plain_fields(row, ("name",) if kind == "jobs" else RUN_TEXT)
+                if kind == "jobs":
+                    plain_fields(row, ("name",))
+                else:
+                    clean_run(row)
                 for step in row.get("steps", []) if kind == "jobs" else []:
                     plain_fields(step, ("name",))
             result["data"] = body[key]

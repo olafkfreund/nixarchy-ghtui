@@ -20,7 +20,7 @@ Press **Super+Alt+A**. Running workflows sort first; `/` searches repositories a
 
 - Omarchy shell with the panel plugin contract and `qs.Commons` / `qs.Ui` components.
 - `gh`, authenticated for your repositories with Actions read access. To rerun or cancel, the token must also write Actions: a classic token needs the `repo` scope, a fine-grained token needs Actions read and write plus Metadata read. A read-only token still works for everything else, and a refused action says which permission is missing.
-- Python 3, and `xdg-open` for the optional browser shortcut.
+- Python 3, and `xdg-open` for the optional browser shortcut. `wl-copy` (`wl-clipboard`) for the optional copy shortcut.
 
 On NixOS, missing dependencies belong in your declarative configuration. Do not install them with pacman or an imperative Nix profile.
 
@@ -59,12 +59,12 @@ Import a NixOS module with the following content, replacing `YOUR_USER` with you
   home-manager.users.YOUR_USER = { pkgs, ... }: {
     programs.nixarchy.plugins."olafkfreund.github-actions".src =
       inputs.github-actions.packages.${pkgs.stdenv.hostPlatform.system}.default;
-    home.packages = [ pkgs.gh pkgs.python3 pkgs.xdg-utils pkgs.bash ];
+    home.packages = [ pkgs.gh pkgs.python3 pkgs.xdg-utils pkgs.wl-clipboard pkgs.bash ];
   };
 }
 ```
 
-The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. The package lists these as `passthru.runtimeDeps` (`gh`, `python3`, `xdg-utils`). No second desktop stack or standalone Home Manager installation is needed.
+The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. The package lists these as `passthru.runtimeDeps` (`gh`, `python3`, `xdg-utils`, `wl-clipboard`). No second desktop stack or standalone Home Manager installation is needed.
 
 Nix must have permission to fetch this repository. Your `gh auth login` is for runtime API access and does not automatically configure Nix's fetch credentials. An SSH input URL such as `git+ssh://git@github.com/olafkfreund/nixarchy-ghtui.git` is another option when your SSH access is configured. Never put tokens in `flake.nix` or `flake.lock`.
 
@@ -120,7 +120,7 @@ For a symlink-managed or read-only `~/.config/omarchy/extensions/omarchy-menu.js
 
 No manual repository list is required. Opening the popup fetches every page of GitHub's authenticated `GET /user/repos` endpoint with owner, collaborator and organisation-member affiliations. This covers repositories associated with your account and visible to the current token, not every public repository on GitHub. Archived and disabled repositories remain searchable but are not polled for activity. Currently github.com only; local checkouts are not required.
 
-Press **/** and type an owner, repository name or description. Use **↑ / ↓** while typing to select a result, then **Enter** to expand it and resume navigation. **Tab** finishes editing without expanding. Search results stay collapsed until you expand them. Repositories with running workflows move to the top as activity is discovered; unchecked repositories say **not checked**. The header shows scan progress. Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
+Press **/** and type an owner, repository name or description. Use **↑ / ↓** while typing to select a result, then **Enter** to expand it and resume navigation. **Tab** finishes editing without expanding. Repositories you have opened stay open while you type. Only runs already loaded are searched, plus each repository's name, description and running count: the note beside the search field reads “recent runs loaded for N of M repositories”, so other repositories match on name and description only. Repositories with running workflows move to the top as activity is discovered; unchecked repositories say **not checked**. A status line under the search field always shows errors, a GitHub pause with its end time, or scan progress, and the remaining API requests (with the reset time when few are left). Initial discovery is fast, but a complete activity pass across hundreds of repositories takes several minutes.
 
 The catalogue and known activity stay in memory between openings. After `TIMING.catalogue`, reopening refreshes the repository catalogue; **Shift + R** refreshes it immediately when you gain access to another repository.
 
@@ -133,9 +133,12 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | Key | Action |
 | --- | --- |
 | ↑ / ↓ or k / j | Select a row |
-| Enter / Space / → / l | Expand or collapse a repository, run or job |
+| Enter / Space | Expand or collapse a repository, run or job |
+| → / l | Open a collapsed row; on an open row, move to its first child |
 | ← / h | Collapse, or move to parent |
-| Page Up / Down, Home / End | Move through long lists |
+| Click | Select a row and expand or collapse it, like Enter |
+| Page Up / Down | Move one screenful |
+| Home / End, g / G | First or last row |
 | / | Filter repositories/runs by name, branch or state |
 | ↑ / ↓ while filtering | Select a search result |
 | Enter while filtering | Expand selected result and resume navigation |
@@ -144,12 +147,15 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | r | Refresh summaries and selected expanded run |
 | Shift + R | Rediscover repositories from GitHub |
 | o | Open selected repository/run/job on GitHub |
+| y | Copy the selected row's link (needs `wl-copy`) |
+| ? | Show this key list |
 | a | Rerun all jobs of the selected finished run (asks y/n) |
 | f | Rerun failed jobs of the selected failed run (asks y/n) |
 | c | Cancel the selected unfinished run (asks y/n) |
 | y / n / Esc | Confirm or cancel a pending action, while a confirmation is open; Enter does nothing |
+| Ctrl, Alt, Meta combinations | Left alone |
 
-Icons accompany status text: ✓ success, ✕ failure, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Job rows show completed/reported step counts. These are not estimates of remaining execution time. Open GitHub for full logs.
+Icons accompany status words (passed, failed, running, queued, …): ✓ passed, ✕ failed, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Passed has no colour of its own; only running and failure states are coloured. Job rows show completed/reported step counts. These are not estimates of remaining execution time. Open GitHub for full logs.
 
 ## Refresh and errors
 

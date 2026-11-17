@@ -234,8 +234,10 @@ class PageTest(unittest.TestCase):
         # #32: fork PRs control these strings; bidi overrides, controls and line breaks must not reach QML.
         emoji, persian = "👨‍👩‍👧", "می‌خواهم"
         run = {"id": 7, "status": "completed", "conclusion": "failure", "html_url": "https://github.com/a/b/actions/runs/7",
-               "name": "a\tb", "display_title": "fix‮ sseccus\ntwo", "head_branch": "ma​in\x07"}
-        plain_run = {"name": "a b", "display_title": "fix sseccus two", "head_branch": "main"}
+               "name": "a\tb", "display_title": "fix‮ sseccus\ntwo", "head_branch": "ma​in\x07",
+               "event": "pu\tsh\n‮x\x07", "actor": {"login": "bo‮b\n", "avatar_url": "private"}}
+        plain_run = {"name": "a b", "display_title": "fix sseccus two", "head_branch": "main",
+                     "event": "pu sh x", "actor": "bob"}
 
         def page(task, body):
             with patch.object(actions, "request", return_value=("HTTP/2.0 200 OK\n\n" + json.dumps(body), "", 0)):
@@ -250,6 +252,17 @@ class PageTest(unittest.TestCase):
                 self.assertEqual(row, dict(run, **plain_run))
         self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run)), dict(run, **plain_run))
         self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run, display_title=emoji))["display_title"], emoji)
+        for actor in (None, "str", {"login": 5}):
+            with self.subTest(actor=actor):
+                body = dict(run, actor=actor)
+                self.assertEqual(page({"kind": "summary", "repo": "a/b", "status": "recent"},
+                                      {"workflow_runs": [body]})[0]["actor"], "")
+                self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, body)["actor"], "")
+        body = dict(run)
+        del body["actor"]
+        self.assertEqual(page({"kind": "summary", "repo": "a/b", "status": "recent"},
+                              {"workflow_runs": [body]})[0]["actor"], "")
+        self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, body)["actor"], "")
 
         job = {"id": 8, "status": "completed", "conclusion": "success", "html_url": "https://github.com/a/b/actions/runs/7/job/8",
                "name": "x\x1b[31my", "steps": [{"number": 1, "status": "completed", "name": "s t"}]}
