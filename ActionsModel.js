@@ -134,9 +134,10 @@ function accessibleName(row, expanded) {
 }
 
 // live is "repo:runId" of the run polling refreshes now, or "" / undefined.
-function rows(repos, expanded, details, filter, now, live) {
+function rows(repos, expanded, details, filter, now, live, watches) {
     var result = [];
     var query = filter.toLowerCase();
+    watches = watches || {};
     // Failing first, then running (most first), then the rest in catalogue order; never by time, so rows do not jump.
     repos.map(function(repo, i) {
         var active = repo.active === undefined ? (repo.runs || []).filter(function(run) { return run.status === "in_progress"; }).length : repo.active;
@@ -173,7 +174,8 @@ function rows(repos, expanded, details, filter, now, live) {
                 subtitle: [cap(run.head_branch, 28), cap(run.event, 14), cap(run.actor, 16), age(run, now),
                     notRefreshing ? "jobs " + elapsed(now - at) + " old, not refreshing" : "", run.display_title]
                     .filter(Boolean).join(" · "),
-                status: state(run), statusText: label(state(run)), info: duration(run, now), repo: repo.repo, run: String(run.id), url: run.html_url});
+                status: state(run), statusText: label(state(run)), info: [duration(run, now), watches[runKey] ? "watching" : ""].filter(Boolean).join(" · "),
+                repo: repo.repo, run: String(run.id), url: run.html_url});
             if (!expanded[runKey]) return;
             if (!detail || detail.error) result.push({key: runKey + ":message", parent: runKey, kind: "message", depth: 2,
                 title: detail ? detail.error : "Loading jobs…", subtitle: "", status: detail ? "error" : "queued", statusText: "", info: "", repo: repo.repo, run: String(run.id)});
@@ -214,6 +216,15 @@ function logTarget(row, details, runs) {
             ? {repo: row.repo, run: row.run, mode: "failed"} : {error: "Select a job to read its log"};
     }
     return null;
+}
+
+var conclusionWords = {success: "succeeded", failure: "failed", cancelled: "cancelled", timed_out: "timed out",
+    startup_failure: "failed to start", skipped: "skipped"};
+function notice(n) {
+    if (n.kind === "paused") return {title: "Watching paused", body: "Run gh auth login, then open the panel"};
+    var body = n.repo + " · " + String(n.name || "").replace(/[<>&]/g, " ").slice(0, 80);
+    if (n.kind === "lost") return {title: "Watch stopped", body: body + " GitHub no longer shows this run."};
+    return {title: Object.prototype.hasOwnProperty.call(conclusionWords, n.conclusion) ? conclusionWords[n.conclusion] : "finished", body: body};
 }
 
 function selection(rows, key, previous) {

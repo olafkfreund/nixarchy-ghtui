@@ -340,6 +340,36 @@ console.log('Model: log targets passed');
 }
 console.log('Model: view guard passed');
 
+// #44 step 9: watched run marker and notification text.
+{
+  const run = {id: 7, status: 'in_progress', name: 'Build'};
+  const repo = [{repo: 'o/r', runs: [run]}], open = {'repo:o/r': true};
+  const row = (watches, item = run) => model.rows([{...repo[0], runs: [item]}], open, {}, '', 0, '', watches)[1];
+  assert.equal(row().info, '');
+  assert.equal(row({}).info, '');
+  assert.equal(row({'o/r:7': true}).info, 'watching');
+  const timed = {...run, started_at: '2026-01-01T00:00:00Z'};
+  const at = Date.parse('2026-01-01T00:01:00Z');
+  assert.equal(model.rows([{repo: 'o/r', runs: [timed]}], open, {}, '', at, '', {'o/r:7': true})[1].info, '1m 0s · watching');
+  assert.equal(model.rows([{repo: 'o/r', runs: [timed]}], open, {}, '', at)[1].info, '1m 0s');
+
+  const words = {success:'succeeded', failure:'failed', cancelled:'cancelled', timed_out:'timed out',
+    startup_failure:'failed to start', skipped:'skipped', neutral:'finished', action_required:'finished', stale:'finished',
+    anything_else:'finished', constructor:'finished'};
+  for (const [conclusion, title] of Object.entries(words))
+    assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'done', repo:'o/r', name:'Build', conclusion}))),
+      {title, body:'o/r · Build'}, conclusion);
+  assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'done', repo:'o/r', name:'R&D <build>', conclusion:'success'}))),
+    {title:'succeeded', body:'o/r · R D  build '});
+  assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'done', repo:'o/r', name:'x'.repeat(81), conclusion:'success'}))),
+    {title:'succeeded', body:'o/r · ' + 'x'.repeat(80)});
+  assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'paused'}))),
+    {title:'Watching paused', body:'Run gh auth login, then open the panel'});
+  assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'lost', repo:'o/r', name:'R&D build'}))),
+    {title:'Watch stopped', body:'o/r · R D build GitHub no longer shows this run.'});
+}
+console.log('Model: watched rows and notices passed');
+
 // Exercise the QML key handler as JavaScript without a display.
 {
   const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
