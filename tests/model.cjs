@@ -465,6 +465,54 @@ console.log('Model: text size passed');
   assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'lost', repo:'o/r', name:'R&D build'}))),
     {title:'Watch stopped', body:'o/r · R D build GitHub no longer shows this run.'});
 }
+// #46 step 3: the pane reads only the cleaned parent run and injected time.
+{
+  const now = Date.parse('2026-01-01T01:00:00Z');
+  const run = {name:'CI', path:'.github/workflows/check.yml', status:'completed', conclusion:'success',
+    head_branch:'main', head_sha:'a'.repeat(40), event:'push', actor:'a', triggering_login:'b',
+    run_attempt:1, run_started_at:'2026-01-01T00:57:00Z'};
+  const lines = item => JSON.parse(JSON.stringify(model.detail(item, now)));
+  const values = item => Object.fromEntries(lines(item).map(line => [line.label, line.value]));
+  assert.deepEqual(lines(run), [
+    {label:'Workflow', value:'CI · .github/workflows/check.yml'},
+    {label:'Result', value:'passed'}, {label:'Branch', value:'main'},
+    {label:'Commit', value:'aaaaaaa'}, {label:'Event', value:'push'},
+    {label:'Actor', value:'a (triggered by b)'}, {label:'Attempt', value:'1'},
+    {label:'Started', value:'3m ago'}, {label:'Duration', value:'3m 0s'}]);
+  assert.equal(values(run).Commit.length, 7);
+  const missing = values({status:'queued'});
+  for (const field of ['Commit', 'Actor', 'Event']) assert.equal(missing[field], 'unknown');
+  for (const sha of ['z'.repeat(40), 'a'.repeat(7), 'a'.repeat(32) + '\u001b[31m' + 'a'.repeat(3), 'A'.repeat(40)])
+    assert.equal(values({...run, head_sha:sha}).Commit, 'unknown');
+  assert.equal(values({...run, triggering_login:'a'}).Actor, 'a');
+  assert.equal(values({...run, triggering_login:''}).Actor, 'a');
+  assert.equal(values({...run, triggering_login:5}).Actor, 'a');
+  assert.equal(values({...run, actor:{login:'a'}}).Actor, 'unknown (triggered by b)');
+  assert.equal(values({...run, run_attempt:2}).Attempt, '2');
+  for (const attempt of [0, '2', undefined]) assert.equal(values({...run, run_attempt:attempt}).Attempt, 'unknown');
+  assert.equal(values({...run, head_sha:['a'.repeat(40)]}).Commit, 'unknown');
+  assert.equal(values({...run, run_started_at:{toString:null}}).Started, 'unknown');
+  assert.equal(values({...run, run_started_at:{toString:null}}).Duration, 'unknown');
+  assert.equal(values({...run, conclusion:{}}).Result, 'unknown');
+  assert.equal(values({...run, name:[]}).Workflow, '.github/workflows/check.yml');
+  assert.equal(values({...run, name:[], path:[]}).Workflow, 'unknown');
+  assert.equal(values({...run, run_started_at:'bad'}).Started, 'unknown');
+  assert.equal(values({...run, run_started_at:'bad'}).Duration, 'unknown');
+  assert.equal(values({...run, head_branch:{toString:null}}).Branch, 'unknown');
+  assert.equal(values({...run, event:{toString:null}}).Event, 'unknown');
+  const throwing = {...run};
+  Object.defineProperty(throwing, 'event', {get() { throw Error('bad field'); }});
+  assert.equal(values(throwing).Event, 'unknown');
+  for (const item of [null, undefined, 'x']) assert.deepEqual(lines(item), [{label:'', value:'Select a run'}]);
+  const rows = model.rows([{repo:'o/r', runs:[]}], {'repo:o/r':true}, {}, '', now);
+  for (const row of rows) {
+    assert.ok(['repo', 'message'].includes(row.kind));
+    assert.deepEqual(lines(['run', 'job', 'step'].includes(row.kind) ? run : null), [{label:'', value:'Select a run'}]);
+  }
+  for (const [total, avail, expected] of [[400, 280, 160], [240, 150, 30], [100, 40, 20], [800, 700, 180]])
+    assert.equal(model.paneHeight(total, avail, 180, 120, 20), expected);
+}
+console.log('Model: detail and pane height passed');
 console.log('Model: watched rows and notices passed');
 
 // Exercise the QML key handler as JavaScript without a display.
