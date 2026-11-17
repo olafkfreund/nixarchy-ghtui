@@ -302,8 +302,9 @@ class WriteTest(unittest.TestCase):
                 self.assertEqual((result["errorType"], result["error"]), ("unknown", unknown))
 
     def test_deep_json_after_send_is_unknown(self):
-        deep = "[" * 100000 + "]" * 100000
-        with patch.object(actions, "request", return_value=(f"HTTP/2.0 202 Accepted\n\n{deep}", "", 0)):
+        # Patched: whether real deep JSON overflows depends on the Python build and stack.
+        with patch.object(actions, "request", return_value=("HTTP/2.0 202 Accepted\n\n[[]]", "", 0)), \
+                patch.object(actions.json, "loads", side_effect=RecursionError("maximum recursion depth exceeded")):
             result = actions.write_action(self.task())
         self.assertEqual(result["errorType"], "unknown")
 
