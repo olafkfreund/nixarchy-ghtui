@@ -379,7 +379,7 @@ ShellRoot {
                     zoomFilter=panel.filterText
                     panel.setTextStep(5)
                     zoomStage=1
-                    stage=10
+                    stage=20  // #48 zoom stage; 10-12 belong to #44's watch stages
                     return
                 }
                 if (!accChecked) {
@@ -458,7 +458,7 @@ ShellRoot {
                 check(panel.actionText==="An action is already running","second write refused while busy")
                 at("repo:one/repo")
                 stage=5
-            } else if(stage===10) {
+            } else if(stage===20) {
                 checkZoomLayout()
                 if (zoomStage===1) { panel.now=panel.now+3000; zoomStage=2; return }
                 if (zoomStage===2) { panel.setTextStep(-3); zoomStage=3; return }
