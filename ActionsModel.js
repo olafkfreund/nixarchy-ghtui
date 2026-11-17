@@ -174,6 +174,8 @@ function logTarget(row, details, runs) {
         var detail = details[row.repo + ":" + row.run];
         var job = ((detail && detail.jobs) || []).find(function(item) { return String(item.id) === row.job; });
         if (!job || job.status !== "completed") return {error: "Logs are available when the job finishes"};
+        var run = runs.find(function(item) { return String(item.id) === row.run; });
+        if (!run || run.status !== "completed") return {error: "Logs are available when the run finishes"};
         return {repo: row.repo, run: row.run, job: row.job,
             mode: failedStatuses.indexOf(job.conclusion) >= 0 ? "failed" : "full"};
     }

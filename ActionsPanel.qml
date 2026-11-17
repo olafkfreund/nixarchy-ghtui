@@ -223,6 +223,7 @@ Item {
             Quickshell.execDetached(["xdg-open", current.url])
     }
     function viewLog() {
+        if (viewProc.running) { showNotice("A log is already open"); return }
         var t = current ? Model.logTarget(current, details, (Polling.repoFor(polling, current.repo) || {}).runs || []) : null
         if (!t) return
         if (t.error) { showNotice(t.error); return }

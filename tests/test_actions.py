@@ -104,6 +104,19 @@ class LogTest(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
 
+    def test_unterminated_osc_keeps_following_lines(self):
+        cleaned, cut = actions.clean_log("ok\n\x1b]8;;http://x\nERROR: real failure\nmore\n")
+        self.assertEqual((cleaned, cut), ("ok\n\nERROR: real failure\nmore\n", 0))
+
+    def test_controls_cannot_bypass_line_cut(self):
+        cleaned, cut = actions.clean_log(("a" * 1999 + "\x0b") * 500 + "\u2028\u2029\x80\x9f\u2066\u2067\u2068\u2069")
+        self.assertEqual(cleaned, "a" * 2000 + "…")
+        self.assertEqual(cut, 1)
+        self.assertEqual(actions.clean_log("a\u2028\u2029\x80\x9f\u2066\u2067\u2068\u2069b"), ("ab", 0))
+        with tempfile.TemporaryDirectory() as directory:
+            reply = self.call(self.task(), self.fake(directory, ("a" * 1999 + "\x0b") * 500))
+            self.assertTrue(reply["data"]["lineCut"])
+
     def test_tail_drain_empty_and_sweep(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.fake(directory, "START\n" + "a" * (2 * 1024 * 1024)
@@ -124,6 +137,40 @@ class LogTest(unittest.TestCase):
             self.assertEqual(reply["error"], "No failed steps in this log.")
             self.assertFalse(old.exists())
             self.assertEqual(self.call(self.task(mode="full"), env)["error"], "This log is empty.")
+
+    def test_sweep_ignores_concurrent_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.fake(directory, "ok")
+            with patch.dict(os.environ, env):
+                old = Path(actions.log_dir()) / "old"
+                old.write_text("old")
+                os.utime(old, (time.time() - 90000, time.time() - 90000))
+                unlink = os.unlink
+                def race(path):
+                    if path == str(old):
+                        unlink(path)
+                        raise FileNotFoundError(path)
+                    return unlink(path)
+                with patch.object(actions.os, "unlink", side_effect=race):
+                    reply = actions.read_log(self.task())
+            self.assertTrue(reply["data"]["path"])
+
+    def test_log_directory_rejects_wrong_owner_mode_and_symlink(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_RUNTIME_DIR": directory}):
+            path = Path(directory) / "nixarchy-ghtui"
+            path.mkdir(mode=0o700)
+            path.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "Log directory unavailable"):
+                actions.log_dir()
+            path.chmod(0o700)
+            info = os.lstat(path)
+            with patch.object(actions.os, "lstat", return_value=type("Info", (), {"st_mode": info.st_mode, "st_uid": os.getuid() + 1})()):
+                with self.assertRaisesRegex(ValueError, "Log directory unavailable"):
+                    actions.log_dir()
+            path.rmdir()
+            path.symlink_to(directory)
+            with self.assertRaisesRegex(ValueError, "Log directory unavailable"):
+                actions.log_dir()
 
     def test_errors(self):
         rows = (("rate limit HTTP 403", "rate", "GitHub rate limit"),
@@ -153,9 +200,9 @@ class LogTest(unittest.TestCase):
             env = self.fake(directory, "log")
             path = Path(self.call(self.task(), env)["data"]["path"])
             less = Path(directory) / "less"
-            less.write_text(f"#!{sys.executable}\nimport json,os,sys\nopen(os.environ['LESS_ARGV'],'w').write(json.dumps(sys.argv[1:]))\n")
+            less.write_text(f"#!{sys.executable}\nimport json,os,sys\nopen(os.environ['VIEW_ARGV'],'w').write(json.dumps(sys.argv[1:]))\n")
             less.chmod(0o700)
-            env["LESS_ARGV"] = str(Path(directory) / "less-argv")
+            env["VIEW_ARGV"] = str(Path(directory) / "less-argv")
             outside = Path(directory) / "outside"
             outside.write_text("x")
             symlink = path.parent / "link"
@@ -164,7 +211,42 @@ class LogTest(unittest.TestCase):
                 self.assertNotEqual(subprocess.run([sys.executable, "actions.py", "view", str(bad)], env=env).returncode, 0)
             self.assertTrue(path.exists())
             self.assertEqual(subprocess.run([sys.executable, "actions.py", "view", str(path)], env=env).returncode, 0)
-            self.assertEqual(json.loads(Path(env["LESS_ARGV"]).read_text()), ["--", str(path)])
+            self.assertEqual(json.loads(Path(env["VIEW_ARGV"]).read_text()), ["--", str(path)])
+            self.assertFalse(path.exists())
+
+    def test_view_environment_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_RUNTIME_DIR": directory,
+                "LESS": "-F -X -R", "LESSOPEN": "pipe", "LESSKEYIN": "keys"}):
+            path = Path(actions.log_dir()) / "log"
+            path.write_text("log")
+            with patch.object(actions.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+                self.assertEqual(actions.view([str(path)]), 0)
+            child_env = run.call_args.kwargs["env"]
+            self.assertEqual({key: value for key, value in child_env.items() if key.startswith("LESS")},
+                             {"LESSSECURE": "1", "LESS": ""})
+            self.assertFalse(path.exists())
+            path.write_text("log")
+            with patch.object(actions.subprocess, "run", side_effect=FileNotFoundError("less")), \
+                    contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(actions.view([str(path)]), 1)
+            self.assertEqual(stderr.getvalue(), "Install less to view logs\n")
+            self.assertFalse(path.exists())
+            path.write_text("log")
+            unlink = os.unlink
+            def gone(target):
+                if target == str(path):
+                    unlink(target)
+                    raise FileNotFoundError(target)
+                return unlink(target)
+            with patch.object(actions.os, "unlink", side_effect=gone), \
+                    patch.object(actions.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+                self.assertEqual(actions.view([str(path)]), 0)
+            path.write_text("log")
+            with patch.object(actions.subprocess, "run", side_effect=lambda *a, **k: handler[0]()), \
+                    patch.object(actions.signal, "signal", side_effect=lambda sig, fn: handler.append(fn)):
+                handler = []
+                with self.assertRaises(SystemExit):
+                    actions.view([str(path)])
             self.assertFalse(path.exists())
 
     def test_timeout_stderr_and_sigterm(self):

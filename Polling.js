@@ -224,7 +224,7 @@ function complete(s,reply,now) {
     if (t.kind==="log") {
         if (reply.errorType || reply.error) {
             s.log={error:reply.error || "Invalid GitHub response"};
-            if (reply.errorType==="auth" || reply.errorType==="setup") s.auth=true;
+            if (reply.errorType==="auth" || reply.errorType==="setup") { s.auth=true; s.error=s.log.error; }
         } else s.log=Object.assign({repo:t.repo,run:t.run,job:t.job},reply.data);
         delete s.tasks[t.key]; return true;
     }

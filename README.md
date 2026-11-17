@@ -147,7 +147,7 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | r | Refresh summaries and selected expanded run |
 | Shift + R | Rediscover repositories from GitHub |
 | o | Open selected repository/run/job on GitHub |
-| v | Open the log of the selected failed run, job or step in a terminal (needs `omarchy-launch-tui`, `less`) |
+| v | Open the log of a failed run or finished job (failed steps only for a failed job; needs `omarchy-launch-tui`, `less`) |
 | y | Copy the selected row's link (needs `wl-copy`) |
 | ? | Show this key list |
 | a | Rerun all jobs of the selected finished run (asks y/n) |
@@ -156,7 +156,7 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | y / n / Esc | Confirm or cancel a pending action, while a confirmation is open; Enter does nothing |
 | Ctrl, Alt, Meta combinations | Left alone |
 
-Icons accompany status words (passed, failed, running, queued, …): ✓ passed, ✕ failed, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Passed has no colour of its own; only running and failure states are coloured. Job rows show completed/reported step counts. These are not estimates of remaining execution time. `v` opens the log of a failed run, job or step in a terminal: failed steps only for a failed job, the full log for any other finished job.
+Icons accompany status words (passed, failed, running, queued, …): ✓ passed, ✕ failed, ◷ running, ○ queued/waiting, ⊘ cancelled, − skipped/neutral. Passed has no colour of its own; only running and failure states are coloured. Job rows show completed/reported step counts. These are not estimates of remaining execution time. `v` opens the log of a failed run or a finished job after its run finishes; for a failed job it shows only failed steps, and for any other finished job it shows the full log. A step row opens its parent job's log.
 
 ## Refresh and errors
 

@@ -136,3 +136,16 @@ These override any step text they contradict. Merge order: #41 -> #42 -> #43(a) 
 - Deviation 1: **#44 waits for #42.** Step 0's stop when #42 is not merged is correct; the merge order above records it. No local status line.
 - Deviation 2: accepted. The log terminal starts through a `Process` with the Qt 0.3.1 failed-start pattern, so "Terminal launcher not found" can be shown.
 - Item 3 small choices: accepted as listed.
+
+## Review fixes
+
+1. `view` clears inherited `LESS*` settings and runs `less` with `LESSSECURE=1` and empty `LESS`.
+2. Job and step log targets wait until their parent run is completed.
+3. Auth and setup log errors also remain in the polling status message.
+4. Unterminated OSC sequences stop at the newline, preserving later log lines.
+5. Log cleaning splits only on newline and drops Zl, Zp, C1 and bidi controls before the line cap.
+6. The daily log sweep tolerates files removed concurrently.
+7. `view` tolerates concurrent unlink, reports missing `less`, and cleans up on SIGHUP.
+8. `viewLog` rejects a second fetch while a log terminal is open.
+9. The log directory must be a real directory owned by the user with mode 0700.
+10. The `v` help text describes failed runs and finished jobs accurately.

@@ -266,21 +266,19 @@ def read_page(task):
 
 
 def clean_log(text):
-    text = re.sub(r"\x1b\].*?(?:\x07|\x1b\\|$)", "", text, flags=re.DOTALL)
+    text = re.sub(r"\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)?", "", text)
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
     text = re.sub(r"\x1b.?", "", text, flags=re.DOTALL).replace("\r", "")
     lines = []
     cut = 0
-    for line in text.splitlines(keepends=True):
+    for line in text.split("\n"):
         line = "".join(c for c in line if c in "\n\t" or c in JOINERS
-                       or unicodedata.category(c) not in ("Cc", "Cf"))
-        ending = "\n" if line.endswith("\n") else ""
-        content = line[:-1] if ending else line
-        if len(content) > 2000:
-            content = content[:2000] + "…"
+                       or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp"))
+        if len(line) > 2000:
+            line = line[:2000] + "…"
             cut += 1
-        lines.append(content + ending)
-    return "".join(lines), cut
+        lines.append(line)
+    return "\n".join(lines), cut
 
 
 def log_dir():
@@ -288,10 +286,10 @@ def log_dir():
     if not os.path.isabs(runtime):
         raise ValueError("Log directory unavailable")
     directory = os.path.join(runtime, "nixarchy-ghtui")
-    if os.path.islink(directory):
-        raise ValueError("Log directory unavailable")
     os.makedirs(directory, mode=0o700, exist_ok=True)
-    os.chmod(directory, 0o700)
+    info = os.lstat(directory)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError("Log directory unavailable")
     return directory
 
 
@@ -311,9 +309,12 @@ def read_log(task, timeout=90):
     directory = log_dir()
     for name in os.listdir(directory):
         path = os.path.join(directory, name)
-        info = os.lstat(path)
-        if stat.S_ISREG(info.st_mode) and info.st_mtime < time.time() - 86400:
-            os.unlink(path)
+        try:
+            info = os.lstat(path)
+            if stat.S_ISREG(info.st_mode) and info.st_mtime < time.time() - 86400:
+                os.unlink(path)
+        except FileNotFoundError:
+            pass
     result = {"requestId": task["requestId"], "httpStatus": 0, "nextPage": 0,
               "data": None, "error": "", "errorType": "", "retryAt": 0,
               "remaining": None, "resetAt": 0}
@@ -397,10 +398,23 @@ def view(argv):
             return 1
     except (OSError, ValueError):
         return 1
+    def hangup(*_):
+        raise SystemExit(1)
+
+    signal.signal(signal.SIGHUP, hangup)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("LESS")}
+    env.update(LESSSECURE="1", LESS="")
     try:
-        return subprocess.run(["less", "--", path], check=False).returncode
+        try:
+            return subprocess.run(["less", "--", path], check=False, env=env).returncode
+        except FileNotFoundError:
+            print("Install less to view logs", file=sys.stderr)
+            return 1
     finally:
-        os.unlink(path)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
 
 def write_action(task):

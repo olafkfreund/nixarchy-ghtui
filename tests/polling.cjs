@@ -623,6 +623,7 @@ for (const [type,deadline,auth] of [
   assert.equal(Object.keys(s.tasks).some(k=>s.tasks[k].kind==='log'),false,type+' is final');
   assert.equal(s.repos[0].blocked,undefined,type+' does not block repository');
   assert.equal(s.auth,auth,type);
+  if (auth) assert.equal(s.error,'log failed',type);
   if (deadline) assert.equal(s.cooldown,deadline);
 }
 const malformedLog=logState();
@@ -631,6 +632,7 @@ req=polling.next(malformedLog,0);
 polling.complete(malformedLog,response(req,[]),100);
 assert.equal(malformedLog.log.error,'Workflow helper returned invalid data');
 assert.equal(malformedLog.auth,true);
+assert.equal(malformedLog.error,'Workflow helper returned invalid data');
 
 const blockedLog=logState(); blockedLog.repos[0].blocked=true;
 polling.requestLog(blockedLog,{repo:'a/b',run:'7',mode:'failed'},0);

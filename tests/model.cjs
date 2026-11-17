@@ -308,6 +308,13 @@ console.log('Model: rows subtitle, statusText and message row passed');
   assert.deepEqual(target(row('job', 11)), {repo, run, job: '11', mode: 'full'});
   assert.deepEqual(target(row('job', 12)), {error: 'Logs are available when the job finishes'});
   assert.deepEqual(target(row('step')), {repo, run, job: '8', mode: 'failed'});
+  for (const kind of ['job', 'step']) {
+    const selected = kind === 'step' ? row('step') : row('job', 8);
+    assert.equal(model.logTarget(selected, detail, [{id: 7, status: 'in_progress'}]).error,
+      'Logs are available when the run finishes');
+    assert.equal(model.logTarget(selected, detail, []).error,
+      'Logs are available when the run finishes');
+  }
   assert.deepEqual(target(row('run')), {repo, run, mode: 'failed'});
   assert.deepEqual(target({...row('run'), run: '9'}), {error: 'Select a job to read its log'});
   assert.equal(target(row('repo')), null);
@@ -319,6 +326,24 @@ console.log('Model: rows subtitle, statusText and message row passed');
   assert.equal(list.ops, 0, 'job is not a delegate field');
 }
 console.log('Model: log targets passed');
+
+{
+  const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('    function viewLog() {')[1].split('    function openLog(')[0];
+  const calls = [];
+  const viewLog = vm.runInNewContext('(function() {' + body + ')',
+    {viewProc:{running:true}, showNotice:message => calls.push(message),
+      Polling:{requestLog:() => calls.push('fetch')}});
+  viewLog();
+  assert.deepEqual(calls, ['A log is already open']);
+  const readme = fs.readFileSync('README.md', 'utf8');
+  const keys = fs.readFileSync('keybindings.sh', 'utf8');
+  for (const text of [readme, keys]) {
+    assert.ok(text.includes('failed run or finished job'));
+    assert.ok(text.includes('failed steps only for a failed job'));
+    assert.ok(!text.includes('failed run, job or step'));
+  }
+}
+console.log('Model: view guard and log wording passed');
 
 // Exercise the QML key handler as JavaScript without a display.
 {
