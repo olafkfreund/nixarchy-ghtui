@@ -286,6 +286,60 @@ console.log('Model: not-refreshing marker passed');
 }
 console.log('Model: rows subtitle, statusText and message row passed');
 
+// #44 step 2: a selected row resolves to the whole job log or a failed run log.
+{
+  const repo = 'o/r', run = '7';
+  const runs = [{id: 7, status: 'completed', conclusion: 'failure'}, {id: 9, status: 'completed', conclusion: 'success'}];
+  const jobs = [
+    {id: 8, name: 'failed', status: 'completed', conclusion: 'failure', steps: [{number: 1, name: 'Fail', status: 'completed'}]},
+    {id: 10, name: 'passed', status: 'completed', conclusion: 'success'},
+    {id: 11, name: 'cancelled', status: 'completed', conclusion: 'cancelled'},
+    {id: 12, name: 'running', status: 'in_progress'}
+  ];
+  const detail = {[repo + ':' + run]: {jobs}};
+  const open = {['repo:' + repo]: true};
+  open[repo + ':' + run] = true;
+  open[repo + ':' + run + ':8'] = true;
+  const rows = model.rows([{repo, runs}], open, detail, '', Date.now());
+  const row = (kind, job) => rows.find(r => r.kind === kind && (job === undefined || r.key === repo + ':' + run + ':' + job));
+  const target = r => JSON.parse(JSON.stringify(model.logTarget(r, detail, runs)));
+  assert.equal(row('job', 8).job, '8');
+  assert.equal(row('step').job, '8');
+  assert.deepEqual(target(row('job', 8)), {repo, run, job: '8', mode: 'failed'});
+  assert.deepEqual(target(row('job', 10)), {repo, run, job: '10', mode: 'full'});
+  assert.deepEqual(target(row('job', 11)), {repo, run, job: '11', mode: 'full'});
+  assert.deepEqual(target(row('job', 12)), {error: 'Logs are available when the job finishes'});
+  assert.deepEqual(target(row('step')), {repo, run, job: '8', mode: 'failed'});
+  for (const kind of ['job', 'step']) {
+    const selected = kind === 'step' ? row('step') : row('job', 8);
+    assert.equal(model.logTarget(selected, detail, [{id: 7, status: 'in_progress'}]).error,
+      'Logs are available when the run finishes');
+    assert.equal(model.logTarget(selected, detail, []).error,
+      'Logs are available when the run finishes');
+  }
+  assert.deepEqual(target(row('run')), {repo, run, mode: 'failed'});
+  assert.deepEqual(target({...row('run'), run: '9'}), {error: 'Select a job to read its log'});
+  assert.equal(target(row('repo')), null);
+  assert.equal(target({kind: 'more', repo}), null);
+  const list = counted();
+  model.syncRows(list, rows);
+  list.ops = 0;
+  model.syncRows(list, rows.map(r => r.kind === 'job' || r.kind === 'step' ? {...r, job: 'other'} : r));
+  assert.equal(list.ops, 0, 'job is not a delegate field');
+}
+console.log('Model: log targets passed');
+
+{
+  const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('    function viewLog() {')[1].split('    function openLog(')[0];
+  const calls = [];
+  const viewLog = vm.runInNewContext('(function() {' + body + ')',
+    {viewProc:{running:true}, showNotice:message => calls.push(message),
+      Polling:{requestLog:() => calls.push('fetch')}});
+  viewLog();
+  assert.deepEqual(calls, ['A log is already open']);
+}
+console.log('Model: view guard passed');
+
 // Exercise the QML key handler as JavaScript without a display.
 {
   const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]

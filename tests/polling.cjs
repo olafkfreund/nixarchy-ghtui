@@ -727,3 +727,93 @@ const newer=polling.next(inFlight,2000); assert.equal(newer.kind,'run');
 assert.notEqual(newer.requestId,older.requestId);
 assert.equal(polling.complete(inFlight,response(newer,{id:7,status:'completed',run_attempt:2}),2100),true);
 assert.equal(inFlight.tasks[runKey],undefined);
+
+// #44 step 3: log fetches reserve four slots and always finish after one reply.
+function logState() {
+  const s=selectedRepo([{id:7,status:'completed'}]);
+  s.repos[0].activityAt=0;
+  polling.ensure(s,'run','a/b','7','active',0);
+  return s;
+}
+const log=logState();
+assert.equal(log.log,null);
+assert.equal(polling.requestLog(log,{repo:'a/b',run:'7',job:'9',mode:'failed'},0),true);
+assert.equal(polling.requestLog(log,{repo:'a/b',run:'8',job:'10',mode:'full'},0),false);
+assert.equal(Object.values(log.tasks).filter(t=>t.kind==='log').length,1);
+req=polling.next(log,0);
+assert.equal(req.kind,'log'); assert.equal(req.run,'7'); assert.equal(req.job,'9'); assert.equal(req.mode,'failed');
+assert.deepEqual(Array.from(log.starts),[0,1000,2000,3000]);
+assert.equal(log.requests,1);
+assert.equal(polling.complete(log,response(req,{path:'/tmp/log',mode:'failed',cutShort:false,lineCut:false}),100),true);
+assert.equal(log.auth,false); assert.equal(log.log.path,'/tmp/log');
+assert.equal(log.log.repo,'a/b'); assert.equal(log.log.run,'7'); assert.equal(log.log.job,'9');
+assert.equal(log.tasks[polling.key('log','a/b','7')],undefined);
+assert.equal(polling.next(log,3999),null,'four charged slots delay all other work');
+assert.equal(polling.next(log,4000).kind,'run');
+polling.close(log); assert.equal(log.log,null);
+
+const runLog=logState();
+assert.equal(polling.requestLog(runLog,{repo:'a/b',run:'7',mode:'failed'},0),true);
+req=polling.next(runLog,0);
+assert.equal(req.kind,'log'); assert.equal(req.run,'7'); assert.equal('job' in req,false);
+assert.equal(req.mode,'failed');
+
+for (const [type,deadline,auth] of [
+  ['network',0,false],['permission',0,false],['rate',60100,false],['auth',0,true],['setup',0,true]
+]) {
+  const s=logState();
+  polling.requestLog(s,{repo:'a/b',run:'7',job:'9',mode:'full'},0);
+  const request=polling.next(s,0);
+  assert.equal(polling.complete(s,{...response(request),error:'log failed',errorType:type},100),true);
+  assert.equal(s.log.error,'log failed',type);
+  assert.equal(Object.keys(s.tasks).some(k=>s.tasks[k].kind==='log'),false,type+' is final');
+  assert.equal(s.repos[0].blocked,undefined,type+' does not block repository');
+  assert.equal(s.auth,auth,type);
+  if (auth) assert.equal(s.error,'log failed',type);
+  if (deadline) assert.equal(s.cooldown,deadline);
+}
+const malformedLog=logState();
+polling.requestLog(malformedLog,{repo:'a/b',run:'7',mode:'failed'},0);
+req=polling.next(malformedLog,0);
+polling.complete(malformedLog,response(req,[]),100);
+assert.equal(malformedLog.log.error,'Workflow helper returned invalid data');
+assert.equal(malformedLog.auth,true);
+assert.equal(malformedLog.error,'Workflow helper returned invalid data');
+
+const blockedLog=logState(); blockedLog.repos[0].blocked=true;
+polling.requestLog(blockedLog,{repo:'a/b',run:'7',mode:'failed'},0);
+req=polling.next(blockedLog,0); assert.equal(req.kind,'log');
+polling.complete(blockedLog,{...response(req),error:'unavailable',errorType:'permission'},100);
+assert.equal(blockedLog.log.error,'unavailable'); assert.equal(blockedLog.repos[0].blocked,true);
+
+for (const occupied of [56,57,58,59]) {
+  const s=logState();
+  s.starts=Array.from({length:occupied},(_,i)=>i*1000);
+  polling.requestLog(s,{repo:'a/b',run:'7',mode:'failed'},0);
+  const request=polling.next(s,59999);
+  if (occupied===56) {
+    assert.equal(request.kind,'log'); assert.equal(s.starts.length,60);
+  } else {
+    assert.equal(request.kind,'run','ordinary work uses the remaining slot');
+    assert.equal(s.starts.length,occupied+1);
+    assert.ok(s.tasks[polling.key('log','a/b','7')]);
+  }
+}
+
+const budget=logState();
+let logStarts=0, otherStarts=0;
+for (let now=0;now<60000;now+=1000) {
+  if (now%8000===0 && !budget.tasks[polling.key('log','a/b','7')])
+    polling.requestLog(budget,{repo:'a/b',run:'7',mode:'failed'},now);
+  if (now%5000===0) polling.ensure(budget,'run','a/b','7','active',now);
+  const request=polling.next(budget,now);
+  if (request) {
+    if (request.kind==='log') logStarts++;
+    else otherStarts++;
+    polling.complete(budget,response(request,request.kind==='log' ? {path:'/tmp/log'} : {id:7,status:'completed'}),now+100);
+  }
+  assert.ok(budget.starts.length<=60,'mixed workload stays within the 60-slot window');
+}
+assert.ok(logStarts>0 && otherStarts>0);
+assert.equal(budget.starts.length,budget.requests+3*logStarts,'four slots per log, one per other request');
+console.log('Polling: logs reserve four slots, finish once and preserve blocked repositories');

@@ -34,6 +34,12 @@ if sys.argv[1]=='act':
     time.sleep(0.1)
     os.write(1,(json.dumps({'requestId':request['requestId'],'action':request['action'],'httpStatus':202,'ok':True,'error':'','errorType':'','retryAt':0,'remaining':4000})+'\\n').encode())
     os._exit(0)
+if sys.argv[1]=='log':
+    open(os.environ['HOME']+'/log-req.log','a').write(sys.argv[2]+'\\n')
+    path=os.environ['HOME']+'/fake-log.txt'
+    open(path,'w').write('log\\n')
+    os.write(1,(json.dumps({'requestId':request['requestId'],'data':{'path':path,'mode':'failed','cutShort':False,'lineCut':False},'error':'','errorType':'','remaining':4000})+'\\n').encode())
+    os._exit(0)
 kind=request['kind']
 time.sleep(0.1)
 run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1,'html_url':'https://github.com/one/repo/actions/runs/7'}
@@ -51,6 +57,10 @@ os._exit(0)
         bin_dir = root / 'bin'
         bin_dir.mkdir()
         (bin_dir / 'python3').symlink_to(shutil.which('python3'))
+        # Stubs record their argv, one argument per line; the test never launches a terminal or notification.
+        for stub in ('omarchy-launch-tui', 'notify-send'):
+            (bin_dir / stub).write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >> "$HOME/' + stub + '.log"\n')
+            (bin_dir / stub).chmod(0o755)
         if scenario == 'fresh':
             (bin_dir / 'wl-copy').write_text('''#!/bin/sh
 printf '%s\\n' "$*" >> "$HOME/wl-copy.log"
@@ -135,6 +145,8 @@ ShellRoot {
             runs.push({id:9,name:"Lint",status:"completed",conclusion:"failure",run_number:2,head_branch:"main",html_url:"https://github.com/one/repo/actions/runs/9"})
         panel.adopt()
     }
+    FileView { id: launchFile; path: Quickshell.env("HOME") + "/omarchy-launch-tui.log"; printErrors: false }
+    function launched() { launchFile.reload(); return launchFile.text().split("\\n").length > 5 }
     function check(value, label) { if (!value) throw new Error("CHECK FAILED: " + label) }
     Timer {
         interval: 1000; running: true
@@ -412,6 +424,15 @@ ShellRoot {
                 var history=panel.polling.starts.length
                 panel.open()
                 check(panel.polling.starts.length>=history,"reopen preserves budget")
+                ensureRun9()
+                at("one/repo:7")
+                panel.viewLog()
+                check(panel.notice==="Select a job to read its log","v on a running run says so with a filter set")
+                at("one/repo:9")
+                panel.viewLog()
+                check(panel.notice==="Fetching log…","v starts a log fetch")
+                stage=9
+            } else if(stage===9 && panel.polling.log===null && !panel.workerBusy && launched()) {
                 panel.close()
                 stage=3
             } else if(stage===3 && !panel.workerBusy) {
@@ -432,6 +453,9 @@ ShellRoot {
         print(output)
         if result.returncode or 'QML_CHECKS_PASSED' not in output or any(term in output for term in ('ERROR:', 'ReferenceError','TypeError','CHECK FAILED')):
             raise SystemExit('QML smoke check failed')
+        assert len((home / 'log-req.log').read_text().splitlines()) == 1
+        assert (home / 'omarchy-launch-tui.log').read_text().splitlines() == ['--app-id=org.omarchy.github-actions-log', 'python3', str(root / 'actions.py'), 'view', str(home / 'fake-log.txt')], (home / 'omarchy-launch-tui.log').read_text()
+        assert not (home / 'notify-send.log').exists()
         sent = [json.loads(line) for line in (home / 'act.log').read_text().splitlines()]
         if scenario == 'fresh':
             assert (home / 'wl-copy.log').read_text().splitlines() == ['-- https://github.com/one/repo/actions/runs/7'] * 2

@@ -46,6 +46,244 @@ class ActionsTest(unittest.TestCase):
                 process.communicate()
 
 
+class LogTest(unittest.TestCase):
+    def task(self, **changes):
+        return {"requestId": 7, "repo": "o/r", "run": "5", "job": "9", "mode": "failed", **changes}
+
+    def fake(self, directory, body="", stderr="", code=0):
+        fake = Path(directory) / "gh"
+        fake.write_text(f"#!{sys.executable}\nimport os,sys,json\n"
+                        "open(os.environ['GH_ARGV'],'w').write(json.dumps(sys.argv[1:]))\n"
+                        + f"sys.stdout.buffer.write({body.encode()!r})\n"
+                        + f"sys.stderr.buffer.write({stderr.encode()!r})\nsys.exit({code})\n")
+        fake.chmod(0o700)
+        return {**os.environ, "PATH": directory, "XDG_RUNTIME_DIR": directory,
+                "GH_ARGV": str(Path(directory) / "argv")}
+
+    def call(self, task, env):
+        result = subprocess.run([sys.executable, "actions.py", "log", json.dumps(task)], env=env,
+                                capture_output=True, text=True, timeout=10)
+        return json.loads(result.stdout)
+
+    def test_validation_and_argv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.fake(directory, "ok")
+            for changes in ({"repo": "../r"}, {"run": None}, {"run": ""}, {"run": "0"}, {"run": "x"},
+                            {"job": "0"}, {"job": "x"}, {"mode": "other"},
+                            {"job": None, "mode": "full"}):
+                with self.subTest(changes=changes):
+                    reply = self.call(self.task(**changes), env)
+                    self.assertEqual((reply["requestId"], reply["errorType"]), (7, "setup"))
+                    self.assertFalse(Path(env["GH_ARGV"]).exists())
+            for changes, expected in (({}, ["--job", "9", "--log-failed"]),
+                                      ({"mode": "full"}, ["--job", "9", "--log"]),
+                                      ({"job": None}, ["5", "--log-failed"])):
+                with self.subTest(changes=changes):
+                    reply = self.call(self.task(**changes), env)
+                    self.assertEqual(reply["error"], "")
+                    self.assertEqual(json.loads(Path(env["GH_ARGV"]).read_text()),
+                                     ["run", "view", *expected, "-R", "github.com/o/r"])
+                    Path(env["GH_ARGV"]).unlink()
+
+    def test_cleaning_cut_and_permissions(self):
+        body = "\x1b[31mA\x1b[0m\x1b]title\x07\x1b]other\x1b\\\x1bXB\u202e\ufeff\r\u200d\n" + "x" * 2001
+        with tempfile.TemporaryDirectory() as directory:
+            reply = self.call(self.task(), self.fake(directory, body))
+            path = Path(reply["data"]["path"])
+            content = path.read_text()
+            self.assertIn("AB\u200d\n", content)
+            self.assertNotIn("\x1b", content)
+            self.assertNotIn("\r", content)
+            self.assertNotIn("\u202e", content)
+            self.assertNotIn("\ufeff", content)
+            self.assertIn("x" * 2000 + "…", content)
+            self.assertTrue(reply["data"]["lineCut"])
+            self.assertIn("lines cut: 1", content)
+            self.assertNotIn("complete", content)
+            self.assertEqual(path.parent, Path(directory) / "nixarchy-ghtui")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_unterminated_osc_keeps_following_lines(self):
+        cleaned, cut = actions.clean_log("ok\n\x1b]8;;http://x\nERROR: real failure\nmore\n")
+        self.assertEqual((cleaned, cut), ("ok\n\nERROR: real failure\nmore\n", 0))
+
+    def test_controls_cannot_bypass_line_cut(self):
+        cleaned, cut = actions.clean_log(("a" * 1999 + "\x0b") * 500 + "\u2028\u2029\x80\x9f\u2066\u2067\u2068\u2069")
+        self.assertEqual(cleaned, "a" * 2000 + "…")
+        self.assertEqual(cut, 1)
+        self.assertEqual(actions.clean_log("a\u2028\u2029\x80\x9f\u2066\u2067\u2068\u2069b"), ("ab", 0))
+        with tempfile.TemporaryDirectory() as directory:
+            reply = self.call(self.task(), self.fake(directory, ("a" * 1999 + "\x0b") * 500))
+            self.assertTrue(reply["data"]["lineCut"])
+
+    def test_tail_drain_empty_and_sweep(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.fake(directory, "START\n" + "a" * (2 * 1024 * 1024)
+                            + "b" * (1024 * 1024 - 5) + "\nEND\n")
+            reply = self.call(self.task(), env)
+            content = Path(reply["data"]["path"]).read_text()
+            self.assertTrue(reply["data"]["cutShort"])
+            self.assertIn("cut short: showing the last 1 MiB of 4 MiB", content)
+            self.assertIn("END", content)
+            self.assertNotIn("START", content)
+            self.assertLess(len(content), 1_100_000)
+            old = Path(directory) / "nixarchy-ghtui" / "old"
+            old.write_text("old")
+            os.utime(old, (time.time() - 90000, time.time() - 90000))
+            env = self.fake(directory)
+            reply = self.call(self.task(), env)
+            self.assertEqual(reply["data"]["path"], "")
+            self.assertEqual(reply["error"], "No failed steps in this log.")
+            self.assertFalse(old.exists())
+            self.assertEqual(self.call(self.task(mode="full"), env)["error"], "This log is empty.")
+
+    def test_sweep_ignores_concurrent_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.fake(directory, "ok")
+            with patch.dict(os.environ, env):
+                old = Path(actions.log_dir()) / "old"
+                old.write_text("old")
+                os.utime(old, (time.time() - 90000, time.time() - 90000))
+                unlink = os.unlink
+                def race(path):
+                    if path == str(old):
+                        unlink(path)
+                        raise FileNotFoundError(path)
+                    return unlink(path)
+                with patch.object(actions.os, "unlink", side_effect=race):
+                    reply = actions.read_log(self.task())
+            self.assertTrue(reply["data"]["path"])
+
+    def test_log_directory_rejects_wrong_owner_mode_and_symlink(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_RUNTIME_DIR": directory}):
+            path = Path(directory) / "nixarchy-ghtui"
+            path.mkdir(mode=0o700)
+            path.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "Log directory unavailable"):
+                actions.log_dir()
+            path.chmod(0o700)
+            info = os.lstat(path)
+            with patch.object(actions.os, "lstat", return_value=type("Info", (), {"st_mode": info.st_mode, "st_uid": os.getuid() + 1})()):
+                with self.assertRaisesRegex(ValueError, "Log directory unavailable"):
+                    actions.log_dir()
+            path.rmdir()
+            path.symlink_to(directory)
+            with self.assertRaisesRegex(ValueError, "Log directory unavailable"):
+                actions.log_dir()
+
+    def test_errors(self):
+        rows = (("rate limit HTTP 403", "rate", "GitHub rate limit"),
+                ("HTTP 429", "rate", "GitHub rate limit"),
+                ("secondary rate", "rate", "GitHub rate limit"),
+                ("gh auth login", "auth", "Authenticate with gh auth login"),
+                ("HTTP 401", "auth", "Authenticate with gh auth login"),
+                ("HTTP 403", "permission", "Log unavailable or expired"),
+                ("HTTP 404", "permission", "Log unavailable or expired"),
+                ("private stderr text", "network", "GitHub log request failed"))
+        with tempfile.TemporaryDirectory() as directory:
+            for stderr, kind, message in rows:
+                with self.subTest(stderr=stderr):
+                    reply = self.call(self.task(), self.fake(directory, stderr=stderr, code=1))
+                    self.assertEqual((reply["requestId"], reply["errorType"], reply["error"]),
+                                     (7, kind, message))
+                    if stderr == "private stderr text":
+                        self.assertNotIn(stderr, json.dumps(reply))
+            env = self.fake(directory)
+            env["PATH"] = str(Path(directory) / "missing")
+            self.assertEqual(self.call(self.task(), env)["errorType"], "setup")
+            env["XDG_RUNTIME_DIR"] = "relative"
+            self.assertEqual(self.call(self.task(), env)["error"], "Log directory unavailable")
+
+    def test_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.fake(directory, "log")
+            path = Path(self.call(self.task(), env)["data"]["path"])
+            less = Path(directory) / "less"
+            less.write_text(f"#!{sys.executable}\nimport json,os,sys\nopen(os.environ['VIEW_ARGV'],'w').write(json.dumps(sys.argv[1:]))\n")
+            less.chmod(0o700)
+            env["VIEW_ARGV"] = str(Path(directory) / "less-argv")
+            outside = Path(directory) / "outside"
+            outside.write_text("x")
+            symlink = path.parent / "link"
+            symlink.symlink_to(path)
+            for bad in (outside, symlink, path.parent):
+                self.assertNotEqual(subprocess.run([sys.executable, "actions.py", "view", str(bad)], env=env).returncode, 0)
+            self.assertTrue(path.exists())
+            self.assertEqual(subprocess.run([sys.executable, "actions.py", "view", str(path)], env=env).returncode, 0)
+            self.assertEqual(json.loads(Path(env["VIEW_ARGV"]).read_text()), ["--", str(path)])
+            self.assertFalse(path.exists())
+
+    def test_view_environment_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_RUNTIME_DIR": directory,
+                "LESS": "-F -X -R", "LESSOPEN": "pipe", "LESSKEYIN": "keys"}):
+            path = Path(actions.log_dir()) / "log"
+            path.write_text("log")
+            with patch.object(actions.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+                self.assertEqual(actions.view([str(path)]), 0)
+            child_env = run.call_args.kwargs["env"]
+            self.assertEqual({key: value for key, value in child_env.items() if key.startswith("LESS")},
+                             {"LESSSECURE": "1", "LESS": ""})
+            self.assertFalse(path.exists())
+            path.write_text("log")
+            with patch.object(actions.subprocess, "run", side_effect=FileNotFoundError("less")), \
+                    contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(actions.view([str(path)]), 1)
+            self.assertEqual(stderr.getvalue(), "Install less to view logs\n")
+            self.assertFalse(path.exists())
+            path.write_text("log")
+            unlink = os.unlink
+            def gone(target):
+                if target == str(path):
+                    unlink(target)
+                    raise FileNotFoundError(target)
+                return unlink(target)
+            with patch.object(actions.os, "unlink", side_effect=gone), \
+                    patch.object(actions.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+                self.assertEqual(actions.view([str(path)]), 0)
+            path.write_text("log")
+            with patch.object(actions.subprocess, "run", side_effect=lambda *a, **k: handler[0]()), \
+                    patch.object(actions.signal, "signal", side_effect=lambda sig, fn: handler.append(fn)):
+                handler = []
+                with self.assertRaises(SystemExit):
+                    actions.view([str(path)])
+            self.assertFalse(path.exists())
+
+    def test_timeout_stderr_and_sigterm(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env = self.fake(directory)
+            fake = Path(directory) / "gh"
+            pidfile = Path(directory) / "pid"
+            fake.write_text(f"#!{sys.executable}\nimport os,time\nopen({str(pidfile)!r}+'.tmp','w').write(str(os.getpid()))\n"
+                            f"os.replace({str(pidfile)!r}+'.tmp',{str(pidfile)!r})\ntime.sleep(30)\n")
+            fake.chmod(0o700)
+            with patch.dict(os.environ, env), self.assertRaises(subprocess.TimeoutExpired):
+                actions.read_log(self.task(), timeout=0.1)
+            child = int(pidfile.read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child, 0)
+            pidfile.unlink()
+            process = subprocess.Popen([sys.executable, "actions.py", "log", json.dumps(self.task())], env=env,
+                                       stdout=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 5
+                while not pidfile.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(pidfile.exists())
+                child = int(pidfile.read_text())
+                process.send_signal(signal.SIGTERM)
+                process.wait(timeout=3)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child, 0)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
+            fake.write_text(f"#!{sys.executable}\nimport sys\nsys.stderr.write('e'*200000)\nsys.stdout.write('ok')\n")
+            fake.chmod(0o700)
+            self.assertEqual(self.call(self.task(), env)["error"], "")
+
+
 class PageTest(unittest.TestCase):
     def test_headers_pagination_and_single_call(self):
         # Jobs pages still follow pagination; unfinished-status pages don't (#30).
