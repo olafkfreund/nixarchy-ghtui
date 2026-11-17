@@ -22,6 +22,54 @@ function response(request, data=[], nextPage=0, total) {
   return reply;
 }
 function reopen(s, now) { polling.open(s, now); s.accountChecked = true; }
+// Account title contract: only a successful check on this open verifies the cached login.
+{
+  function cached() {
+    const s=polling.create(); s.account='a';
+    s.repos=[{repo:'a/b'}]; s.details={'a/b:7':{jobs:[]}}; s.expanded={'a/b:7':true};
+    return s;
+  }
+  {
+    const s=cached(); s.accountChecked=true; s.accountVerified=true;
+    polling.close(s); polling.open(s,0);
+    assert.equal(s.accountChecked,false); assert.equal(s.accountVerified,false);
+    assert.equal(s.account,'a'); assert.equal(s.repos.length,1);
+  }
+  {
+    const s=cached(); polling.open(s,0);
+    const request=polling.next(s,0); assert.equal(request.kind,'account');
+    assert.equal(polling.complete(s,response(request,{login:'b'}),100),true);
+    assert.equal(s.account,'b'); assert.equal(s.accountChecked,true); assert.equal(s.accountVerified,true);
+    assert.equal(s.repos.length,0); assert.equal(Object.keys(s.details).length,0);
+    assert.equal(Object.keys(s.expanded).length,0);
+  }
+  {
+    const s=cached(); polling.open(s,0);
+    const request=polling.next(s,0); assert.equal(request.kind,'account');
+    assert.equal(polling.complete(s,response(request,{login:'a'}),100),true);
+    assert.equal(s.account,'a'); assert.equal(s.accountVerified,true);
+    assert.equal(s.repos.length,1); assert.ok(s.details['a/b:7']); assert.equal(s.expanded['a/b:7'],true);
+  }
+  {
+    const s=cached(); polling.open(s,0);
+    let request=polling.next(s,0); assert.equal(request.kind,'account');
+    assert.equal(polling.complete(s,{...response(request),error:'forbidden',errorType:'permission'},100),true);
+    assert.equal(s.accountChecked,true); assert.equal(s.accountVerified,false); assert.equal(s.account,'a');
+    assert.equal(s.repos.length,1); assert.ok(s.details['a/b:7']); assert.equal(s.expanded['a/b:7'],true);
+    polling.close(s); polling.open(s,2000);
+    request=polling.next(s,2000); assert.equal(request.kind,'account');
+    assert.equal(polling.complete(s,response(request,{login:'b'}),2100),true);
+    assert.equal(s.account,'b'); assert.equal(s.accountVerified,true);
+    assert.equal(s.repos.length,0); assert.equal(Object.keys(s.details).length,0);
+    assert.equal(Object.keys(s.expanded).length,0);
+  }
+  {
+    const s=cached(); polling.open(s,0);
+    const request=polling.next(s,0); assert.equal(request.kind,'account');
+    assert.equal(polling.complete(s,{...response(request),error:'offline',errorType:'network'},100),true);
+    assert.equal(s.accountChecked,false); assert.equal(s.accountVerified,false); assert.equal(s.account,'a');
+  }
+}
 // An auth or setup error on the account check stops polling until r, then r recovers.
 for (const errorType of ['auth','setup']) {
   const gate=polling.create(); polling.open(gate,0);

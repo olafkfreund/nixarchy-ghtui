@@ -8,7 +8,7 @@ function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
         stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true, catalogueBlocked:"",
-        account:"", accountChecked:false, remaining:null, resetAt:0, error:"", log:null, watches:{}, notices:[], paused:false,
+        account:"", accountChecked:false, accountVerified:false, remaining:null, resetAt:0, error:"", log:null, watches:{}, notices:[], paused:false,
         requests:0, lastRequest:"", lastStarted:0};
 }
 function key(kind, repo, run) { return kind + ":" + (repo || "") + ":" + (run || ""); }
@@ -33,7 +33,7 @@ function ensure(s, kind, repo, run, group, due) {
 }
 function open(s, now) {
     if (!s.opened) s.flight=null;
-    s.opened = true; s.generation++; s.auth = false; s.accountChecked = false;
+    s.opened = true; s.generation++; s.auth = false; s.accountChecked = false; s.accountVerified = false;
     s.paused=false;
     if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
     if (!s.catalogueComplete || now - s.catalogueAt >= TIMING.catalogue*pace(s,now)) s.discover = true;
@@ -328,7 +328,7 @@ function complete(s,reply,now) {
             s.tasks={}; s.repos=[]; s.details={}; s.expanded={}; s.selected=""; s.inspected="";
             s.catalogueComplete=false; s.catalogueBlocked=""; s.discover=true; s.watches={};
         }
-        s.account=data.login; s.accountChecked=true; delete s.tasks[t.key]; return true;
+        s.account=data.login; s.accountChecked=true; s.accountVerified=true; delete s.tasks[t.key]; return true;
     }
     if (t.kind==="run") {
         if (r) {
