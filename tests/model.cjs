@@ -421,6 +421,20 @@ console.log('Model: view guard passed');
   for (let i = 0; i < 3; i++) step = model.clampStep(step - 1);
   assert.equal(step, -3);
   assert.equal(model.clampStep(step - 1), step);
+  assert.equal(model.fontPx(10, -3), 9);
+  assert.equal(model.fontPx(8, -3), 8);
+  assert.equal(model.fontPx(20, -3), 14);
+  for (let px = 1; px <= 40; px++) {
+    let previous = 0;
+    for (let s = -3; s <= 5; s++) {
+      const size = model.fontPx(px, s);
+      assert.ok(size >= Math.min(px, 9) && size >= previous);
+      if (s >= 0) assert.equal(size, model.zoomed(px, s));
+      previous = size;
+    }
+  }
+  const panelQml = fs.readFileSync('ActionsPanel.qml', 'utf8');
+  for (const n of ['title', 'body', 'caption']) assert.ok(panelQml.includes(`Model.fontPx(Style.font.${n}, textStep)`));
 }
 console.log('Model: text size passed');
 // #44 step 9: watched run marker and notification text.
