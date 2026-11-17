@@ -128,6 +128,8 @@ The catalogue and known activity stay in memory between openings. After `TIMING.
 
 The plugin uses your existing **`gh auth login`** authentication. It never extracts or stores the token itself. A PAT configured through GitHub CLI works too. Token restrictions still apply: fine-grained PATs need repository Metadata read and Actions read permission for the repositories you select; organisation access may require SSO authorization or approval. Rerun and cancel also need Actions write (classic: `repo` scope; fine-grained: Actions read and write plus Metadata read); the plugin does not probe the token first, so a refused action names the missing permission. If a repository is missing, confirm that the same `gh` login can list it before refreshing the catalogue.
 
+The panel title shows the active `gh` login as `login@github.com` once it has been checked on this open. A `gh auth switch` while the popup is open is not noticed until the next open.
+
 ## Keyboard
 
 | Key | Action |
@@ -144,11 +146,12 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | ↑ / ↓ while filtering | Select a search result |
 | Enter while filtering | Expand selected result and resume navigation |
 | Tab while filtering | Resume navigation without expanding |
-| Esc | Clear filter, then close |
+| Esc | Close run details, then clear filter, then close |
 | r | Refresh summaries and selected expanded run |
 | Shift + R | Rediscover repositories from GitHub |
 | m | Load 30 more recent runs (up to 100) for the selected repository |
 | o | Open selected repository/run/job on GitHub |
+| i | Show or hide run details (commit, event, actor, attempt, start, duration) |
 | v | Open the log of a failed run or finished job (failed steps only for a failed job; needs `omarchy-launch-tui`, `less`) |
 | w | Watch the selected unfinished run: it polls while the panel is closed and a notification arrives when it finishes (needs `notify-send`); `w` again stops, up to 5 runs |
 | y | Copy the selected row's link (needs `wl-copy`) |
