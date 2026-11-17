@@ -139,7 +139,7 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 | Click | Select a row and expand or collapse it, like Enter |
 | Page Up / Down | Move one screenful |
 | Home / End, g / G | First or last row |
-| Ctrl + = / Ctrl + - / Ctrl + 0 | Bigger, smaller, theme text size: 70% to 150%, kept until the shell restarts, works in the search field too |
+| Ctrl + = / Ctrl + - / Ctrl + 0 | Bigger, smaller, theme text size: 70% to 150% (fonts never below 9 px), kept until the shell restarts, works in the search field too |
 | / | Filter repositories/runs by name, branch or state; `branch:x`, `actor:x`, `is:failed` |
 | ↑ / ↓ while filtering | Select a search result |
 | Enter while filtering | Expand selected result and resume navigation |
