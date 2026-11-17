@@ -41,11 +41,12 @@ if sys.argv[1]=='log':
     os.write(1,(json.dumps({'requestId':request['requestId'],'data':{'path':path,'mode':'failed','cutShort':False,'lineCut':False},'error':'','errorType':'','remaining':4000})+'\\n').encode())
     os._exit(0)
 kind=request['kind']
+if os.path.exists(os.environ['HOME']+'/run-done'): open(os.environ['HOME']+'/closed-kinds.log','a').write(kind+'\\n')
 time.sleep(0.1)
 run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1,'html_url':'https://github.com/one/repo/actions/runs/7'}
 if kind=='catalogue': data=[{'repo':'one/repo'},{'repo':'two/repo'}]
 elif kind=='jobs': data=[{'id':8,'name':'build','status':'in_progress','html_url':'https://github.com/one/repo/actions/runs/7/job/8','steps':[{'number':1,'name':'Checkout','status':'completed','conclusion':'success'}]}]
-elif kind=='run': data=run
+elif kind=='run': data=dict(run,status='completed',conclusion='success') if os.path.exists(os.environ['HOME']+'/run-done') else run
 elif kind=='account': data={'login':'tester'}
 else: data=[run] if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
 reply=json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':'','errorType':'','remaining':4000,'padding':'x'*200000}).encode()+b'\\n'
@@ -98,7 +99,7 @@ ShellRoot {
         onFileChanged: reload()
     }
     Timer {
-        interval: 18000; running: true
+        interval: 22000; running: true
         onTriggered: {
             var missing = stage === 1 ? [panel.polling.requests>=6 ? "" : "requests>=6", panel.details["one/repo:7"] ? "" : "jobs one/repo:7",
                 panel.polling.catalogueComplete ? "" : "catalogueComplete"].filter(Boolean).join(",") : ""
@@ -139,6 +140,8 @@ ShellRoot {
         check(i >= 0, "row " + key)
         panel.cursor = i
     }
+    // The panel is closed here, so adopt() skips the rebuild and the selection update.
+    function reseed() { panel.adopt(); panel.rebuild(); panel.selectionChanged(false) }
     function ensureRun9() {
         var runs = panel.polling.repos[0].runs
         if (!runs.some(function(run) { return run.id === 9 }))
@@ -146,6 +149,14 @@ ShellRoot {
         panel.adopt()
     }
     FileView { id: launchFile; path: Quickshell.env("HOME") + "/omarchy-launch-tui.log"; printErrors: false }
+    function notified() { notifyFile.reload(); return notifyFile.text().split("\\n").length > 3 }
+    FileView { id: notifyFile; path: Quickshell.env("HOME") + "/notify-send.log"; printErrors: false }
+    property bool flagReady: false
+    Process {
+        id: flagProc
+        command: ["python3", "-c", "import os;open(os.environ['HOME']+'/run-done','w')"]
+        onExited: { panel.polling.watches["one/repo:7"].at = 0; var run = panel.polling.repos[0].runs.filter(function(r) { return r.id === 7 })[0]; if (run) delete run.followupAt; flagReady = true }  // both clocks: the watch and the 15 s follow-up
+    }
     function launched() { launchFile.reload(); return launchFile.text().split("\\n").length > 5 }
     function check(value, label) { if (!value) throw new Error("CHECK FAILED: " + label) }
     Timer {
@@ -158,15 +169,15 @@ ShellRoot {
             if (Quickshell.env("MENU_SCENARIO") === "fresh")
                 check(menuFile.text().indexOf('"apps.github-actions"') >= 0,"registered while closed")
             panel.polling=Polling.create()
-            panel.polling.repos=[{repo:"one/repo"},{repo:"two/repo"}]; panel.adopt()
+            panel.polling.repos=[{repo:"one/repo"},{repo:"two/repo"}]; reseed()
             check(panel.entries.length===2,"seeded repositories")
             panel.polling.repos[0].runs=[{id:7,name:"CI",status:"in_progress",run_attempt:1,html_url:"https://github.com/one/repo/actions/runs/7"}]
             panel.polling.expanded={"repo:one/repo":true}
-            panel.adopt()
+            reseed()
             panel.move(1)
             check(panel.current.kind==="run","keyboard selection")
             panel.polling.repos[0].runs[0].run_started_at=new Date(panel.now-5000).toISOString()
-            panel.adopt()
+            reseed()
             var tickKey=panel.current.key, tickCursor=panel.cursor, tickScroll=JSON.parse(panel.status()).scrollY
             panel.now=panel.now+3000
             check(panel.current.info==="8s","running duration ticks with now")
@@ -174,12 +185,12 @@ ShellRoot {
             check(JSON.parse(panel.status()).scrollY===tickScroll,"tick keeps scroll")
             var savedRuns=panel.polling.repos[0].runs
             panel.polling.repos[0].runs=[]
-            panel.adopt()
+            reseed()
             var poll=JSON.parse(panel.status())
             check(poll.pollSelected===panel.current.repo && poll.pollInspected===(panel.current.run||""),"polling follows the highlight")
             check("remaining" in poll && "resetAt" in poll,"status has quota fields")
             panel.polling.repos[0].runs=savedRuns
-            panel.adopt()
+            reseed()
             // #42: an emptied expanded repo shows a "Loading runs…" row, so the cursor may already be back on the run.
             if (panel.current.kind!=="run") panel.move(-1)
             check(panel.current.kind==="run","cursor back on the run")
@@ -202,10 +213,10 @@ ShellRoot {
             check(panel.cursor===0 && panel.entries.length===3 && panel.entries[1].key==="one/repo:7","expansion survives filtering")
             panel.polling.error=""
             panel.polling.catalogueBlocked="Catalogue blocked"
-            panel.adopt()
+            reseed()
             check(panel.statusInfo.text.indexOf("Catalogue blocked")>=0 && panel.statusInfo.urgent,"blocked catalogue remains urgent while filtering")
             panel.polling.catalogueBlocked=""
-            panel.adopt()
+            reseed()
             panel.move(1)
             panel.filterText=""
             check(panel.current.key==="one/repo:7","clearing the filter keeps the selected row")
@@ -226,7 +237,7 @@ ShellRoot {
             check(panel.cursor>=0 && panel.cursor<panel.entries.length,"page up stays in range")
             var originalRuns=panel.polling.repos[0].runs
             panel.polling.repos[0].runs=Array.from({length:40},function(_,i) { return {id:100+i,name:"Long run " + i,status:"completed",conclusion:"success",head_branch:i%2 ? "main" : ""} })
-            panel.adopt()
+            reseed()
             panel.cursor=0
             panel.page(1)
             check(panel.cursor>0 && panel.cursor<panel.entries.length,"page down advances on long list")
@@ -247,7 +258,7 @@ ShellRoot {
                 "clearing a filter keeps a low selected row visible")
             panel.filterText="repo"
             panel.polling.repos[0].runs=originalRuns
-            panel.adopt()
+            reseed()
             panel.move(-panel.entries.length)
             at("one/repo:7")
             selected=panel.current.key
@@ -433,7 +444,25 @@ ShellRoot {
                 check(panel.notice==="Fetching log…","v starts a log fetch")
                 stage=9
             } else if(stage===9 && panel.polling.log===null && !panel.workerBusy && launched()) {
+                // #44: a watched run keeps polling with the panel closed, and only run requests start.
+                at("one/repo:7")
+                panel.toggleWatch()
+                check(panel.notice==="Watching CI" && panel.watching,"w watches an unfinished run")
+                panel.polling.watches["one/repo:7"].at=0
                 panel.close()
+                closedRequests=panel.polling.requests
+                stage=10
+            } else if(stage===10 && panel.polling.requests>closedRequests && !panel.workerBusy) {
+                check(panel.watching && !notified(),"a running watched run keeps its watch")
+                flagProc.running=true
+                stage=11
+            } else if(stage===11 && flagReady && !panel.workerBusy && notified()) {
+                check(!panel.watching && !panel.opened,"the watch ends when the run completes")
+                closedRequests=panel.polling.requests
+                closedAt=Date.now()
+                stage=12
+            } else if(stage===12 && Date.now()-closedAt>1200) {
+                check(panel.polling.requests===closedRequests,"polling stops once nothing is watched")
                 stage=3
             } else if(stage===3 && !panel.workerBusy) {
                 console.log("QML_CHECKS_PASSED")
@@ -444,7 +473,7 @@ ShellRoot {
 }
 ''')
         try:
-            result=subprocess.run([quickshell,'-p',str(root),'--no-color'],capture_output=True,text=True,timeout=25,
+            result=subprocess.run([quickshell,'-p',str(root),'--no-color'],capture_output=True,text=True,timeout=30,
                                   env={**os.environ, 'PATH':str(bin_dir) + (os.pathsep + os.environ['PATH'] if scenario == 'fresh' else ''), 'HOME':str(home), 'MENU_SCENARIO':scenario, 'EXPECTED_BACKGROUND':colors['background'].lower()})
         except subprocess.TimeoutExpired as error:
             print(error.stdout, error.stderr)
@@ -455,7 +484,8 @@ ShellRoot {
             raise SystemExit('QML smoke check failed')
         assert len((home / 'log-req.log').read_text().splitlines()) == 1
         assert (home / 'omarchy-launch-tui.log').read_text().splitlines() == ['--app-id=org.omarchy.github-actions-log', 'python3', str(root / 'actions.py'), 'view', str(home / 'fake-log.txt')], (home / 'omarchy-launch-tui.log').read_text()
-        assert not (home / 'notify-send.log').exists()
+        assert (home / 'notify-send.log').read_text().splitlines() == ['--app-name=GitHub Actions', '--', 'succeeded', 'one/repo · CI'], (home / 'notify-send.log').read_text()
+        assert (home / 'closed-kinds.log').read_text().splitlines() == ['run'], (home / 'closed-kinds.log').read_text()
         sent = [json.loads(line) for line in (home / 'act.log').read_text().splitlines()]
         if scenario == 'fresh':
             assert (home / 'wl-copy.log').read_text().splitlines() == ['-- https://github.com/one/repo/actions/runs/7'] * 2

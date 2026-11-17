@@ -24,6 +24,10 @@ Item {
     property string error: ""
     property string updated: ""
     property var polling: Polling.create()
+    readonly property bool watching: Object.keys(polling.watches).length > 0
+    property var noticeQueue: []
+    property bool noticeBusy: false
+    property bool noticeStarted: false
     property var requestInfo: null
     property bool workerBusy: false
     property bool helperStarted: false
@@ -61,14 +65,17 @@ Item {
             if (monitor && Quickshell.screens[i].name === monitor.name) targetScreen = Quickshell.screens[i]
         if (!opened) Polling.open(polling, Date.now())
         opened = true
+        rebuild()
         selectionChanged(true)
         pump()
         Qt.callLater(function() { keys.forceActiveFocus() })
     }
     function close() {
+        // A watched run request keeps going while closed; anything else is killed.
+        var watched = workerBusy && requestInfo && requestInfo.kind === "run" && !!polling.watches[requestInfo.repo + ":" + requestInfo.run]
         opened = false
         Polling.close(polling)
-        requestProc.running = false
+        if (!watched) requestProc.running = false
         confirm = null
     }
     function toggle() { opened ? close() : open() }
@@ -90,7 +97,7 @@ Item {
         var topKey = entries[topIndex] ? entries[topIndex].key : ""
         var topOffset = topItem ? topItem.y - list.contentY : 0
         var next = Model.rows(repos, expanded, details, filterText, now,
-            polling.selected && polling.inspected ? polling.selected + ":" + polling.inspected : "")
+            polling.selected && polling.inspected ? polling.selected + ":" + polling.inspected : "", polling.watches)
         var structureChanged = Model.syncRows(visibleRows, next)
         entries = next
         cursor = resetSelection ? 0 : Model.selection(entries, key, cursor)
@@ -173,10 +180,24 @@ Item {
         var log = polling.log
         polling.log = null
         if (log) openLog(log)
+        var notices = polling.notices
+        polling.notices = []
+        notices.forEach(function(n) { noticeQueue.push(Model.notice(n)) })
+        drainNotices()
         // Reassign the state reference to notify bindings after pure-JS mutations.
         polling = Object.assign({}, polling)
+        if (!opened) return
         rebuild()
         selectionChanged(false)
+    }
+    // One notify-send at a time; the argv is an array, never a shell string.
+    function drainNotices() {
+        if (noticeBusy || noticeQueue.length === 0) return
+        var m = noticeQueue.shift()
+        noticeBusy = true
+        noticeStarted = false
+        noticeProc.command = ["notify-send", "--app-name=GitHub Actions", "--", m.title, m.body]
+        noticeProc.running = true
     }
     function refresh(catalogue) {
         selectionChanged(true)
@@ -184,7 +205,7 @@ Item {
         pump()
     }
     function pump() {
-        if (!opened || workerBusy) return
+        if ((!opened && !watching) || workerBusy) return
         var request = Polling.next(polling, Date.now())
         if (!request) return
         requestInfo = request
@@ -241,6 +262,20 @@ Item {
             viewProc.command = ["omarchy-launch-tui", "--app-id=org.omarchy.github-actions-log", "python3", helper, "view", log.path]
             viewProc.running = true
         }
+    }
+    function toggleWatch() {
+        if (!current || current.kind !== "run") return
+        var run = Polling.runFor(polling, current.repo, current.run)
+        if (!run) return
+        if (run.status === "completed") {
+            showNotice("Already finished: " + Model.notice({kind: "done", repo: "", name: "", conclusion: run.conclusion}).title)
+            return
+        }
+        var name = run.name || "run"
+        var r = Polling.watch(polling, current.repo, current.run, name, Date.now())
+        showNotice(r === "full" ? "Watching 5 runs already" : r === "on" ? "Watching " + name : "Stopped watching")
+        adopt()
+        pump()
     }
     function copyLink() {
         if (copyProc.copyBusy) { showNotice("Copy in progress"); return }
@@ -324,7 +359,7 @@ Item {
         }
     }
     ListModel { id: visibleRows; dynamicRoles: true }
-    Timer { interval: 100; running: root.opened; repeat: true; onTriggered: root.pump() }
+    Timer { interval: 100; running: root.opened || root.watching; repeat: true; onTriggered: root.pump() }
     Timer { interval: 1000; running: root.opened; repeat: true; triggeredOnStart: true; onTriggered: root.now = Date.now() }
     Process {
         id: requestProc
@@ -338,6 +373,17 @@ Item {
         onStarted: root.helperStarted = true
         // Quickshell 0.3.1: a failed start emits neither started nor exited, only running=false.
         onRunningChanged: if (!running && root.workerBusy && !root.helperStarted) root.failedToStart()
+    }
+    Process {
+        id: noticeProc
+        onStarted: root.noticeStarted = true
+        onExited: { root.noticeBusy = false; root.drainNotices() }
+        // Quickshell 0.3.1: a failed start emits neither started nor exited, only running=false.
+        onRunningChanged: if (!running && root.noticeBusy && !root.noticeStarted) {
+            console.warn("GitHub Actions: notify-send failed to start")
+            root.noticeBusy = false
+            root.drainNotices()
+        }
     }
     Process {
         id: viewProc
@@ -440,6 +486,7 @@ Item {
                     else if (event.text === "g") root.move(-root.entries.length)
                     else if (event.text === "G") root.move(root.entries.length)
                     else if (event.text === "y") root.copyLink()
+                    else if (event.text === "w") root.toggleWatch()
                     else if (event.text === "?") Quickshell.execDetached(["bash", decodeURIComponent(Qt.resolvedUrl("keybindings.sh").toString().replace(/^file:\/\//, ""))])
                     else if (event.key === Qt.Key_Slash) { searchField.forceActiveFocus(); searchField.selectAll() }
                     else if (event.key === Qt.Key_R) {
@@ -458,7 +505,7 @@ Item {
                     spacing: Style.spacing.md
                     Text {
                         width: parent.width
-                        text: "GitHub Actions  ·  " + root.repos.length + (root.repos.length === 1 ? " repository" : " repositories")
+                        text: "GitHub Actions  ·  " + root.repos.length + (root.repos.length === 1 ? " repository" : " repositories") + (root.watching ? "  ·  " + Object.keys(root.polling.watches).length + " watched" : "")
                         color: Commons.Color.menu.text
                         font { family: Style.font.menuFamily; pixelSize: Style.font.title; bold: true }
                         textFormat: Text.PlainText
@@ -611,7 +658,7 @@ Item {
                     Text {
                         id: footer
                         width: parent.width
-                        text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  v log  y copy  ? keys  Esc close"
+                        text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  v log  w watch  y copy  ? keys  Esc close"
                         color: root.actionError && !root.confirm && root.actionText ? Commons.Color.urgent : Commons.Color.menu.text
                         opacity: root.confirm || root.actionText ? 1 : 0.65
                         font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
