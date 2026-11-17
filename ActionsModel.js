@@ -60,6 +60,9 @@ function age(run, now) {
     return Math.floor(seconds / 86400) + "d ago";
 }
 
+function clampStep(n) { return Math.max(-3, Math.min(5, Math.round(Number(n) || 0))) }
+function zoomed(px, step) { return px > 0 ? Math.max(1, Math.round(px * (10 + clampStep(step)) / 10)) : 0 }
+
 // Compact age of a result: Ns, Nm or Nh, floored.
 function ago(at, now) {
     var start = Date.parse(at || "");

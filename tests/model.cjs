@@ -387,6 +387,42 @@ console.log('Model: log targets passed');
 }
 console.log('Model: view guard passed');
 
+{
+  for (let px = 0; px <= 40; px++) assert.equal(model.zoomed(px, 0), px);
+  assert.equal(model.zoomed(12, 5), 18);
+  assert.equal(model.zoomed(12, -3), 8);
+  assert.equal(model.zoomed(10, -3), 7);
+  assert.equal(model.zoomed(10, 5), 15);
+  for (let px = 1; px <= 40; px++) {
+    let previous = 0;
+    for (let step = -3; step <= 5; step++) {
+      const size = model.zoomed(px, step);
+      assert.ok(size >= 1);
+      assert.ok(size >= previous);
+      previous = size;
+    }
+  }
+  for (let step = -3; step <= 5; step++) assert.equal(model.zoomed(0, step), 0);
+  assert.equal(model.clampStep(9), 5);
+  assert.equal(model.clampStep(-9), -3);
+  assert.equal(model.clampStep(-4), -3);
+  assert.equal(model.clampStep(NaN), 0);
+  assert.equal(model.clampStep('3'), 3);
+  assert.equal(model.clampStep(undefined), 0);
+  assert.equal(model.zoomed(12, 99), model.zoomed(12, 5));
+  assert.equal(model.zoomed(12, -99), model.zoomed(12, -3));
+  let step = 0;
+  for (let i = 0; i < 5; i++) step = model.clampStep(step + 1);
+  assert.equal(step, 5);
+  assert.equal(model.clampStep(step + 1), step);
+  for (let i = 0; i < 5; i++) step = model.clampStep(step - 1);
+  assert.equal(step, 0);
+  for (let i = 0; i < 3; i++) step = model.clampStep(step - 1);
+  assert.equal(step, -3);
+  assert.equal(model.clampStep(step - 1), step);
+}
+console.log('Model: text size passed');
+
 // Exercise the QML key handler as JavaScript without a display.
 {
   const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
