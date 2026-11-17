@@ -1,4 +1,4 @@
-"""Read-only GitHub Actions data, using gh's existing authentication."""
+"""GitHub Actions data and a closed set of run actions, using gh's existing authentication."""
 import argparse
 import json
 import re
@@ -12,6 +12,8 @@ from urllib.parse import urlsplit, parse_qs
 
 
 ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
+ACTIONS = {"rerun": "rerun", "rerun-failed": "rerun-failed-jobs", "cancel": "cancel"}
+UNKNOWN = "Outcome unknown; check GitHub before retrying"
 # ZWNJ and ZWJ are Cf but kept: emoji sequences and several scripts need them, and they cannot reorder text (#32).
 JOINERS = "\u200c\u200d"
 
@@ -39,12 +41,21 @@ def plain_fields(row, fields):
     return row
 
 
-RUN_TEXT = ("name", "display_title", "head_branch")
+RUN_TEXT = ("name", "display_title", "head_branch", "event")
 
 
-def request(endpoint, include=False):
+def clean_run(row):
+    plain_fields(row, RUN_TEXT)
+    actor = row.get("actor")
+    login = actor.get("login") if isinstance(actor, dict) else None
+    row["actor"] = plain(login) if isinstance(login, str) else ""
+    return row
+
+
+def request(endpoint, include=False, method=None):
     child = subprocess.Popen(
-        ["gh", "api", "--hostname", "github.com"] + (["--include"] if include else []) + [endpoint],
+        ["gh", "api", "--hostname", "github.com"] + (["--include"] if include else [])
+        + (["--method", method] if method else []) + [endpoint],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     try:
@@ -56,21 +67,30 @@ def request(endpoint, include=False):
     return stdout, stderr, child.returncode
 
 
+def run_id(task):
+    run = str(task.get("run", ""))
+    if not re.fullmatch(r"[0-9]+", run) or int(run) < 1:
+        raise ValueError("Invalid run ID")
+    return run
+
+
 def page_endpoint(task):
-    if not isinstance(task, dict) or task.get("kind") not in ("catalogue", "activity", "summary", "jobs", "run"):
+    if not isinstance(task, dict) or task.get("kind") not in ("catalogue", "activity", "summary", "jobs", "run", "account"):
         raise ValueError("Invalid page operation")
     number = task.get("page", 1)
     if type(number) is not int or number < 1 or number > 100000:
         raise ValueError("Invalid page number")
     if type(task.get("requestId")) is not int or task["requestId"] < 1:
         raise ValueError("Invalid request identity")
+    if task["kind"] == "account":
+        if task.get("repo") not in (None, ""):
+            raise ValueError("Invalid page operation")
+        return "user"
     if task["kind"] == "catalogue":
         return f"user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&direction=desc&per_page=100&page={number}"
     base = "repos/" + repo_name(task.get("repo")) + "/actions/runs"
     if task["kind"] in ("jobs", "run"):
-        run = str(task.get("run", ""))
-        if not re.fullmatch(r"[0-9]+", run) or int(run) < 1:
-            raise ValueError("Invalid run ID")
+        run = run_id(task)
         if task["kind"] == "run":
             return f"{base}/{run}"
         return f"{base}/{run}/jobs?filter=latest&per_page=100&page={number}"
@@ -80,6 +100,16 @@ def page_endpoint(task):
     if status not in ACTIVE:
         raise ValueError("Invalid workflow status")
     return f"{base}?status={status}&per_page=100&page={number}"
+
+
+def write_endpoint(task):
+    if not isinstance(task, dict) or not isinstance(task.get("action"), str) or task["action"] not in ACTIONS:
+        raise ValueError("Invalid action")
+    if type(task.get("requestId")) is not int or task["requestId"] < 1:
+        raise ValueError("Invalid request identity")
+    repo = repo_name(task.get("repo"))
+    run = run_id(task)
+    return f"repos/{repo}/actions/runs/{run}/{ACTIONS[task['action']]}"
 
 
 def http_reply(stdout):
@@ -123,6 +153,27 @@ def next_page(endpoint, headers):
     return 0
 
 
+def rate_headers(result, status, headers):
+    result["httpStatus"] = status
+    if headers.get("x-ratelimit-remaining", "").isdigit():
+        result["remaining"] = int(headers["x-ratelimit-remaining"])
+    if headers.get("x-ratelimit-reset", "").isdigit():
+        result["resetAt"] = int(headers["x-ratelimit-reset"]) * 1000
+    retry = headers.get("retry-after", "")
+    if retry:
+        try:
+            result["retryAt"] = ((datetime.now(timezone.utc).timestamp() + int(retry)) * 1000
+                                 if retry.isdigit() else parsedate_to_datetime(retry).timestamp() * 1000)
+        except (ValueError, TypeError, OverflowError):
+            pass
+
+
+def rate_limited(result, status, body):
+    message = str(body.get("message", "")) if isinstance(body, dict) else ""
+    return (status == 429 or result["remaining"] == 0 or result["retryAt"]
+            or "rate limit" in message.lower() or "secondary rate" in message.lower())
+
+
 def read_page(task):
     endpoint = page_endpoint(task)
     result = {"requestId": task["requestId"], "httpStatus": 0, "nextPage": 0,
@@ -138,18 +189,7 @@ def read_page(task):
             result.update(errorType="network", error="GitHub request failed; check connection and gh auth status")
             return result
         status, headers, raw_body = http_reply(stdout)
-        result["httpStatus"] = status
-        if headers.get("x-ratelimit-remaining", "").isdigit():
-            result["remaining"] = int(headers["x-ratelimit-remaining"])
-        if headers.get("x-ratelimit-reset", "").isdigit():
-            result["resetAt"] = int(headers["x-ratelimit-reset"]) * 1000
-        retry = headers.get("retry-after", "")
-        if retry:
-            try:
-                result["retryAt"] = ((datetime.now(timezone.utc).timestamp() + int(retry)) * 1000
-                                     if retry.isdigit() else parsedate_to_datetime(retry).timestamp() * 1000)
-            except (ValueError, TypeError, OverflowError):
-                pass
+        rate_headers(result, status, headers)
         try:
             body = json.loads(raw_body) if raw_body.strip() else None
         except ValueError:
@@ -158,13 +198,15 @@ def read_page(task):
             body = None
         result["data"] = body
         if status >= 400 or code:
-            message = str(body.get("message", "")) if isinstance(body, dict) else ""
-            if status == 429 or result["remaining"] == 0 or result["retryAt"] or "rate limit" in message.lower() or "secondary rate" in message.lower():
+            if task["kind"] == "account":
+                result["data"] = None  # never pass on the /user profile, only the login
+            if rate_limited(result, status, body):
                 result.update(errorType="rate", error="GitHub rate limit")
             elif status == 401:
                 result.update(errorType="auth", error="Authenticate with gh auth login")
             elif status in (403, 404):
-                result.update(errorType="permission", error="Resource unavailable or Actions read permission missing")
+                result.update(errorType="permission", error=("Repository list unavailable; token cannot read your repositories"
+                                                              if task["kind"] == "catalogue" else "Resource unavailable or Actions read permission missing"))
             else:
                 result.update(errorType="network", error="GitHub request failed")
             return result
@@ -176,23 +218,31 @@ def read_page(task):
                 raise ValueError("Invalid repository entry")
             result["data"] = [{"repo": repo_name(row["full_name"]), "description": plain(row.get("description") or ""),
                                "archived": bool(row.get("archived")), "disabled": bool(row.get("disabled"))} for row in body]
+        elif kind == "account":
+            result["data"] = None
+            login = body.get("login") if isinstance(body, dict) else None
+            if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", login):
+                raise ValueError("Invalid account response")
+            result["data"] = {"login": login}
         elif kind == "run":
             if not isinstance(body, dict) or str(body.get("id")) != str(task["run"]) or "status" not in body:
                 raise ValueError("Invalid run response")
-            plain_fields(body, RUN_TEXT)
+            clean_run(body)
         else:
             key = "jobs" if kind == "jobs" else "workflow_runs"
             if not isinstance(body, dict) or not isinstance(body.get(key), list):
                 raise ValueError("Invalid workflow response")
             if any(not isinstance(row, dict) or type(row.get("id")) is not int or row["id"] < 1 or not isinstance(row.get("status"), str) for row in body[key]):
                 raise ValueError("Invalid workflow entry")
-            if kind == "jobs" and any(not isinstance(row.get("steps", []), list) for row in body[key]):
+            if kind == "jobs" and any(not isinstance(row.get("steps", []), list) or any(not isinstance(step, dict) for step in row.get("steps", [])) for row in body[key]):
                 raise ValueError("Invalid job steps")
             for row in body[key]:
-                plain_fields(row, ("name",) if kind == "jobs" else RUN_TEXT)
+                if kind == "jobs":
+                    plain_fields(row, ("name",))
+                else:
+                    clean_run(row)
                 for step in row.get("steps", []) if kind == "jobs" else []:
-                    if isinstance(step, dict):
-                        plain_fields(step, ("name",))
+                    plain_fields(step, ("name",))
             result["data"] = body[key]
             if kind == "activity" or task.get("status") in ACTIVE:
                 # One page per unfinished status (#30); total_count says how many runs were left out.
@@ -210,9 +260,47 @@ def read_page(task):
     return result
 
 
+def write_action(task):
+    endpoint = write_endpoint(task)
+    result = {"requestId": task["requestId"], "action": task["action"], "httpStatus": 0,
+              "ok": False, "error": "", "errorType": "", "retryAt": 0,
+              "remaining": None, "resetAt": 0}
+    try:
+        stdout, stderr, code = request(endpoint, include=True, method="POST")
+        if not stdout.strip() and "auth login" in stderr.lower():
+            result.update(errorType="auth", error="Authenticate with gh auth login")
+            return result
+        status, headers, raw_body = http_reply(stdout)
+        rate_headers(result, status, headers)
+        try:
+            body = json.loads(raw_body) if raw_body.strip() else None
+        except ValueError:
+            if status < 400:
+                raise
+            body = None
+        # Success and "unknown" first: rate headers on an accepted write still set a cooldown, never a failure (#45).
+        if 200 <= status < 300 and code == 0:
+            result["ok"] = True
+        elif not 400 <= status < 500:
+            result.update(errorType="unknown", error=UNKNOWN)
+        elif rate_limited(result, status, body):
+            result.update(errorType="rate", error="GitHub rate limit")
+        elif status == 401:
+            result.update(errorType="auth", error="Authenticate with gh auth login")
+        else:
+            message = plain(str(body.get("message", "")))[:120] if isinstance(body, dict) else ""
+            prefix = f"Needs Actions write on {task['repo']}" if status in (403, 404) else "GitHub refused"
+            result.update(errorType="refused", error=prefix + (": " + message if message else ""))
+    except FileNotFoundError:
+        result.update(errorType="setup", error="Install gh (GitHub CLI)")
+    except (subprocess.TimeoutExpired, OSError, ValueError, RecursionError):
+        result.update(errorType="unknown", error=UNKNOWN)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("page",))
+    parser.add_argument("mode", choices=("page", "act"))
     parser.add_argument("targets", nargs="+")
     args = parser.parse_args()
 
@@ -223,15 +311,17 @@ def main():
     task = None
     try:
         if len(args.targets) != 1:
-            raise ValueError("page requires one JSON request")
+            raise ValueError(f"{args.mode} requires one JSON request")
         task = json.loads(args.targets[0])
-        data = read_page(task)
+        data = read_page(task) if args.mode == "page" else write_action(task)
         data["updated"] = datetime.now(timezone.utc).isoformat()
         print(json.dumps(data))
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as exc:
-        message = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else "GitHub request timed out or returned invalid data"
+        message = (UNKNOWN if args.mode == "act" and isinstance(exc, (subprocess.TimeoutExpired, OSError))
+                   else str(exc) if isinstance(exc, (RuntimeError, ValueError))
+                   else "GitHub request timed out or returned invalid data")
         error = {"error": message}
-        error["errorType"] = "network" if isinstance(exc, (subprocess.TimeoutExpired, OSError)) else "setup"
+        error["errorType"] = ("unknown" if args.mode == "act" else "network") if isinstance(exc, (subprocess.TimeoutExpired, OSError)) else "setup"
         if isinstance(task, dict) and type(task.get("requestId")) is int and task["requestId"] > 0:
             error["requestId"] = task["requestId"]
         print(json.dumps(error))
