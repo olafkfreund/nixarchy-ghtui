@@ -114,7 +114,7 @@ function rows(repos, expanded, details, filter, now, live) {
     repos.slice().sort(function(a, b) { return (b.active || 0) - (a.active || 0); }).forEach(function(repo) {
         var repoMatch = (repo.repo + " " + (repo.description || "")).toLowerCase().indexOf(query) >= 0;
         var runs = (repo.runs || []).filter(function(run) {
-            return repoMatch || [run.name, run.display_title, run.head_branch, state(run)].join(" ").toLowerCase().indexOf(query) >= 0;
+            return repoMatch || [run.name, run.display_title, run.head_branch, run.event, run.actor, state(run), label(state(run))].join(" ").toLowerCase().indexOf(query) >= 0;
         });
         if (query && !repoMatch && !runs.length) return;
         var active = repo.active === undefined ? (repo.runs || []).filter(function(run) { return run.status === "in_progress"; }).length : repo.active;
@@ -122,6 +122,7 @@ function rows(repos, expanded, details, filter, now, live) {
         result.push({key: repoKey, parent: "", kind: "repo", depth: 0, title: repo.repo,
             subtitle: repo.error || repo.description || "", status: repo.error ? "error" : (active ? "in_progress" : "neutral"),
             info: repo.archived ? "archived" : repo.disabled ? "disabled" : repo.error ? "unavailable" : repo.checked || repo.runs ? active + " running" : "not checked",
+            statusText: label(repo.error ? "error" : (active ? "in_progress" : "neutral")),
             repo: repo.repo, url: "https://github.com/" + repo.repo + "/actions"});
         if (!expanded[repoKey]) return;
         // Runs past the first page of each unfinished status are counted, not fetched (#30).
@@ -129,7 +130,7 @@ function rows(repos, expanded, details, filter, now, live) {
         var parts = ["in_progress", "queued", "waiting", "pending", "requested"].filter(function(s) { return hidden[s] > 0; })
             .map(function(s) { return "+" + (hidden[s] > 1000 ? "about " : "") + hidden[s] + " more " + s; });
         var more = parts.length && (!query || repoMatch) ? {key: repoKey + ":more", parent: repoKey, kind: "more", depth: 1,
-            title: parts.join(" · "), subtitle: "o opens GitHub", status: "", info: "", repo: repo.repo,
+            title: parts.join(" · "), subtitle: "o opens GitHub", status: "", statusText: "", info: "", repo: repo.repo,
             url: "https://github.com/" + repo.repo + "/actions"} : null;
         runs.forEach(function(run) {
             if (more && run.status === "completed") { result.push(more); more = null; }
@@ -138,28 +139,30 @@ function rows(repos, expanded, details, filter, now, live) {
             var fresh = !!detail && (runKey === live || (run.status === "completed" && detail.finalAttempt === (run.run_attempt || 1)));
             var notRefreshing = !!(detail && detail.updated) && !!expanded[runKey] && !fresh;
             var at = notRefreshing ? Date.parse(detail.updated) : now;
-            var stamp = !detail || !detail.updated ? "" : notRefreshing ? " · jobs " + elapsed(now - at) + " old, not refreshing"
-                : " · jobs fetched " + detail.updated.slice(11, 19) + " UTC";
             result.push({key: runKey, parent: repoKey, kind: "run", depth: 1, title: run.name || "Workflow",
-                subtitle: (run.head_branch || "") + " · #" + run.run_number + stamp + " · " + (run.display_title || ""),
-                status: state(run), info: duration(run, now), repo: repo.repo, run: String(run.id), url: run.html_url});
+                subtitle: [cap(run.head_branch, 28), cap(run.event, 14), cap(run.actor, 16), age(run, now),
+                    notRefreshing ? "jobs " + elapsed(now - at) + " old, not refreshing" : "", run.display_title]
+                    .filter(Boolean).join(" · "),
+                status: state(run), statusText: label(state(run)), info: duration(run, now), repo: repo.repo, run: String(run.id), url: run.html_url});
             if (!expanded[runKey]) return;
             if (!detail || detail.error) result.push({key: runKey + ":message", parent: runKey, kind: "message", depth: 2,
-                title: detail ? detail.error : "Loading jobs…", subtitle: "", status: detail ? "error" : "queued", info: "", repo: repo.repo, run: String(run.id)});
+                title: detail ? detail.error : "Loading jobs…", subtitle: "", status: detail ? "error" : "queued", statusText: "", info: "", repo: repo.repo, run: String(run.id)});
             ((detail && detail.jobs) || []).forEach(function(job) {
                 var jobKey = runKey + ":" + job.id;
                 var steps = job.steps || [];
                 var done = steps.filter(function(step) { return step.status === "completed"; }).length;
                 result.push({key: jobKey, parent: runKey, kind: "job", depth: 2, title: job.name, subtitle: "",
-                    status: state(job), info: done + "/" + steps.length + " steps · " + duration(job, at), repo: repo.repo, run: String(run.id), url: job.html_url});
+                    status: state(job), statusText: label(state(job)), info: done + "/" + steps.length + " steps · " + duration(job, at), repo: repo.repo, run: String(run.id), url: job.html_url});
                 if (!expanded[jobKey]) return;
                 steps.forEach(function(step) {
                     result.push({key: jobKey + ":" + step.number, parent: jobKey, kind: "step", depth: 3, title: step.name, subtitle: "",
-                        status: state(step), info: duration(step, at), repo: repo.repo, run: String(run.id), url: job.html_url});
+                        status: state(step), statusText: label(state(step)), info: duration(step, at), repo: repo.repo, run: String(run.id), url: job.html_url});
                 });
             });
         });
         if (more) result.push(more);
+        else if (!(repo.runs || []).length && !repo.error) result.push({key: repoKey + ":message", parent: repoKey, kind: "message", depth: 1,
+            title: repo.summaryAt ? "No workflow runs" : "Loading runs…", subtitle: "", status: "", statusText: "", info: "", repo: repo.repo});
     });
     return result;
 }
@@ -170,7 +173,7 @@ function selection(rows, key, previous) {
 }
 
 // ponytail: the fields the delegate reads that can change for a key; add any new one the delegate reads.
-var shownFields = ["title", "subtitle", "status", "info"];
+var shownFields = ["title", "subtitle", "status", "statusText", "info"];
 
 // Keep delegates alive when polling changes a status or inserts a running repo.
 // Removing gone rows first keeps one removal from cascading into a move per later row.

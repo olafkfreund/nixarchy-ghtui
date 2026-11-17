@@ -221,7 +221,7 @@ console.log('Model: more row, linear syncRows and random-order equivalence passe
   const frozen = view(run, stale, 'o/r:9')[2].info;
   assert.equal(view(run, stale, 'o/r:9', undefined, now + 600000)[2].info, frozen, 'timer stays at the last fetch');
   const fresh = view(run, stale, 'o/r:7');
-  assert.ok(fresh[1].subtitle.includes('jobs fetched 00:56:00 UTC') && !fresh[1].subtitle.includes('not refreshing'));
+  assert.ok(!fresh[1].subtitle.includes('jobs ') && !fresh[1].subtitle.includes('not refreshing'));
   assert.notEqual(view(run, stale, 'o/r:7', undefined, now + 600000)[2].info, fresh[2].info, 'live timer uses now');
   const done = {...run, status: 'completed', conclusion: 'success'};
   assert.ok(!view(done, {...stale, finalAttempt: 1}, '')[1].subtitle.includes('not refreshing'));
@@ -230,7 +230,51 @@ console.log('Model: more row, linear syncRows and random-order equivalence passe
   const err = view(run, {...stale, error: 'rate limited'}, '');
   assert.deepEqual([err[2].kind, err[2].title, err[3].kind], ['message', 'rate limited', 'job']);
   assert.ok(!view(run, {error: 'rate limited'}, '')[1].subtitle.includes('jobs '), 'no stamp without updated');
-  assert.ok(view(run, stale, '', {'repo:o/r': true})[1].subtitle.includes('jobs fetched'), 'collapsed run keeps jobs fetched');
+  assert.ok(!view(run, stale, '', {'repo:o/r': true})[1].subtitle.includes('jobs '), 'collapsed run has no marker');
   assert.equal(view(run, stale)[1].subtitle.includes('not refreshing'), true, 'five arguments still work');
 }
 console.log('Model: not-refreshing marker passed');
+
+// #42: run subtitle, statusText, message row and search by label.
+{
+  const t = Date.parse('2026-01-01T01:00:00Z');
+  const run = {id: 7, status: 'completed', conclusion: 'failure', name: 'CI', head_branch: 'main', event: 'push', actor: 'bob',
+    run_number: 3, run_started_at: '2026-01-01T00:55:00Z', display_title: 'Fix'};
+  const view = (r, open = {}, filter = '', repo = {}) =>
+    model.rows([{repo: 'o/r', ...repo, runs: [r]}], {'repo:o/r': true, ...open}, {}, filter, t);
+  assert.equal(view(run)[1].subtitle, 'main · push · bob · 5m ago · Fix');
+  assert.ok(!view(run)[1].subtitle.includes('#') && !view(run)[1].subtitle.includes('jobs fetched'));
+  const long = {...run, head_branch: 'b'.repeat(40), actor: 'a'.repeat(30), event: 'e'.repeat(30)};
+  assert.deepEqual(view(long)[1].subtitle.split(' · ').slice(0, 3), ['b'.repeat(27) + '…', 'e'.repeat(13) + '…', 'a'.repeat(15) + '…']);
+  assert.equal(view({...run, event: '', actor: undefined})[1].subtitle, 'main · 5m ago · Fix', 'empty parts leave no separators');
+  for (const q of ['failed', 'failure', 'a'.repeat(30), 'e'.repeat(30), 'b'.repeat(40)])
+    assert.equal(view(long, {}, q).length, 2, q);
+  assert.equal(view({...run, status: 'in_progress', conclusion: null}, {}, 'in_progress').length, 2);
+  const job = {id: 8, name: 'build', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/job/8',
+    steps: [{number: 4, name: 'Go', status: 'completed', conclusion: 'success'}]};
+  const full = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true, 'o/r:7': true, 'o/r:7:8': true}, {'o/r:7': {jobs: [job]}}, '', t);
+  assert.deepEqual([...full.map(row => row.kind)], ['repo', 'run', 'job', 'step']);
+  assert.equal(full[3].url, job.html_url);
+  assert.deepEqual([...full.map(row => row.statusText)], ['neutral', 'failed', 'passed', 'passed']);
+  const msg = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true, 'o/r:7': true}, {}, '', t);
+  assert.deepEqual([msg[2].kind, msg[2].statusText], ['message', '']);
+  // message row for an expanded repository without runs
+  const empty = (repo, filter = '') => model.rows([{repo: 'o/r', ...repo}], {'repo:o/r': true}, {}, filter, t);
+  assert.deepEqual([empty({runs: []})[1].kind, empty({runs: []})[1].title, empty({runs: []})[1].statusText], ['message', 'Loading runs…', '']);
+  assert.equal(empty({runs: [], summaryAt: 1})[1].title, 'No workflow runs');
+  assert.equal(empty({}, 'o/r').length, 2, 'filter-matched empty repository keeps its message');
+  assert.equal(empty({runs: [], error: 'boom'}).length, 1);
+  assert.equal(empty({runs: [], hidden: {queued: 2}})[1].kind, 'more');
+  assert.equal(empty({runs: [], hidden: {queued: 2}}).length, 2);
+  // statusText is a shown field: a change is one setProperty
+  assert.ok(model.shownFields.includes('statusText'));
+  const list = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true}, {}, '', t);
+  let ops = 0;
+  const l = {rows: [], get count() { return this.rows.length; }, get(i) { return this.rows[i]; },
+    insert(i, v) { this.rows.splice(i, 0, v); }, remove(i) { this.rows.splice(i, 1); }, move() {},
+    setProperty(i, k, v) { ops++; this.rows[i][k] = v; }};
+  model.syncRows(l, list); ops = 0;
+  model.syncRows(l, list.map((row, i) => i === 1 ? {...row, statusText: 'passed'} : row));
+  assert.equal(ops, 1);
+}
+console.log('Model: rows subtitle, statusText and message row passed');
