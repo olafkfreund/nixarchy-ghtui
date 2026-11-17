@@ -199,6 +199,8 @@ ShellRoot {
             check(panel.cursor<panel.entries.length-1 && panel.cursor>=0,"page up advances through mixed row heights")
             panel.polling.repos[0].runs=originalRuns
             panel.adopt()
+            panel.move(-panel.entries.length)
+            at("one/repo:7")
             selected=panel.current.key
             panel.open()
             stage=1
@@ -212,6 +214,8 @@ ShellRoot {
                 at("one/repo:7")
                 panel.enter()
                 check(panel.current.kind==="job","enter moves into loaded run")
+                // Like Right: the first press opens a collapsed job, the next one enters it.
+                if (!panel.expanded[panel.current.key]) panel.enter()
                 panel.enter()
                 check(panel.current.kind==="step","enter moves into loaded job")
                 var step=panel.current.key
