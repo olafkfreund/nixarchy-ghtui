@@ -940,3 +940,153 @@ for (let now=0;now<60000;now+=1000) {
 assert.ok(logStarts>0 && otherStarts>0);
 assert.equal(budget.starts.length,budget.requests+3*logStarts,'four slots per log, one per other request');
 console.log('Polling: logs reserve four slots, finish once and preserve blocked repositories');
+
+// #44 step 8: only marked runs poll with the panel closed.
+function watchState(count=1) {
+  const s=selectedRepo(Array.from({length:count},(_,i)=>({id:i+1,status:'in_progress',name:`Build ${i+1}`,run_attempt:1})));
+  s.discover=true;
+  for (let i=1;i<=count;i++) assert.equal(polling.watch(s,'a/b',String(i),`Build ${i}`,0),'on');
+  polling.close(s);
+  return s;
+}
+const quiet=selectedRepo(); polling.close(quiet);
+assert.equal(polling.hasWatches(quiet),false);
+assert.equal(polling.next(quiet,60000),null);
+const watched=watchState();
+assert.equal(polling.hasWatches(watched),true);
+assert.equal(polling.next(watched,29999),null);
+req=polling.next(watched,30000);
+assert.equal(req.kind,'run'); assert.equal(req.run,'1');
+assert.equal(Object.keys(watched.tasks).filter(k=>watched.tasks[k].kind!=='run').length,0);
+assert.equal(polling.complete(watched,response(req,{id:1,status:'in_progress',name:'Build 1'}),30100),true);
+assert.equal(watched.watches['a/b:1'].at,30100);
+assert.equal(polling.next(watched,60099),null);
+assert.equal(polling.next(watched,60100).kind,'run');
+const unchecked=watchState(); unchecked.accountChecked=false;
+assert.equal(polling.next(unchecked,30000).kind,'run','a marked run survives closing during the account check');
+
+const capped=watchState(5);
+assert.equal(polling.watch(capped,'a/b','6','Build 6',0),'full');
+assert.equal(Object.keys(capped.watches).length,5);
+const unmarked=watchState();
+polling.next(unmarked,30000);
+assert.equal(polling.watch(unmarked,'a/b','1','Build 1',30001),'off');
+assert.equal(polling.hasWatches(unmarked),false);
+assert.equal(polling.next(unmarked,60000),null);
+const filterWatch=watchState();
+polling.ensure(filterWatch,'jobs','a/b','1','interactive',0);
+assert.equal(polling.next(filterWatch,30000).kind,'run','closed polling skips queued non-watch work');
+const queuedWatch=watchState();
+assert.equal(polling.next(queuedWatch,29999),null);
+assert.ok(queuedWatch.tasks[polling.key('run','a/b','1')]);
+assert.equal(polling.watch(queuedWatch,'a/b','1','Build 1',1),'off');
+assert.equal(queuedWatch.tasks[polling.key('run','a/b','1')],undefined);
+const finalLookup=watchState();
+finalLookup.repos[0].runs[0].awaitingFinal=true;
+polling.next(finalLookup,29999);
+polling.open(finalLookup,30000);
+assert.equal(polling.watch(finalLookup,'a/b','1','Build 1',30000),'off');
+assert.ok(finalLookup.tasks[polling.key('run','a/b','1')],'unwatch keeps an ordinary final lookup while open');
+
+const two=watchState(2);
+two.selected='a/b'; two.inspected='1'; two.expanded={'a/b:1':true};
+req=polling.next(two,30000); assert.equal(req.run,'1');
+polling.complete(two,response(req,{id:1,status:'completed',name:'Finished build',conclusion:'success'}),30100);
+assert.deepEqual(JSON.parse(JSON.stringify(two.notices)),[{kind:'done',repo:'a/b',name:'Finished build',conclusion:'success'}]);
+assert.equal(two.watches['a/b:1'],undefined);
+assert.equal(Object.values(two.tasks).some(t=>t.kind==='jobs'),false,'closed completion never queues jobs');
+assert.equal(polling.complete(two,response(req,{id:1,status:'completed'}),30200),false);
+assert.equal(two.notices.length,1);
+req=polling.next(two,31000); assert.equal(req.kind,'run'); assert.equal(req.run,'2');
+
+const staleWatch=watchState();
+const staleRun=polling.next(staleWatch,30000);
+polling.open(staleWatch,30100);
+assert.equal(polling.complete(staleWatch,response(staleRun,{id:1,status:'completed'}),30200),false);
+staleWatch.accountChecked=true;
+assert.equal(polling.next(staleWatch,31000).kind,'run','reopen clears a closed in-flight request');
+
+const lost=watchState();
+req=polling.next(lost,30000);
+polling.complete(lost,{...response(req),error:'gone',errorType:'permission'},30100);
+assert.deepEqual(JSON.parse(JSON.stringify(lost.notices)),[{kind:'lost',repo:'a/b',name:'Build 1'}]);
+assert.equal(polling.hasWatches(lost),false);
+assert.equal(polling.next(lost,60000),null);
+
+for (const type of ['auth','setup']) {
+  const paused=watchState(2);
+  req=polling.next(paused,30000);
+  polling.complete(paused,{...response(req),error:'login',errorType:type},30100);
+  assert.deepEqual(JSON.parse(JSON.stringify(paused.notices)),[{kind:'paused'}]);
+  assert.equal(Object.keys(paused.watches).length,2);
+  assert.equal(paused.paused,true);
+  assert.equal(polling.next(paused,60000),null);
+  polling.open(paused,61000);
+  assert.equal(paused.paused,false);
+  paused.accountChecked=true;
+  assert.equal(polling.next(paused,61000).kind,'run');
+}
+for (const type of ['auth','setup']) {
+  const paused=selectedRepo([{id:1,status:'in_progress',name:'Build 1'}]);
+  polling.watch(paused,'a/b','1','Build 1',0);
+  // The watched state's account check fails while its panel is open.
+  paused.accountChecked=false;
+  req=polling.next(paused,0); assert.equal(req.kind,'account');
+  polling.complete(paused,{...response(req),error:'login',errorType:type},100);
+  assert.equal(paused.notices.length,0);
+  polling.close(paused);
+  polling.close(paused);
+  assert.deepEqual(JSON.parse(JSON.stringify(paused.notices)),[{kind:'paused'}]);
+  assert.equal(paused.paused,true);
+  assert.equal(polling.next(paused,30000),null);
+}
+const rated=watchState();
+req=polling.next(rated,30000);
+polling.complete(rated,{...response(req),error:'slow',errorType:'rate',retryAt:90000},30100);
+assert.equal(rated.cooldown,90000);
+assert.equal(rated.watches['a/b:1'].at,30100);
+assert.equal(polling.next(rated,89999),null);
+assert.equal(polling.next(rated,90000).kind,'run');
+
+const rerun=watchState();
+req=polling.next(rerun,30000);
+polling.complete(rerun,response(req,{id:1,status:'in_progress',run_attempt:2,name:'Build 1'}),30100);
+assert.equal(polling.hasWatches(rerun),true);
+assert.equal(rerun.notices.length,0);
+
+// Five watches stay within ten requests in every rolling minute, even on network errors.
+for (const fail of [false,true]) {
+  const s=watchState(5), times=[], failed=new Set();
+  for (let now=0;now<300000;now+=100) {
+    const request=polling.next(s,now);
+    if (!request) continue;
+    assert.equal(request.kind,'run');
+    times.push(now);
+    const firstFailure=fail && !failed.has(request.run);
+    if (firstFailure) failed.add(request.run);
+    const reply=firstFailure ? {...response(request),error:'offline',errorType:'network'}
+      : response(request,{id:Number(request.run),status:'in_progress',name:'Build'});
+    polling.complete(s,reply,now+50);
+    assert.ok(times.filter(t=>now-t<60000).length<=10,'at most ten watch requests per rolling minute');
+    assert.ok(s.starts.length<=60,'watch workload respects the shared request budget');
+  }
+  assert.ok(times.length>=40 && times.length<=50,`five watches recover and poll about 50 times in five minutes (got ${times.length}, errors: ${fail})`);
+}
+console.log('Polling: closed-panel watches are capped, finish once and recover');
+
+// #44 step 11: #41 hooks. An account change drops watches; low quota stretches the watch interval.
+{
+  const acct=watchState(); acct.account='tester'; polling.open(acct,0);
+  const a=polling.next(acct,0); assert.equal(a.kind,'account');
+  polling.complete(acct,response(a,{login:'other'}),100);
+  assert.equal(polling.hasWatches(acct),false,'an account change clears watches');
+  for (const [remaining,factor] of [[100,10],[400,3]]) {
+    const slow=watchState(); slow.remaining=remaining; slow.resetAt=900000;
+    assert.equal(polling.next(slow,30000*factor-1),null,`${remaining} remaining stretches the watch interval ${factor}x`);
+    assert.equal(polling.next(slow,30000*factor).kind,'run');
+    polling.complete(slow,{requestId:slow.flight.request.requestId,error:'offline',errorType:'network'},30000*factor+100);
+    assert.equal(polling.next(slow,30000*factor+30000*factor-1),null,`${remaining} remaining stretches failed-watch retries ${factor}x`);
+    assert.equal(polling.next(slow,30000*factor+30000*factor+100).kind,'run');
+  }
+}
+console.log('Polling: account change clears watches, low quota stretches them');
