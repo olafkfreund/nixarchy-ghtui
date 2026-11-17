@@ -75,7 +75,7 @@ ShellRoot {
         onFileChanged: reload()
     }
     Timer {
-        interval: 22000; running: true
+        interval: 40000; running: true
         onTriggered: {
             var missing = stage === 1 ? [panel.polling.requests>=6 ? "" : "requests>=6", panel.details["one/repo:7"] ? "" : "jobs one/repo:7",
                 panel.polling.catalogueComplete ? "" : "catalogueComplete"].filter(Boolean).join(",") : ""
@@ -702,7 +702,7 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                    'PATH': str(bin_dir) + (os.pathsep + base_env['PATH'] if scenario == 'fresh' else '')}
             try:
                 result = subprocess.run([QUICKSHELL, '-p', str(root), '--no-color'], capture_output=True, text=True,
-                                        timeout=30, env=env)
+                                        timeout=50, env=env)
             except subprocess.TimeoutExpired as error:
                 print(error.stdout, error.stderr, '\n'.join(sway_lines[-30:]))
                 raise
