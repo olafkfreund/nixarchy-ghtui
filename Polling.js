@@ -7,7 +7,7 @@ function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
         stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true, catalogueBlocked:"",
-        account:"", accountChecked:false, remaining:null, resetAt:0, error:"", requests:0, lastRequest:"", lastStarted:0};
+        account:"", accountChecked:false, remaining:null, resetAt:0, error:"", log:null, requests:0, lastRequest:"", lastStarted:0};
 }
 function key(kind, repo, run) { return kind + ":" + (repo || "") + ":" + (run || ""); }
 function age(at, interval) { return at === undefined ? -Infinity : at + interval; }
@@ -36,7 +36,7 @@ function open(s, now) {
     s.stableAt = now;
 }
 function close(s) {
-    s.opened = false; s.generation++; s.tasks = {}; s.flight = null;
+    s.opened = false; s.generation++; s.tasks = {}; s.flight = null; s.log = null;
 }
 function select(s, repo, run, expanded, now, immediate) {
     if (s.selected !== repo) s.stableAt = now + (immediate ? 0 : TIMING.settle);
@@ -63,6 +63,12 @@ function manual(s, now, catalogue) {
         }
     }
 }
+function requestLog(s,target,now) {
+    if (Object.keys(s.tasks).some(function(id) { return s.tasks[id].kind==="log" })) return false;
+    var t=ensure(s,"log",target.repo,target.run,"interactive",now);
+    t.job=target.job || ""; t.mode=target.mode;
+    return true;
+}
 function touch(s, repo, run, now) {
     var t=ensure(s,"run",repo,run,"interactive",now);
     t.due=now;
@@ -76,7 +82,7 @@ function seed(s, now) {
         var t = s.tasks[id];
         if (s.flight && s.flight.key === id) return;
         var owner=repoFor(s,t.repo);
-        if (owner && owner.blocked) { delete s.tasks[id]; return; }
+        if (owner && owner.blocked && t.kind!=="log") { delete s.tasks[id]; return; }
         if ((t.kind === "summary" && t.repo !== s.selected) ||
             (t.kind === "jobs" && (t.repo !== s.selected || t.run !== s.inspected || !s.expanded[t.repo + ":" + t.run])))
             delete s.tasks[id];
@@ -121,6 +127,7 @@ function next(s, now) {
     s.clock=now;
     seed(s,now);
     var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now && (s.accountChecked || t.kind === "account") });
+    due = due.filter(function(t) { return t.kind!=="log" || s.starts.length+4<=TIMING.perWindow });
     due.sort(function(a,b) { return a.due === b.due ? a.order-b.order : a.due-b.due });
     var group = ["interactive","interactive","interactive","active","background"][s.slot % 5];
     var t = due.filter(function(t) { return t.group === group })[0];
@@ -128,9 +135,13 @@ function next(s, now) {
         ["interactive","active","background"].some(function(g) { t=due.filter(function(t) { return t.group===g })[0]; return !!t });
     }
     if (!t) return null;
-    s.slot++; s.starts.push(now); s.requests++; s.lastStarted=now; s.lastRequest=t.kind + (t.repo ? " " + t.repo : "");
+    s.slot++;
+    if (t.kind==="log") for (var i=0;i<4;i++) s.starts.push(now+i*TIMING.gap);
+    else s.starts.push(now);
+    s.requests++; s.lastStarted=now; s.lastRequest=t.kind + (t.repo ? " " + t.repo : "");
     var request = {kind:t.kind,repo:t.repo,run:t.run,page:t.page,requestId:++s.serial};
     if (t.kind === "summary") request.status = phases[t.phase];
+    if (t.kind === "log") { if (t.job) request.job=t.job; request.mode=t.mode; }
     s.flight = {key:t.key, request:request, generation:s.generation};
     return request;
 }
@@ -205,11 +216,18 @@ function complete(s,reply,now) {
     var t=s.tasks[flight.key]; s.flight=null;
     if (!t) return false;
     if (typeof reply.remaining==="number") { s.remaining=reply.remaining; s.resetAt=reply.resetAt || 0; }
-    var okData=t.kind==="run" || t.kind==="account" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
+    var okData=t.kind==="run" || t.kind==="account" || t.kind==="log" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
         : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
     if (!reply.errorType && !reply.error && !okData)
         reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
     cool(s,reply,now);
+    if (t.kind==="log") {
+        if (reply.errorType || reply.error) {
+            s.log={error:reply.error || "Invalid GitHub response"};
+            if (reply.errorType==="auth" || reply.errorType==="setup") s.auth=true;
+        } else s.log=Object.assign({repo:t.repo,run:t.run,job:t.job},reply.data);
+        delete s.tasks[t.key]; return true;
+    }
     if (t.kind==="account" && reply.errorType==="permission") {
         s.accountChecked=true; s.error=""; delete s.tasks[t.key]; return true;
     }
