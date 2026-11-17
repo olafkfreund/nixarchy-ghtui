@@ -261,5 +261,139 @@ class PageTest(unittest.TestCase):
         self.assertEqual([(r["repo"], r["description"]) for r in repos], [("o/r", "de f"), ("o/s", persian)])
 
 
+class WriteTest(unittest.TestCase):
+    def task(self, action="rerun"):
+        return {"action": action, "repo": "o/r", "run": "5", "requestId": 1}
+
+    def reply(self, status, message="", headers="", code=1):
+        body = json.dumps({"message": message}) if message else "{}"
+        return f"HTTP/2.0 {status} Reply\n{headers}\n{body}", "", code
+
+    def test_each_action_posts_fixed_path(self):
+        for action, suffix in (("rerun", "rerun"), ("rerun-failed", "rerun-failed-jobs"), ("cancel", "cancel")):
+            with self.subTest(action=action), patch.object(actions, "request", return_value=self.reply(202, code=0)) as request:
+                actions.write_action(self.task(action))
+                request.assert_called_once_with(f"repos/o/r/actions/runs/5/{suffix}", include=True, method="POST")
+
+    def test_success_is_ok(self):
+        for status in (201, 202):
+            with self.subTest(status=status), patch.object(actions, "request", return_value=self.reply(status, code=0)):
+                result = actions.write_action(self.task())
+                self.assertTrue(result["ok"])
+                self.assertEqual((result["errorType"], result["error"]), ("", ""))
+
+    def test_rate_headers_never_turn_success_or_5xx_into_rate(self):
+        unknown = "Outcome unknown; check GitHub before retrying"
+        reset = "X-RateLimit-Remaining: 0\nX-RateLimit-Reset: 4102444800\n"
+        cases = ((202, "", reset, 0, "ok"), (201, "", "Retry-After: 60\n", 0, "ok"),
+                 (503, "", "Retry-After: 60\n", 1, "unknown"), (502, "rate limit", "", 1, "unknown"),
+                 (200, "", reset, 1, "unknown"), (202, "", "", 1, "unknown"))
+        for status, message, headers, code, want in cases:
+            with self.subTest(status=status, headers=headers, code=code), patch.object(
+                    actions, "request", return_value=self.reply(status, message, headers, code)):
+                result = actions.write_action(self.task())
+            if want == "ok":
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["errorType"], "")
+                # The headers are kept so the panel still applies the cooldown.
+                self.assertTrue(result["remaining"] == 0 or result["retryAt"] > time.time() * 1000)
+            else:
+                self.assertFalse(result["ok"])
+                self.assertEqual((result["errorType"], result["error"]), ("unknown", unknown))
+
+    def test_deep_json_after_send_is_unknown(self):
+        # Patched: whether real deep JSON overflows depends on the Python build and stack.
+        with patch.object(actions, "request", return_value=("HTTP/2.0 202 Accepted\n\n[[]]", "", 0)), \
+                patch.object(actions.json, "loads", side_effect=RecursionError("maximum recursion depth exceeded")):
+            result = actions.write_action(self.task())
+        self.assertEqual(result["errorType"], "unknown")
+
+    def test_refusals(self):
+        for status, prefix in ((403, "Needs Actions write on o/r: "), (404, "Needs Actions write on o/r: "),
+                               (409, "GitHub refused: "), (422, "GitHub refused: ")):
+            with self.subTest(status=status), patch.object(actions, "request", return_value=self.reply(status, "GitHub says no")):
+                result = actions.write_action(self.task())
+                self.assertEqual(result["errorType"], "refused")
+                self.assertEqual(result["error"], prefix + "GitHub says no")
+                self.assertNotEqual(result["errorType"], "permission")
+
+    def test_rate_limits(self):
+        for status, message, headers in ((403, "secondary rate limit", ""), (429, "slow down", "Retry-After: 60\n"),
+                                         (403, "slow down", "X-RateLimit-Remaining: 0\n")):
+            with self.subTest(status=status, headers=headers), patch.object(actions, "request", return_value=self.reply(status, message, headers)):
+                result = actions.write_action(self.task())
+                self.assertEqual(result["errorType"], "rate")
+                self.assertEqual(result["error"], "GitHub rate limit")
+                if status == 429:
+                    self.assertGreater(result["retryAt"], time.time() * 1000)
+
+    def test_auth(self):
+        with patch.object(actions, "request", return_value=self.reply(401, "Bad credentials")):
+            result = actions.write_action(self.task())
+            self.assertEqual((result["errorType"], result["error"]), ("auth", "Authenticate with gh auth login"))
+        with patch.object(actions, "request", return_value=("", "Please run gh auth login", 1)):
+            result = actions.write_action(self.task())
+            self.assertEqual((result["errorType"], result["error"]), ("auth", "Authenticate with gh auth login"))
+
+    def test_unknown_outcomes(self):
+        unknown = "Outcome unknown; check GitHub before retrying"
+        for response in (self.reply(500, "Server error"), ("", "failed", 1),
+                         ("HTTP/2.0 201 Created\n\ninvalid", "", 0), self.reply(302)):
+            with self.subTest(response=response), patch.object(actions, "request", return_value=response):
+                result = actions.write_action(self.task())
+                self.assertEqual((result["errorType"], result["error"]), ("unknown", unknown))
+        with patch.object(actions, "request", side_effect=subprocess.TimeoutExpired("gh", 25)):
+            result = actions.write_action(self.task())
+            self.assertEqual((result["errorType"], result["error"]), ("unknown", unknown))
+        with patch.object(actions, "request", side_effect=FileNotFoundError("gh")):
+            result = actions.write_action(self.task())
+            self.assertEqual((result["errorType"], result["error"]), ("setup", "Install gh (GitHub CLI)"))
+
+    def test_message_is_plain_and_capped(self):
+        with patch.object(actions, "request", return_value=self.reply(403, "bad\x1b\n\u202ego")):
+            result = actions.write_action(self.task())
+            self.assertEqual(result["error"], "Needs Actions write on o/r: bad go")
+        with patch.object(actions, "request", return_value=self.reply(403, "x" * 500)):
+            result = actions.write_action(self.task())
+            self.assertEqual(result["error"], "Needs Actions write on o/r: " + "x" * 120)
+
+    def test_validation(self):
+        task = self.task()
+        invalid = ([dict(task, action=action) for action in ("other", "../x")] +
+                   [dict(task, repo=repo) for repo in ("-R", "a/b;touch x")] +
+                   [dict(task, run=run) for run in ("0", "1a", "")] +
+                   [{key: value for key, value in task.items() if key != "requestId"}] +
+                   [dict(task, requestId=value) for value in (0, True)])
+        with patch.object(actions, "request") as request:
+            for bad in invalid:
+                with self.subTest(task=bad), self.assertRaises(ValueError):
+                    actions.write_action(bad)
+            request.assert_not_called()
+
+    def test_act_end_to_end_argv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "gh"
+            argv = Path(directory) / "argv"
+            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$GH_ARGV"\nprintf "HTTP/2.0 202 Accepted\\n\\n{}"\n')
+            fake.chmod(0o700)
+            command = [sys.executable, "actions.py", "act", '{"action":"cancel","repo":"o/r","run":"5","requestId":4}']
+            result = subprocess.run(command, env={**os.environ, "PATH": directory, "GH_ARGV": str(argv)}, capture_output=True, text=True)
+            reply = json.loads(result.stdout)
+            self.assertEqual((reply["requestId"], reply["ok"]), (4, True))
+            self.assertEqual(argv.read_text().splitlines(),
+                             ["api", "--hostname", "github.com", "--include", "--method", "POST", "repos/o/r/actions/runs/5/cancel"])
+            empty = Path(directory) / "empty"
+            empty.mkdir()
+            result = subprocess.run(command, env={**os.environ, "PATH": str(empty)}, capture_output=True, text=True)
+            self.assertEqual(json.loads(result.stdout)["errorType"], "setup")
+
+    def test_act_error_echoes_request_id(self):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["actions.py", "act", '{"action":"x","repo":"o/r","run":"5","requestId":9}']), contextlib.redirect_stdout(output):
+            code = actions.main()
+        self.assertEqual((code, json.loads(output.getvalue())),
+                         (1, {"error": "Invalid action", "errorType": "setup", "requestId": 9}))
+
+
 if __name__ == "__main__":
     unittest.main()

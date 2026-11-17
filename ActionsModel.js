@@ -125,3 +125,35 @@ function syncRows(model, rows) {
     }
     return structureChanged;
 }
+
+// Run actions (#45). The raw run decides what is offered; a row only carries a mapped status.
+var failedConclusions = ["failure", "timed_out", "startup_failure", "cancelled"];
+function actionsFor(run) {
+    if (!run) return [];
+    if (run.status !== "completed") return ["cancel"];
+    return failedConclusions.indexOf(run.conclusion) >= 0 ? ["rerun", "rerun-failed"] : ["rerun"];
+}
+function unavailable(action, run) {
+    if (!run) return "Select a run to rerun or cancel";
+    if (actionsFor(run).indexOf(action) >= 0) return "";
+    return action === "rerun" ? "Only a finished run can be rerun"
+        : action === "rerun-failed" ? "Rerun failed needs a failed run" : "Only an unfinished run can be cancelled";
+}
+function describe(action, repo, run) {
+    function cut(text) {
+        text = String(text).replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+        return text.length > 30 ? text.slice(0, 29) + "…" : text;
+    }
+    var target = repo + " #" + run.run_number + " " + cut(run.name || "Workflow") + " (" + cut(run.head_branch || "") + ")";
+    var ask = action === "rerun" ? "Rerun all jobs? y yes · n no"
+        : action === "rerun-failed" ? "Rerun failed jobs? y yes · n no" : "Cancel run? y yes · n no · cannot be undone";
+    var done = action === "rerun" ? "Rerun requested: "
+        : action === "rerun-failed" ? "Rerun of failed jobs requested: " : "Cancel requested: ";
+    return {confirm: ask + " — " + target, done: done + target};
+}
+// Like reply(), but an empty answer after a possible send is "unknown", never "setup" (except a missing python3).
+function actionReply(stdout, code, requestId) {
+    if (stdout.trim()) return stdout;
+    return JSON.stringify(code === 127 ? {requestId: requestId, ok: false, errorType: "setup", error: "python3 not found"}
+        : {requestId: requestId, ok: false, errorType: "unknown", error: "Outcome unknown; check GitHub before retrying"});
+}
