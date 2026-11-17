@@ -170,6 +170,9 @@ Item {
         details = Object.assign({}, polling.details)
         expanded = polling.expanded
         error = polling.error || polling.catalogueBlocked
+        var log = polling.log
+        polling.log = null
+        if (log) openLog(log)
         // Reassign the state reference to notify bindings after pure-JS mutations.
         polling = Object.assign({}, polling)
         rebuild()
@@ -187,7 +190,7 @@ Item {
         requestInfo = request
         workerBusy = true
         helperStarted = false
-        requestProc.command = ["python3", helper, "page", JSON.stringify(request)]
+        requestProc.command = ["python3", helper, request.kind === "log" ? "log" : "page", JSON.stringify(request)]
         requestProc.running = true
     }
     function failedToStart() {
@@ -218,6 +221,25 @@ Item {
     function openBrowser() {
         if (current && Model.browsable(current.url))
             Quickshell.execDetached(["xdg-open", current.url])
+    }
+    function viewLog() {
+        var t = current ? Model.logTarget(current, details, (Polling.repoFor(polling, current.repo) || {}).runs || []) : null
+        if (!t) return
+        if (t.error) { showNotice(t.error); return }
+        if (!Polling.requestLog(polling, t, Date.now())) { showNotice("A log is already being fetched"); return }
+        showNotice("Fetching log…")
+        pump()
+    }
+    function openLog(log) {
+        if (log.error) showNotice(log.error)
+        else if (!log.path) showNotice("This log is empty.")
+        else if (viewProc.running) showNotice("A log is already open")
+        else {
+            viewProc.viewStarted = false
+            viewProc.viewing = true
+            viewProc.command = ["omarchy-launch-tui", "--app-id=org.omarchy.github-actions-log", "python3", helper, "view", log.path]
+            viewProc.running = true
+        }
     }
     function copyLink() {
         if (copyProc.copyBusy) { showNotice("Copy in progress"); return }
@@ -317,6 +339,18 @@ Item {
         onRunningChanged: if (!running && root.workerBusy && !root.helperStarted) root.failedToStart()
     }
     Process {
+        id: viewProc
+        property bool viewing: false
+        property bool viewStarted: false
+        onStarted: viewStarted = true
+        onExited: viewing = false
+        // Quickshell 0.3.1: a failed start emits neither started nor exited, only running=false.
+        onRunningChanged: if (!running && viewing && !viewStarted) {
+            viewing = false
+            root.showNotice("Terminal launcher not found")
+        }
+    }
+    Process {
         id: copyProc
         property bool copyBusy: false
         property bool copyStarted: false
@@ -411,6 +445,7 @@ Item {
                         root.refresh(!!(event.modifiers & Qt.ShiftModifier))
                     }
                     else if (event.key === Qt.Key_O) root.openBrowser()
+                    else if (event.key === Qt.Key_V) root.viewLog()
                     else if (event.key === Qt.Key_A) root.askAction("rerun")
                     else if (event.key === Qt.Key_F) root.askAction("rerun-failed")
                     else if (event.key === Qt.Key_C) root.askAction("cancel")
@@ -575,7 +610,7 @@ Item {
                     Text {
                         id: footer
                         width: parent.width
-                        text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  y copy  ? keys  Esc close"
+                        text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  v log  y copy  ? keys  Esc close"
                         color: root.actionError && !root.confirm && root.actionText ? Commons.Color.urgent : Commons.Color.menu.text
                         opacity: root.confirm || root.actionText ? 1 : 0.65
                         font { family: Style.font.menuFamily; pixelSize: Style.font.caption }
