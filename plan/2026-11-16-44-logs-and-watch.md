@@ -153,3 +153,14 @@ These override any step text they contradict. Merge order: #41 -> #42 -> #43(a) 
 ## Implementation notes
 
 - Step 10: notify-send gets `--` before the title and body (the body starts with the repo name, which the helper's pattern allows to begin with `-`). The smoke watch stage resets both the watch clock and the run's 15 s follow-up clock so the completion poll fits the test window.
+
+## Review fixes (PR B)
+
+1. Closing after an auth/setup error queues one paused notice for existing watches.
+2. Closing always stops `requestProc`; the watch is polled again after its discarded reply.
+3. Auto-repeat `w` is ignored alongside `y` and `?`.
+4. Failed watched runs retry after the quota-paced watch interval.
+5. Watch status messages use the fixed #24 strings.
+6. `noticeProc` schedules the next queued notice with `Qt.callLater` after exit.
+7. Tests cover actual 10x/3x quota timing and `w` key, confirmation, and Ctrl+W behavior.
+8. Notifications use one queued `noticeProc` at a time and `--app-name=GitHub Actions` instead of `execDetached`.

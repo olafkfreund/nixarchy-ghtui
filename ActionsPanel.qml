@@ -71,11 +71,10 @@ Item {
         Qt.callLater(function() { keys.forceActiveFocus() })
     }
     function close() {
-        // A watched run request keeps going while closed; anything else is killed.
-        var watched = workerBusy && requestInfo && requestInfo.kind === "run" && !!polling.watches[requestInfo.repo + ":" + requestInfo.run]
+        // Polling.close() drops the reply; the watch is polled again.
         opened = false
         Polling.close(polling)
-        if (!watched) requestProc.running = false
+        requestProc.running = false
         confirm = null
     }
     function toggle() { opened ? close() : open() }
@@ -273,7 +272,7 @@ Item {
         }
         var name = run.name || "run"
         var r = Polling.watch(polling, current.repo, current.run, name, Date.now())
-        showNotice(r === "full" ? "Watching 5 runs already" : r === "on" ? "Watching " + name : "Stopped watching")
+        showNotice(r === "full" ? "At most 5 runs can be watched" : r === "on" ? "Watching this run; lost if the shell restarts" : "Stopped watching")
         adopt()
         pump()
     }
@@ -377,7 +376,7 @@ Item {
     Process {
         id: noticeProc
         onStarted: root.noticeStarted = true
-        onExited: { root.noticeBusy = false; root.drainNotices() }
+        onExited: { root.noticeBusy = false; Qt.callLater(root.drainNotices) }
         // Quickshell 0.3.1: a failed start emits neither started nor exited, only running=false.
         onRunningChanged: if (!running && root.noticeBusy && !root.noticeStarted) {
             console.warn("GitHub Actions: notify-send failed to start")
@@ -470,7 +469,7 @@ Item {
                         return
                     }
                     event.accepted = true
-                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?")) return
+                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?" || event.text === "w")) return
                     if (event.key === Qt.Key_Escape) {
                         if (root.filterText) root.filterText = ""
                         else root.close()

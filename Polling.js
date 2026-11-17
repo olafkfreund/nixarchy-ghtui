@@ -40,6 +40,7 @@ function open(s, now) {
     s.stableAt = now;
 }
 function close(s) {
+    if (s.auth && hasWatches(s) && !s.paused) { s.notices.push({kind:"paused"}); s.paused=true; }
     s.opened = false; s.generation++; s.tasks = {}; s.flight = null; s.log = null;
 }
 function hasWatches(s) { return Object.keys(s.watches).length>0; }
@@ -294,7 +295,7 @@ function complete(s,reply,now) {
             delete s.tasks[t.key];
         } else {
             t.failures++; t.due=reply.errorType==="rate" ? s.cooldown : now+Math.min(TIMING.retryMax,TIMING.retryBase*Math.pow(2,t.failures-1));
-            if (watched) t.due=Math.max(t.due,now+TIMING.watch);
+            if (watched) t.due=Math.max(t.due,now+TIMING.watch*pace(s,now));
             // Retry a failed snapshot from page one; keep already published cache data.
             t.page=1; t.phase=0; t.items=[]; t.all=[];
             if (r) r.error=s.error;

@@ -376,24 +376,53 @@ console.log('Model: watched rows and notices passed');
   const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
     .split('\n                }\n\n                Column {')[0];
   const calls = [];
-  const root = {confirm:null, copyLink:() => calls.push('copy'), answer:yes => calls.push(yes ? 'yes' : 'no')};
-  const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_Y:89, Key_N:78, Key_Escape:27};
+  const root = {confirm:null, copyLink:() => calls.push('copy'), toggleWatch:() => calls.push('watch'), answer:yes => calls.push(yes ? 'yes' : 'no')};
+  const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_W:87, Key_Y:89, Key_N:78, Key_Escape:27};
   const handler = vm.runInNewContext('(function(event) {' + body + '\n})',
     {root, Qt, Quickshell:{execDetached:() => calls.push('keys')}});
   const press = (key, text, modifiers = 0, isAutoRepeat = false) => handler({key, text, modifiers, isAutoRepeat});
   press(Qt.Key_Y, 'y', 0, true);
   press(0, '?', 0, true);
+  press(Qt.Key_W, 'w', 0, true);
   assert.deepEqual(calls, []);
   press(Qt.Key_Y, 'y');
-  assert.deepEqual(calls, ['copy']);
+  press(Qt.Key_W, 'w');
+  assert.deepEqual(calls, ['copy', 'watch']);
+  const ctrlWatch = {key:Qt.Key_W, text:'w', modifiers:Qt.ControlModifier, isAutoRepeat:false};
+  handler(ctrlWatch);
+  assert.equal(ctrlWatch.accepted,false);
   root.confirm = {text:'confirm'};
+  press(Qt.Key_W, 'w');
   press(Qt.Key_Y, 'y', Qt.ControlModifier);
   press(Qt.Key_Y, 'y', 0, true);
-  assert.deepEqual(calls, ['copy']);
+  assert.deepEqual(calls, ['copy', 'watch']);
   press(Qt.Key_Y, 'y');
   press(Qt.Key_N, 'n');
   press(Qt.Key_Escape, '');
-  assert.deepEqual(calls, ['copy', 'yes', 'no', 'no']);
+  assert.deepEqual(calls, ['copy', 'watch', 'yes', 'no', 'no']);
+}
+
+// Exercise the panel lifecycle and fixed watch messages without a display.
+{
+  const qml=fs.readFileSync('ActionsPanel.qml','utf8');
+  const closeBody=qml.split('    function close() {')[1].split('\n    }\n    function toggle()')[0];
+  const state={opened:true, polling:{watches:{'a/b:1':{}}}, requestProc:{running:true},
+    workerBusy:true, requestInfo:{kind:'run',repo:'a/b',run:'1'}, confirm:{},
+    Polling:{close:() => {}}, root:null};
+  vm.runInNewContext('(function(){'+closeBody+'\n})',state)();
+  assert.equal(state.requestProc.running,false,'closing stops a watched run request');
+  const watchBody=qml.split('    function toggleWatch() {')[1].split('\n    }\n    function copyLink()')[0];
+  const notices=[];
+  const watchState={current:{kind:'run',repo:'a/b',run:'1'}, polling:{}, Date:{now:()=>0},
+    Polling:{runFor:()=>({status:'in_progress',name:'Build'}),watch:()=> 'on'},
+    Model:{notice:()=>({title:'succeeded'})}, showNotice:t=>notices.push(t), adopt:()=>{}, pump:()=>{}};
+  const toggle=vm.runInNewContext('(function(){'+watchBody+'\n})',watchState);
+  toggle();
+  watchState.Polling.watch=()=> 'off'; toggle();
+  watchState.Polling.watch=()=> 'full'; toggle();
+  assert.deepEqual(notices,['Watching this run; lost if the shell restarts','Stopped watching','At most 5 runs can be watched']);
+  assert.match(qml,/onExited: \{ root\.noticeBusy = false; Qt\.callLater\(root\.drainNotices\) \}/);
+  assert.match(qml,/\["notify-send", "--app-name=GitHub Actions", "--", m\.title, m\.body\]/);
 }
 
 // #43: repository health row and sort.

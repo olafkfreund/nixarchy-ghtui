@@ -447,7 +447,7 @@ ShellRoot {
                 // #44: a watched run keeps polling with the panel closed, and only run requests start.
                 at("one/repo:7")
                 panel.toggleWatch()
-                check(panel.notice==="Watching CI" && panel.watching,"w watches an unfinished run")
+                check(panel.notice==="Watching this run; lost if the shell restarts" && panel.watching,"w watches an unfinished run")
                 var watchedItem=panel.itemAt(panel.cursor)
                 check(!!watchedItem && watchedItem.accessibleName.indexOf(", watching")>0,"watched row is described as watching")
                 panel.polling.watches["one/repo:7"].at=0

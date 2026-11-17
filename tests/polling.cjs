@@ -903,6 +903,20 @@ for (const type of ['auth','setup']) {
   paused.accountChecked=true;
   assert.equal(polling.next(paused,61000).kind,'run');
 }
+for (const type of ['auth','setup']) {
+  const paused=selectedRepo([{id:1,status:'in_progress',name:'Build 1'}]);
+  polling.watch(paused,'a/b','1','Build 1',0);
+  // The watched state's account check fails while its panel is open.
+  paused.accountChecked=false;
+  req=polling.next(paused,0); assert.equal(req.kind,'account');
+  polling.complete(paused,{...response(req),error:'login',errorType:type},100);
+  assert.equal(paused.notices.length,0);
+  polling.close(paused);
+  polling.close(paused);
+  assert.deepEqual(JSON.parse(JSON.stringify(paused.notices)),[{kind:'paused'}]);
+  assert.equal(paused.paused,true);
+  assert.equal(polling.next(paused,30000),null);
+}
 const rated=watchState();
 req=polling.next(rated,30000);
 polling.complete(rated,{...response(req),error:'slow',errorType:'rate',retryAt:90000},30100);
@@ -943,8 +957,13 @@ console.log('Polling: closed-panel watches are capped, finish once and recover')
   const a=polling.next(acct,0); assert.equal(a.kind,'account');
   polling.complete(acct,response(a,{login:'other'}),100);
   assert.equal(polling.hasWatches(acct),false,'an account change clears watches');
-  const slow=watchState(); slow.remaining=400; slow.resetAt=900000;
-  assert.equal(polling.next(slow,60000),null,'quotaTight stretches the watch interval 10x');
-  assert.equal(polling.next(slow,300000).kind,'run');
+  for (const [remaining,factor] of [[100,10],[400,3]]) {
+    const slow=watchState(); slow.remaining=remaining; slow.resetAt=900000;
+    assert.equal(polling.next(slow,30000*factor-1),null,`${remaining} remaining stretches the watch interval ${factor}x`);
+    assert.equal(polling.next(slow,30000*factor).kind,'run');
+    polling.complete(slow,{requestId:slow.flight.request.requestId,error:'offline',errorType:'network'},30000*factor+100);
+    assert.equal(polling.next(slow,30000*factor+30000*factor-1),null,`${remaining} remaining stretches failed-watch retries ${factor}x`);
+    assert.equal(polling.next(slow,30000*factor+30000*factor+100).kind,'run');
+  }
 }
 console.log('Polling: account change clears watches, low quota stretches them');
