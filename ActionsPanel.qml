@@ -40,6 +40,21 @@ Item {
     readonly property int fBody: Model.zoomed(Style.font.body, textStep)
     readonly property int fCaption: Model.zoomed(Style.font.caption, textStep)
     function sp(n) { return Model.zoomed(Style.space(n), textStep) }
+    function textKey(event) {
+        var m = event.modifiers
+        if (!(m & Qt.ControlModifier) || (m & (Qt.AltModifier | Qt.MetaModifier))) return false
+        if (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) setTextStep(textStep + 1)
+        else if (event.key === Qt.Key_Minus) setTextStep(textStep - 1)
+        else if (event.key === Qt.Key_0) setTextStep(0)
+        else return false
+        return true
+    }
+    function setTextStep(n) {
+        textStep = Model.clampStep(n)
+        // After the new row heights are laid out, or the selected row can end up partly below the view.
+        Qt.callLater(function() { list.forceLayout(); list.positionViewAtIndex(cursor, ListView.Contain) })
+        showNotice("Text size " + (100 + 10 * textStep) + "%")
+    }
     readonly property bool discoveryComplete: polling.catalogueComplete
     property string notice: ""
     property double noticeUntil: 0
@@ -430,6 +445,7 @@ Item {
                         }
                         return
                     }
+                    if (root.textKey(event)) { event.accepted = true; return }
                     if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) {
                         event.accepted = false
                         return
@@ -488,6 +504,7 @@ Item {
                         Accessible.name: "Search repositories"
                         rightPadding: coverageNote.implicitWidth + Style.spacing.md
                         Keys.onPressed: function(event) {
+                            if (root.textKey(event)) { event.accepted = true; return }
                             if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
                                 root.move(event.key === Qt.Key_Up ? -1 : 1)
                             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
