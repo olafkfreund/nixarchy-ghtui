@@ -100,7 +100,7 @@ const currentReq=polling.next(staleAccount,1000); assert.equal(currentReq.kind,'
 assert.equal(polling.complete(staleAccount,response(staleReq,{login:'tester'}),1000),false);
 assert.equal(staleAccount.accountChecked,false);
 assert.equal(staleAccount.flight.request.requestId,currentReq.requestId);
-function simulation(activeCount=0, duration=1800000) {
+function simulation(activeCount=0, duration=1800000, pageBuilder) {
   const s=polling.create(), repos=Array.from({length:137},(_,i)=>({repo:`org/r${i}`}));
   reopen(s,0); polling.select(s,'org/r0',activeCount ? '1' : '',activeCount ? {'org/r0:1':true} : {},0,false);
   let flight=null, cold=null, summary=null, catalogue=null;
@@ -111,6 +111,7 @@ function simulation(activeCount=0, duration=1800000) {
       const req=flight.req; let data=[],next=0;
       const i=Number(req.repo.split('r').pop());
       if(req.kind==='catalogue') { data=req.page===1?repos.slice(0,100):repos.slice(100); next=req.page===1?2:0; }
+      else if(req.kind==='activity' && pageBuilder) data=pageBuilder(req,i,activeCount);
       else if(req.kind==='activity' || req.kind==='summary' && ['recent','in_progress'].includes(req.status)) data=i<activeCount?[run(i)]:[];
       else if(req.kind==='jobs') data=[{id:1,status:'in_progress',steps:[]}];
       polling.complete(s,response(req,data,next),now); flight=null;
@@ -313,6 +314,50 @@ assert.equal(req.kind,'activity');
 polling.complete(act,response(req,Array.from({length:100},(_,i)=>({id:i+1,status:'in_progress'})),0,250),100);
 assert.equal(act.repos[0].active,250); assert.equal(act.repos[0].hidden.in_progress,150);
 assert.equal(act.requests,1);
+
+const full=selectedRepo([]);
+polling.ensure(full,'activity','a/b','','active',0); req=polling.next(full,0);
+assert.doesNotThrow(()=>polling.complete(full,response(req,Array.from({length:30},(_,i)=>({id:i+1,status:'completed'}))),100));
+assert.equal(full.repos[0].runs.filter(r=>r.status==='completed').length,10);
+
+function missingFromActivity(status, count) {
+  const p=selectedRepo([{id:1,status}]);
+  polling.ensure(p,'activity','a/b','','active',0);
+  const request=polling.next(p,0);
+  const page=Array.from({length:count},(_,i)=>({id:i+2,status:'completed'}));
+  polling.complete(p,response(request,page),100);
+  return p;
+}
+for (const status of ['queued','in_progress']) {
+  const p=missingFromActivity(status,30);
+  assert.equal(polling.runFor(p,'a/b',1),undefined,`${status} missing from a full page is dropped`);
+  assert.equal(Object.values(p.tasks).some(t=>t.kind==='run'),false);
+}
+const shortPage=missingFromActivity('queued',1);
+assert.equal(polling.runFor(shortPage,'a/b',1).awaitingFinal,true);
+const completedOnPage=selectedRepo([{id:1,status:'in_progress'}]);
+polling.ensure(completedOnPage,'activity','a/b','','active',0); req=polling.next(completedOnPage,0);
+polling.complete(completedOnPage,response(req,[{id:1,status:'completed'}]),100);
+assert.equal(Object.values(completedOnPage.tasks).some(t=>t.kind==='run'),false);
+const filtered=selectedRepo([{id:1,status:'queued'}]);
+polling.activity(filtered,filtered.repos[0],[],100,0,false);
+assert.equal(polling.runFor(filtered,'a/b',1).status,'queued');
+assert.equal(polling.runFor(filtered,'a/b',1).awaitingFinal,undefined);
+
+const idleFull=simulation(0,1800000,()=>Array.from({length:30},(_,i)=>({id:i+1,status:'completed'})));
+assert.equal(idleFull.history.length,idle.history.length,'full idle pages cost the same as empty pages');
+const pageVisits={};
+const mixedPage=(_,i,activeCount)=>{
+  if (i===0) return [{id:1,status:'in_progress',run_attempt:1,name:'CI'}];
+  if (i>=activeCount) return [];
+  const offset=100*(pageVisits[i] || 0);
+  pageVisits[i]=(pageVisits[i] || 0)+1;
+  return Array.from({length:30},(_,n)=>({id:n+1+offset,
+    status:n===29?'queued':n<19?'in_progress':'completed'}));
+};
+const mixed=simulation(4,180000,mixedPage);
+assert.equal(mixed.history.filter(h=>h.kind==='run').length,0,'full mixed pages need no lookups');
+assert.equal(mixed.history.length,busy.history.length,'mixed running pages keep the same request count');
 
 function partialActivity(total) {
   const p=selectedRepo([1,2,3].map(id=>({id,status:'in_progress'})));

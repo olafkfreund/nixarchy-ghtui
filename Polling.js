@@ -1,5 +1,6 @@
 // One page at a time; all time is injected so scheduling can be tested without Qt.
 var phases = ["recent", "in_progress", "queued", "waiting", "pending", "requested"];
+var ACTIVITY_PAGE = 30; // Must match actions.py's activity per_page=30.
 var TIMING = {settle:250, catalogue:300000, summary:60000, selected:10000, active:15000,
     idle:600000, followup:15000, jobs:5000, window:60000, perWindow:60, gap:1000,
     rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000, quotaEase:1000, quotaTight:300};
@@ -171,12 +172,12 @@ function prune(s,r) {
     var prefix=r.repo+":";
     Object.keys(s.details).forEach(function(id) { if (id.indexOf(prefix)===0 && !ids[id.slice(prefix.length)]) delete s.details[id]; });
 }
-function activity(s,r,items,now,total) {
+function activity(s,r,items,now,total,unfiltered) {
     var ids={}; items.forEach(function(run) { ids[run.id]=true });
-    var previous=r.runs || [], partial=total>items.length, dropped={};
+    var previous=r.runs || [], partial=total>items.length || unfiltered && typeof total!=="number" && items.length>=ACTIVITY_PAGE, dropped={};
     mergeRuns(s,r,items);
     previous.forEach(function(run) {
-        if (run.status === "in_progress" && !ids[run.id]) {
+        if ((unfiltered ? run.status!=="completed" : run.status==="in_progress") && !ids[run.id]) {
             var missing=r.runs.filter(function(x) { return x.id===run.id })[0];
             // A partial page can't tell finished from not fetched: look up only runs the user is looking at.
             if (partial && missing && !kept(s,r,missing)) dropped[run.id]=true;
@@ -184,7 +185,7 @@ function activity(s,r,items,now,total) {
         }
     });
     r.runs=r.runs.filter(function(run) { return !dropped[run.id] });
-    items.forEach(function(run) { var cached=runFor(s,r.repo,run.id); delete cached.awaitingFinal; delete cached.followupAt; });
+    items.forEach(function(run) { var cached=runFor(s,r.repo,run.id); if (cached) { delete cached.awaitingFinal; delete cached.followupAt; } });
     r.active=typeof total==="number" ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
     if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
     r.activityAt=now; r.checked=new Date(now).toISOString(); r.error="";
@@ -273,7 +274,7 @@ function complete(s,reply,now) {
         // GitHub's pushed-descending catalogue order is retained across refreshes.
         s.repos.sort(function(a,b) { return names.indexOf(a.repo)-names.indexOf(b.repo) });
         s.catalogueComplete=true; s.catalogueAt=now; s.discover=false;
-    } else if (r && t.kind==="activity") activity(s,r,t.items,now,reply.total);
+    } else if (r && t.kind==="activity") activity(s,r,t.items,now,reply.total,true);
     else if (r && t.kind==="summary") {
         t.all=union(t.all,t.items);
         if (phases[t.phase]==="in_progress") activity(s,r,t.items,now,reply.total);
