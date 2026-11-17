@@ -384,6 +384,84 @@ polling.complete(plain,response(req,[{id:1,status:'in_progress'}]),100);
 assert.deepEqual(plain.repos[0].hidden || {},{}); assert.equal(plain.repos[0].active,1);
 console.log('Polling: one page per unfinished status, hidden counts and kept runs');
 
+// The latest completed default-branch run is the repository's last result.
+function result(id, branch='main', conclusion='success', updated_at='2026-01-01T00:00:00Z') {
+  return {id,status:'completed',head_branch:branch,conclusion,updated_at,html_url:`https://github.com/a/b/actions/runs/${id}`};
+}
+const health=selectedRepo([]); health.repos[0].default_branch='main';
+polling.activity(health,health.repos[0],[result(4),result(9,'feature'),result(7,'main','cancelled'),
+  {id:10,status:'queued',head_branch:'main'}, {id:11,status:'in_progress',head_branch:'main'}],100,undefined,true);
+assert.equal(health.repos[0].last.id,7);
+assert.equal(health.repos[0].last.conclusion,'cancelled');
+assert.equal(health.repos[0].last.branch,'main');
+assert.equal(health.repos[0].last.url,'https://github.com/a/b/actions/runs/7');
+assert.equal(health.repos[0].last.confirmedAt,100);
+polling.activity(health,health.repos[0],[result(15,'feature')],200,undefined,true);
+assert.equal(health.repos[0].last.id,7,'a page without a default-branch result keeps the old result');
+polling.activity(health,health.repos[0],[result(3)],300,undefined,true);
+assert.equal(health.repos[0].last.id,7,'an older id never replaces a newer result');
+polling.activity(health,health.repos[0],[result(7,'main','failure','2026-01-02T00:00:00Z')],400,undefined,true);
+assert.equal(health.repos[0].last.conclusion,'failure','a rerun can change the same id');
+polling.activity(health,health.repos[0],[result(7,'main','success','2025-12-31T00:00:00Z')],500,undefined,true);
+assert.equal(health.repos[0].last.conclusion,'failure','an older update cannot undo a rerun');
+
+const stale=selectedRepo([]); stale.repos[0].default_branch='main';
+stale.repos[0].last={id:5,branch:'main',conclusion:'failure',confirmedAt:10};
+const featurePage=Array.from({length:30},(_,i)=>result(i+6,'feature'));
+for (const now of [100,200]) {
+  polling.activity(stale,stale.repos[0],featurePage,now,undefined,true);
+  assert.equal(stale.repos[0].last.confirmedAt,10,'full newer feature pages do not confirm the result');
+  assert.equal(stale.repos[0].activityAt,now);
+}
+polling.activity(stale,stale.repos[0],[...featurePage.slice(0,29),result(5,'feature')],300,undefined,true);
+assert.equal(stale.repos[0].last.confirmedAt,300,'a page reaching the last id confirms it');
+polling.activity(stale,stale.repos[0],featurePage.slice(0,29),400,undefined,true);
+assert.equal(stale.repos[0].last.confirmedAt,400,'a short page confirms it');
+polling.activity(stale,stale.repos[0],[...featurePage.slice(0,29),result(40)],500,undefined,true);
+assert.equal(stale.repos[0].last.id,40);
+assert.equal(stale.repos[0].last.confirmedAt,500,'a qualifying result confirms it');
+
+const retained=selectedRepo([]); retained.repos[0].default_branch='main';
+polling.activity(retained,retained.repos[0],[result(1),...Array.from({length:10},(_,i)=>result(i+2,'feature'))],100,undefined,true);
+assert.ok(polling.runFor(retained,'a/b',1),'last result survives the ten newer completed runs');
+assert.equal(retained.repos[0].runs.length,11);
+const noBranch=selectedRepo([]);
+polling.activity(noBranch,noBranch.repos[0],[result(1)],100,undefined,true);
+assert.equal(noBranch.repos[0].last,undefined,'an empty default branch has no result');
+
+const catalogueLast=polling.create(); reopen(catalogueLast,0);
+catalogueLast.repos=[{repo:'a/b',default_branch:'main',last:{id:1,branch:'main'}}];
+req=polling.next(catalogueLast,0); assert.equal(req.kind,'catalogue');
+polling.complete(catalogueLast,response(req,[{repo:'a/b',default_branch:'develop'}]),100);
+assert.equal(catalogueLast.repos[0].last,undefined,'catalogue refresh clears a changed default branch immediately');
+
+const lookedUp=selectedRepo([{id:7,status:'queued',head_branch:'main'}]);
+lookedUp.repos[0].default_branch='main';
+for (const conclusion of ['failure','success']) {
+  polling.ensure(lookedUp,'run','a/b',7,'interactive',0);
+  req=polling.next(lookedUp,conclusion==='failure'?0:1000); assert.equal(req.kind,'run');
+  polling.complete(lookedUp,response(req,result(7,'main',conclusion,conclusion==='failure'?'2026-01-01T00:00:00Z':'2026-01-02T00:00:00Z')),conclusion==='failure'?100:1100);
+  assert.equal(lookedUp.repos[0].last.conclusion,conclusion,'single-run lookup updates the result');
+}
+
+const summaryLast=selectedRepo([]); summaryLast.repos[0].default_branch='main';
+summaryLast.repos[0].last={id:0,branch:'main',conclusion:'failure',confirmedAt:5};
+polling.select(summaryLast,'a/b','',{},0,true);
+let summaryNow=0;
+for (const phase of polling.phases) {
+  req=polling.next(summaryLast,summaryNow); assert.equal(req.status,phase);
+  const data=phase==='recent' ? [result(1),...Array.from({length:10},(_,i)=>result(i+2,'feature'))]
+    : phase==='in_progress' ? [{id:30,status:'in_progress',head_branch:'main'}] : [];
+  polling.complete(summaryLast,response(req,data,0,phase==='in_progress'?1:undefined),summaryNow+100);
+  if (phase==='in_progress') {
+    assert.equal(summaryLast.repos[0].last.id,0,'filtered phase cannot set a result');
+    assert.equal(summaryLast.repos[0].last.confirmedAt,5,'filtered phase cannot confirm a result');
+  }
+  summaryNow+=1000;
+}
+assert.equal(summaryLast.repos[0].last.id,1,'summary uses all runs');
+assert.ok(polling.runFor(summaryLast,'a/b',1),'summary protects the last result before trimming');
+
 // Catalogue permission stops discovery until a manual refresh or reopen.
 function blockedCatalogue() {
   const c=polling.create(); reopen(c,0);

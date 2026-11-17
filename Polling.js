@@ -165,7 +165,19 @@ function recent(s,r,runs) {
         .filter(function(run) { return run.status!=="completed" || ++completed<=10 || kept(s,r,run) });
 }
 function kept(s,r,run) {
-    return s.expanded[r.repo+":"+run.id] || r.repo===s.selected && String(run.id)===s.inspected;
+    return s.expanded[r.repo+":"+run.id] || r.repo===s.selected && String(run.id)===s.inspected || r.last && run.id===r.last.id;
+}
+function lastResult(r,runs,now,page,size) {
+    if (r.last && r.last.branch!==r.default_branch) delete r.last;
+    if (!r.default_branch) return;
+    var candidate=runs.filter(function(run) { return run.status==="completed" && run.head_branch===r.default_branch; })
+        .sort(function(a,b) { return b.id-a.id; })[0];
+    if (candidate && (!r.last || candidate.id>r.last.id || candidate.id===r.last.id &&
+        (!isFinite(Date.parse(candidate.updated_at)) || !isFinite(Date.parse(r.last.at)) || Date.parse(candidate.updated_at)>=Date.parse(r.last.at))))
+        r.last={id:candidate.id,conclusion:candidate.conclusion,at:candidate.updated_at,url:candidate.html_url,
+            branch:r.default_branch,confirmedAt:now};
+    if (r.last && (candidate || page && (page.length<size || page.some(function(run) { return run.id<=r.last.id; }))))
+        r.last.confirmedAt=now;
 }
 function prune(s,r) {
     var ids={}; (r.runs || []).forEach(function(run) { ids[String(run.id)]=true });
@@ -175,6 +187,7 @@ function prune(s,r) {
 function activity(s,r,items,now,total,unfiltered) {
     var ids={}; items.forEach(function(run) { ids[run.id]=true });
     var previous=r.runs || [], partial=total>items.length || unfiltered && typeof total!=="number" && items.length>=ACTIVITY_PAGE, dropped={};
+    if (unfiltered) lastResult(r,items,now,items,ACTIVITY_PAGE);
     mergeRuns(s,r,items);
     previous.forEach(function(run) {
         if ((unfiltered ? run.status!=="completed" : run.status==="in_progress") && !ids[run.id]) {
@@ -249,6 +262,7 @@ function complete(s,reply,now) {
     if (t.kind==="run") {
         if (r) {
             var resolved=Object.assign({},data,{awaitingFinal:false,followupAt:now});
+            lastResult(r,[resolved],now,null,0);
             mergeRuns(s,r,[resolved]);
             r.active=(r.runs || []).filter(function(run) { return run.status==="in_progress" && !run.awaitingFinal }).length;
             if (resolved.status==="completed" && t.repo===s.selected && t.run===s.inspected && s.expanded[t.repo+":"+t.run])
@@ -262,7 +276,8 @@ function complete(s,reply,now) {
     if (t.kind==="catalogue") {
         data.forEach(function(repo) {
             var existing=repoFor(s,repo.repo);
-            if (existing) { Object.assign(existing,repo); existing.blocked=false; existing.error=""; }
+            if (existing) { if (existing.default_branch!==repo.default_branch) delete existing.last;
+                Object.assign(existing,repo); existing.blocked=false; existing.error=""; }
             else s.repos.push(repo);
         });
     } else if (r && t.kind==="summary") mergeRuns(s,r,data);
@@ -279,8 +294,10 @@ function complete(s,reply,now) {
         t.all=union(t.all,t.items);
         if (phases[t.phase]==="in_progress") activity(s,r,t.items,now,reply.total);
         if (typeof reply.total==="number") (t.hidden=t.hidden || {})[phases[t.phase]]=Math.max(0,reply.total-t.items.length);
+        if (phases[t.phase]==="recent") t.recent=t.items;
         t.phase++; t.items=[]; t.page=1;
         if (t.phase<phases.length) { t.due=now; t.order=++s.order; return true; }
+        lastResult(r,t.all,now,t.recent,10);
         var keep=(r.runs || []).filter(function(run) { return run.awaitingFinal || kept(s,r,run) });
         r.runs=recent(s,r,union(t.all,keep));
         var seen={}; t.all.forEach(function(run) { seen[String(run.id)]=true });
