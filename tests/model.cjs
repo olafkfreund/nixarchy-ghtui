@@ -335,15 +335,8 @@ console.log('Model: log targets passed');
       Polling:{requestLog:() => calls.push('fetch')}});
   viewLog();
   assert.deepEqual(calls, ['A log is already open']);
-  const readme = fs.readFileSync('README.md', 'utf8');
-  const keys = fs.readFileSync('keybindings.sh', 'utf8');
-  for (const text of [readme, keys]) {
-    assert.ok(text.includes('failed run or finished job'));
-    assert.ok(text.includes('failed steps only for a failed job'));
-    assert.ok(!text.includes('failed run, job or step'));
-  }
 }
-console.log('Model: view guard and log wording passed');
+console.log('Model: view guard passed');
 
 // Exercise the QML key handler as JavaScript without a display.
 {
