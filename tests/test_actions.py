@@ -483,7 +483,7 @@ class PageTest(unittest.TestCase):
                     "HTTP/2.0 200 OK\n" + link + "\n" + json.dumps(body), "", 0)):
                 result = actions.read_page(task)
             self.assertEqual(result["nextPage"], 0)
-            if body.get("login") == "octo-cat":
+            if body.get("login") in ("octo-cat", "mona-cat_octo"):
                 self.assertEqual(result["errorType"], "")
                 self.assertEqual(result["data"], {"login": body["login"]})
             else:
@@ -498,13 +498,14 @@ class PageTest(unittest.TestCase):
 
     def test_account_login_pattern(self):
         task = {"kind": "account", "requestId": 1}
-        for login in ("octo-cat", "dependabot[bot]"):
+        # Underscores stay valid: managed-user (EMU) logins such as jdoe_acme use them.
+        for login in ("octo-cat", "dependabot[bot]", "jdoe_acme"):
             with self.subTest(login=login), patch.object(actions, "request", return_value=(
                     "HTTP/2.0 200 OK\n\n" + json.dumps({"login": login}), "", 0)):
                 reply = actions.read_page(task)
             self.assertEqual(reply["errorType"], "")
             self.assertEqual(reply["data"], {"login": login})
-        for login in ("", "a b", "x/y", "a" * 40, "a\nb", "a_b"):
+        for login in ("", "a b", "x/y", "a" * 40, "a\nb", "<b>x</b>", "a&b", "a\u202eb"):
             with self.subTest(login=login), patch.object(actions, "request", return_value=(
                     "HTTP/2.0 200 OK\n\n" + json.dumps({"login": login}), "", 0)):
                 reply = actions.read_page(task)
@@ -590,7 +591,7 @@ class PageTest(unittest.TestCase):
                     row = row[0]
                 self.assertEqual((row["event"], row["path"], row["actor"], row["triggering_login"]),
                                  ("push", ".github/workflows/x.yml", "alice", "bob"))
-                self.assertEqual(row["triggering_actor"], run["triggering_actor"])
+                self.assertNotIn("triggering_actor", row)
                 for triggering_actor in (None, "x", [], {}):
                     odd = dict(run, triggering_actor=triggering_actor)
                     odd_body = odd if task["kind"] == "run" else {"total_count": 1, "workflow_runs": [odd]}

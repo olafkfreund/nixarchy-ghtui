@@ -54,6 +54,7 @@ def clean_run(row):
     triggering_actor = row.get("triggering_actor")
     triggering_login = triggering_actor.get("login") if isinstance(triggering_actor, dict) else None
     row["triggering_login"] = plain(triggering_login) if isinstance(triggering_login, str) else ""
+    row.pop("triggering_actor", None)  # flattened above; the nested object never reaches QML uncleaned
     actor = row.get("actor")
     login = actor.get("login") if isinstance(actor, dict) else None
     row["actor"] = plain(login) if isinstance(login, str) else ""
@@ -235,7 +236,7 @@ def read_page(task):
         elif kind == "account":
             result["data"] = None
             login = body.get("login") if isinstance(body, dict) else None
-            if not isinstance(login, str) or not re.fullmatch(r"^[A-Za-z0-9-]{1,39}(\[bot\])?$", login):
+            if not isinstance(login, str) or not re.fullmatch(r"^[A-Za-z0-9_-]{1,39}(\[bot\])?$", login):
                 raise ValueError("Invalid account response")
             result["data"] = {"login": login}
         elif kind == "run":

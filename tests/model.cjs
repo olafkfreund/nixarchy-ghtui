@@ -511,6 +511,8 @@ console.log('Model: text size passed');
   }
   for (const [total, avail, expected] of [[400, 280, 160], [240, 150, 30], [100, 40, 20], [800, 700, 180]])
     assert.equal(model.paneHeight(total, avail, 180, 120, 20), expected);
+  assert.equal(model.paneHeight(60, 10, 180, 120, 20), 10);  // less room than one line: never past avail
+  assert.equal(model.paneHeight(40, -5, 180, 120, 20), 0);
 }
 console.log('Model: detail and pane height passed');
 console.log('Model: watched rows and notices passed');

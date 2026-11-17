@@ -63,7 +63,8 @@ function detail(run, now) {
 
 function paneHeight(total, avail, content, minList, line) {
     var cap = Math.min(0.4 * total, avail - minList);
-    return Math.max(line, Math.min(content, cap));
+    // The one-line floor never pushes the pane past the room it has (a card smaller than a line).
+    return Math.max(0, Math.min(avail, Math.max(line, Math.min(content, cap))));
 }
 
 var labels = {in_progress: "running", queued: "queued", requested: "queued", pending: "queued", waiting: "waiting",

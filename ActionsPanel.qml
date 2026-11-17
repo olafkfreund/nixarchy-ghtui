@@ -204,7 +204,11 @@ Item {
         selectionChanged(true)
         pump()
     }
-    function toggleDetail() { detail = !detail }
+    function toggleDetail() {
+        detail = !detail
+        // The pane resizes the list; keep the selected row in view, as setTextStep() does.
+        Qt.callLater(function() { list.forceLayout(); list.positionViewAtIndex(cursor, ListView.Contain) })
+    }
     // Esc closes run details first; then the search field clears and returns to the list, else the filter clears, else the popup closes.
     function handleEscape(searching) {
         if (detail) detail = false

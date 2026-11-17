@@ -416,7 +416,9 @@ ShellRoot {
                 check(panel.opened && panel.detail && lv.height>0,"list non-empty with pane open")
                 check(lv.y+lv.height<=pn.y && pn.y+pn.height<=ft.y,"list, pane and footer do not overlap")
                 check(pn.height<=0.4*lv.parent.height+1,"pane within its share")
-                if (pn.avail>=3*panel.rowMin+pn.line) check(lv.height>=3*panel.rowMin,"list keeps three rows")
+                // The stub card (680 px on a 1280x720 output) always has room, so the three-row rule is never skipped.
+                check(pn.avail>=3*panel.rowMin+pn.line,"stub viewport has room for three rows and a pane line")
+                check(lv.height>=3*panel.rowMin,"list keeps three rows")
                 check(pn.Accessible.role===Accessible.Pane && pn.Accessible.name===panel.detailAccessibleName,"pane accessibility")
                 check(panel.titleText.indexOf("tester@github.com")>=0,"title shows the account from the fake reply")
                 panel.handleEscape(false)
@@ -860,6 +862,12 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     ('Escape closes the pane first', K('Escape'),
                      lambda p, s: s['layout']['pane'] is None and s['filter'] == 'one' and s['opened'], 500),
                     ('Escape with filter', K('Escape'), lambda p, s: s['filter'] == '' and s['opened'] and s['rows'] > 2, 500),
+                    # Search-field Esc with the pane open closes only the pane: the text and the search stay.
+                    ('i before search', K('i'), lambda p, s: s['layout']['pane'] is not None and not s['editing'], 500),
+                    ('/ x', K('slash', 'x'), lambda p, s: s['editing'] and s['filter'] == 'x' and s['layout']['pane'] is not None, 500),
+                    ('Escape in search closes the pane', K('Escape'),
+                     lambda p, s: s['layout']['pane'] is None and s['filter'] == 'x' and s['editing'] and s['opened'], 500),
+                    ('Escape leaves search', K('Escape'), lambda p, s: s['filter'] == '' and not s['editing'] and s['opened'], 500),
                     ('Ctrl+=', CTRL('equal'), lambda p, s: s['textStep'] == 1, 500),
                     ('Ctrl+0', CTRL('0'), lambda p, s: s['textStep'] == 0, 500),
                     ('End before g', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1 and s['rows'] > 2, 300),
@@ -868,6 +876,10 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     ('Home after walk', K('Home'), lambda p, s: s['cursor'] == 0, 400),
                     ('End after walk', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1
                      and s['layout']['contentHeight'] > s['layout']['listHeight'] and s['scrollY'] > 0, 400),
+                    # The pane shrinks the list; the selected last row must stay inside it (layout check).
+                    ('i at the last row', K('i'), lambda p, s: s['layout']['pane'] is not None and s['cursor'] == s['rows'] - 1, 500),
+                    ('Escape closes the pane at the last row', K('Escape'),
+                     lambda p, s: s['layout']['pane'] is None and s['opened'] and s['cursor'] == s['rows'] - 1, 500),
                     ('Home before G', K('Home'), lambda p, s: s['cursor'] == 0, 400),
                     # wtype's -k G types "g" (case-insensitive name, one-level keymap); text mode types "G".
                     # Keep it the only text argument: wtype prefixes later text arguments with a space.
@@ -940,12 +952,12 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                             continue
                         prev = wait_state(f'key {label}', lambda s, p=prev, f=pred: f(p, s), prev['seq'],
                                           timeout=max(times[label] - (time.time() - start) + 6, 2))
-                        if label.startswith('Ctrl+') and layout_error(prev):
-                            # A size change relayouts on the next frame (Qt.callLater); judge the settled state.
-                            step, first = prev['textStep'], layout_error(prev)
+                        if (label.startswith('Ctrl+') or label.startswith('i ') or label == 'i') and layout_error(prev):
+                            # A size change (text size, pane) relayouts on the next frame (Qt.callLater); judge the settled state.
+                            first, matched = layout_error(prev), prev
                             try:
-                                prev = wait_state(f'key {label}: settled layout', lambda s: s['textStep'] == step
-                                                  and not layout_error(s), prev['seq'], timeout=2)
+                                prev = wait_state(f'key {label}: settled layout', lambda s, p=prev, f=pred, m=matched: f(p, s)
+                                                  and s['textStep'] == m['textStep'] and not layout_error(s), prev['seq'], timeout=2)
                             except AssertionError:
                                 fail(first)
                         check_layout(prev, fail)
