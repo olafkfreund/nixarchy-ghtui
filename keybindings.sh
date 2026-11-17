@@ -7,10 +7,12 @@ SUPER ALT + A → Open or close GitHub Actions
 SUPER CTRL ALT + A → GitHub Actions keybindings
 ↓ / j → Next row (j only outside search editing)
 ↑ / k → Previous row (k only outside search editing)
-Enter / Space / → / l → Expand or collapse repository, run or job
+Enter / Space → Expand or collapse repository, run or job
+→ / l → Open a collapsed row, or enter an open one
 ← / h → Collapse or select parent
-Page Down / Page Up → Move eight rows
-Home / End → First or last row
+Page Down / Page Up → Move one screenful
+Home / End / g / G → First or last row
+Click → Select a row and expand or collapse it
 / → Search repositories and workflows; select existing query
 ↑ / ↓ while searching → Select a result without leaving search
 Enter while searching → Expand selected result and resume navigation
@@ -20,6 +22,13 @@ Esc → Clear filter, then close
 r → Refresh selected repository, expanded run and activity
 Shift + R → Rediscover accessible repositories
 o → Open selected repository, run or job on GitHub
+y → Copy the selected row's link (needs wl-copy)
+? → This keybindings list
+a → Rerun all jobs of the selected finished run (asks y/n)
+f → Rerun failed jobs of the selected failed run (asks y/n)
+c → Cancel the selected unfinished run (asks y/n)
+y / n / Esc → Confirm or cancel a pending action; Enter does nothing
+Ctrl / Alt / Meta combinations → Left alone
 Search editing → Native cursor movement, selection, Backspace and Delete
 KEYS
 }

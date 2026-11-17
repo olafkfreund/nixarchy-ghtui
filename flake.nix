@@ -35,6 +35,7 @@
                 pkgs.gh
                 pkgs.python3
                 pkgs.xdg-utils
+                pkgs.wl-clipboard
               ];
             }
             ''

@@ -19,11 +19,110 @@ assert.equal(model.rows(repos, {}, {}, 'main', Date.now()).length, 1);
 assert.equal(model.rows(repos, expanded, details, 'missing', Date.now()).length, 0);
 assert.equal(model.rows(repos, expanded, {}, '', Date.now())[2].title, 'Loading jobs…');
 assert.equal(model.duration({started_at:'2026-01-01T00:00:00Z'}, Date.parse('2026-01-01T00:01:15Z')), '1m 15s');
+const labels = {in_progress:'running', queued:'queued', requested:'queued', pending:'queued', waiting:'waiting',
+  success:'passed', failure:'failed', timed_out:'timed out', startup_failure:'startup failed',
+  cancelled:'cancelled', skipped:'skipped', neutral:'neutral', action_required:'needs action',
+  'awaiting final status':'checking result', unavailable:'unavailable'};
+for (const [status, expected] of Object.entries(labels)) assert.equal(model.label(status), expected, status);
+for (const status of ['', undefined, 'error', 'constructor']) assert.equal(model.label(status), 'unknown');
+const now = new Date(2026, 0, 2, 0, 0, 0).getTime();
+for (const [seconds, expected] of [[0,'now'], [59,'now'], [60,'1m ago'], [59*60,'59m ago'],
+  [60*60,'1h ago'], [23*3600,'23h ago'], [24*3600,'1d ago']])
+  assert.equal(model.age({created_at:new Date(now-seconds*1000).toISOString()}, now), expected);
+assert.equal(model.age({}, now), '');
+assert.equal(model.age({created_at:new Date(now+60000).toISOString()}, now), 'now');
+assert.equal(model.age({created_at:'invalid'}, now), '');
+assert.equal(model.age({created_at:new Date(now-3600000).toISOString(), run_started_at:new Date(now-60000).toISOString()}, now), '1m ago');
+assert.equal(model.cap('abc', 4), 'abc');
+assert.equal(model.cap('abcd', 4), 'abcd');
+assert.equal(model.cap('abcde', 4), 'abc…');
+assert.equal(model.cap(null, 4), '');
+const resetAt = new Date(2026, 0, 2, 3, 4, 5).getTime();
+assert.equal(model.clock(resetAt), '03:04');
+assert.equal(model.clock(resetAt, true), '03:04:05');
+assert.equal(model.quotaText(499, resetAt, resetAt-1), '499 API requests left · resets 03:04');
+assert.equal(model.quotaText(500, resetAt, resetAt-1), '500 API requests left');
+assert.equal(model.quotaText(1234, resetAt, resetAt-1), '1,234 API requests left');
+assert.equal(model.quotaText(null, resetAt, resetAt-1), '');
+assert.equal(model.quotaText(499, resetAt, resetAt), '');
+assert.equal(model.quotaText(499, undefined, resetAt-1), '');
+const baseStatus = {notice:'n', noticeUntil:now+1, error:'global error', repos:[{repo:'o/r', error:'repo error'}],
+  cooldown:now+60000, discoveryComplete:true, checkedCount:2, repoCount:3, remaining:499, resetAt};
+const status = model.statusLine(baseStatus, now);
+assert.equal(status.text, 'n · global error · GitHub paused until 00:01:00');
+assert.equal(status.urgent, true);
+assert.equal(status.quota, '499 API requests left · resets 03:04');
+assert.equal(model.statusLine({...baseStatus, cooldown:0}, now).text, 'n · global error');
+assert.equal(model.statusLine({...baseStatus, error:'', cooldown:0}, now).text, 'n · o/r: repo error');
+assert.equal(model.statusLine({...baseStatus, noticeUntil:now, error:'', repos:[], cooldown:0}, now).text, 'Activity checked 2/3');
+assert.equal(model.statusLine({...baseStatus, notice:'', error:'', repos:[], cooldown:now+60000}, now).text, 'GitHub paused until 00:01:00');
+assert.equal(model.statusLine({...baseStatus, notice:'', error:'', repos:[], cooldown:0, discoveryComplete:false}, now).text,
+  'Discovering repositories… 3 found');
+assert.equal(model.statusLine({...baseStatus, notice:'', error:'', repos:[], cooldown:0, remaining:500, resetAt:now+1}, now).urgent, false);
+assert.equal(model.emptyText({repoCount:0, error:'oops', discoveryComplete:false, filter:''}), 'oops');
+assert.equal(model.emptyText({repoCount:0, error:'', discoveryComplete:false, filter:''}), 'Discovering repositories…');
+assert.equal(model.emptyText({repoCount:0, error:'', discoveryComplete:true, filter:''}), 'No repositories found for this account');
+assert.equal(model.emptyText({repoCount:2, error:'oops', discoveryComplete:true, filter:'ci'}), 'No match for "ci" · search covers loaded runs only');
+assert.deepEqual(JSON.parse(JSON.stringify(model.coverage([{summaryAt:'now'}, {runs:[{}]}, {summaryAt:0}, {summaryAt:'later'}]))),
+  {loaded:2, total:4});
+assert.equal(model.accessibleName({kind:'repo', title:'o/r', info:'2 running'}, false), 'repository: o/r, 2 running, collapsed');
+assert.equal(model.accessibleName({kind:'run', title:'CI', statusText:'running'}, true), 'run: CI, running, expanded');
+assert.equal(model.accessibleName({kind:'step', title:'Checkout', statusText:'passed'}, false), 'step: Checkout, passed');
+assert.equal(model.accessibleName({kind:'message', title:'Loading jobs…', statusText:''}, false), 'message: Loading jobs…');
+assert.equal(model.accessibleName({kind:'more', title:'More runs', statusText:''}, false), 'more: More runs');
 assert.equal(model.icon('cancelled'), '⊘');
 assert.equal(model.icon('failure'), '✕');
 assert.equal(model.reply('{"repos":[]}', 0, 5), '{"repos":[]}');
 assert.deepEqual(JSON.parse(model.reply('', 2, 5)), {requestId:5, errorType:'setup', error:'Workflow helper failed (exit 2); see the shell log'});
 assert.equal(JSON.parse(model.reply('', 127, 5)).error, 'python3 not found');
+// #45: run actions. Polling.js has its own `age`, so it gets its own context.
+{
+  const poll = {};
+  vm.createContext(poll);
+  vm.runInContext(fs.readFileSync('Polling.js', 'utf8'), poll);
+  const s = poll.create();
+  const mk = (id, status, conclusion) => ({id, status, conclusion, name: 'CI', head_branch: 'main', run_number: id});
+  s.repos = [{repo: 'o/r', checked: 'now', active: 0, runs: [mk(1, 'completed', 'failure'), mk(2, 'completed', 'timed_out'),
+    mk(3, 'completed', 'cancelled'), mk(4, 'completed', 'success'), mk(5, 'in_progress'), mk(6, 'queued')]}];
+  const list = model.rows(s.repos, {'repo:o/r': true}, {}, '', Date.now());
+  const rowFor = id => list.find(row => row.kind === 'run' && row.run === String(id));
+  const offered = id => { const row = rowFor(id); return JSON.parse(JSON.stringify(model.actionsFor(poll.runFor(s, row.repo, row.run)))); };
+  assert.deepEqual(offered(4), ['rerun']);
+  for (const id of [1, 2, 3]) assert.deepEqual(offered(id), ['rerun', 'rerun-failed']);
+  for (const id of [5, 6]) assert.deepEqual(offered(id), ['cancel']);
+  assert.deepEqual(JSON.parse(JSON.stringify(model.actionsFor(poll.runFor(s, 'o/r', '99')))), []);
+  assert.equal(rowFor(1).status, 'failure', 'the row status is mapped, not "completed"');
+  const failed = poll.runFor(s, 'o/r', '1'), good = poll.runFor(s, 'o/r', '4'), live = poll.runFor(s, 'o/r', '5');
+  assert.equal(model.unavailable('rerun', failed), '');
+  assert.equal(model.unavailable('rerun-failed', failed), '');
+  assert.equal(model.unavailable('cancel', live), '');
+  assert.equal(model.unavailable('rerun', live), 'Only a finished run can be rerun');
+  assert.equal(model.unavailable('rerun-failed', good), 'Rerun failed needs a failed run');
+  assert.equal(model.unavailable('cancel', good), 'Only an unfinished run can be cancelled');
+  for (const action of ['rerun', 'rerun-failed', 'cancel']) assert.equal(model.unavailable(action, null), 'Select a run to rerun or cancel');
+  const long = {...failed, name: 'N'.repeat(200), head_branch: 'B'.repeat(200)};
+  const questions = {rerun: 'Rerun all jobs?', 'rerun-failed': 'Rerun failed jobs?', cancel: 'Cancel run?'};
+  const wording = {rerun: 'Rerun requested: ', 'rerun-failed': 'Rerun of failed jobs requested: ', cancel: 'Cancel requested: '};
+  for (const action of Object.keys(questions)) {
+    const d = model.describe(action, 'o/r', long);
+    assert.ok(d.confirm.startsWith(questions[action]), d.confirm);
+    assert.ok(d.confirm.indexOf('y yes · n no') < d.confirm.indexOf('o/r') && d.confirm.indexOf('o/r') < d.confirm.indexOf('NNN'), d.confirm);
+    assert.equal(d.confirm.includes('cannot be undone'), action === 'cancel');
+    assert.ok(d.done.startsWith(wording[action]) && d.done.includes('o/r #1 '), d.done);
+    for (const text of [d.confirm, d.done]) {
+      assert.ok(!/N{31}/.test(text) && !/B{31}/.test(text), 'name and branch are cut to 30 characters');
+      assert.ok(/N{20}/.test(text) && /B{20}/.test(text));
+    }
+  }
+  const dirty = model.describe('rerun', 'o/r', {...failed, name: 'a\x1bb\nc', head_branch: 'm\x07'});
+  assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(dirty.confirm + dirty.done), 'control characters are removed');
+  assert.ok(dirty.confirm.includes('a b c'));
+  assert.equal(model.actionReply('{"ok":true}', 0, 3), '{"ok":true}');
+  assert.deepEqual(JSON.parse(model.actionReply('', 127, 3)), {requestId: 3, ok: false, errorType: 'setup', error: 'python3 not found'});
+  assert.deepEqual(JSON.parse(model.actionReply('', 1, 3)), {requestId: 3, ok: false, errorType: 'unknown', error: 'Outcome unknown; check GitHub before retrying'});
+  // A SIGTERM'd helper exits 0 with no output: the write may have been sent.
+  assert.deepEqual(JSON.parse(model.actionReply('', 0, 3)), {requestId: 3, ok: false, errorType: 'unknown', error: 'Outcome unknown; check GitHub before retrying'});
+}
 const ranked = model.rows([{repo:'z/idle', checked:'now', active:0}, {repo:'a/unchecked'}, {repo:'b/running', active:2, checked:'now'}], {}, {}, '', Date.now());
 assert.equal(ranked[0].title, 'b/running');
 assert.equal(ranked[0].info, '2 running');
@@ -109,3 +208,103 @@ for (const url of ['https://github.com.evil.example/', 'https://github.com@evil.
                    'https://github.com/o\x85r', 'http://github.com/o', undefined, 5])
     assert.equal(model.browsable(url), false, JSON.stringify(url));
 console.log('Model: more row, linear syncRows and random-order equivalence passed');
+
+// #41: an expanded run that polling no longer refreshes says so and freezes its timers.
+{
+  const now = Date.parse('2026-01-01T01:00:00Z'), at = ms => new Date(now - ms).toISOString().replace('.000Z', 'Z');
+  const job = {id: 8, name: 'build', status: 'in_progress', started_at: '2026-01-01T00:00:00Z', steps: []};
+  const run = {id: 7, status: 'in_progress', name: 'CI', run_number: 3, run_attempt: 1};
+  const view = (r, d, live, open = {'repo:o/r': true, 'o/r:7': true}, t = now) =>
+    model.rows([{repo: 'o/r', runs: [r]}], open, d ? {'o/r:7': d} : {}, '', t, live);
+  const stale = {jobs: [job], updated: at(4 * 60000)};
+  assert.equal(view(run, stale, 'o/r:9')[1].subtitle, 'jobs 4m old, not refreshing');
+  const frozen = view(run, stale, 'o/r:9')[2].info;
+  assert.equal(view(run, stale, 'o/r:9', undefined, now + 600000)[2].info, frozen, 'timer stays at the last fetch');
+  const fresh = view(run, stale, 'o/r:7');
+  assert.ok(!fresh[1].subtitle.includes('jobs ') && !fresh[1].subtitle.includes('not refreshing'));
+  assert.notEqual(view(run, stale, 'o/r:7', undefined, now + 600000)[2].info, fresh[2].info, 'live timer uses now');
+  const done = {...run, status: 'completed', conclusion: 'success'};
+  assert.ok(!view(done, {...stale, finalAttempt: 1}, '')[1].subtitle.includes('not refreshing'));
+  assert.ok(view(done, {...stale, finalAttempt: 2}, '')[1].subtitle.includes('not refreshing'));
+  assert.ok(view(run, {...stale, updated: at(75 * 60000)}, '')[1].subtitle.includes('jobs 1h 15m old'));
+  const err = view(run, {...stale, error: 'rate limited'}, '');
+  assert.deepEqual([err[2].kind, err[2].title, err[3].kind], ['message', 'rate limited', 'job']);
+  assert.ok(!view(run, {error: 'rate limited'}, '')[1].subtitle.includes('jobs '), 'no stamp without updated');
+  assert.ok(!view(run, stale, '', {'repo:o/r': true})[1].subtitle.includes('jobs '), 'collapsed run has no marker');
+  assert.equal(view(run, stale)[1].subtitle.includes('not refreshing'), true, 'five arguments still work');
+}
+console.log('Model: not-refreshing marker passed');
+
+// #42: run subtitle, statusText, message row and search by label.
+{
+  const t = Date.parse('2026-01-01T01:00:00Z');
+  const run = {id: 7, status: 'completed', conclusion: 'failure', name: 'CI', head_branch: 'main', event: 'push', actor: 'bob',
+    run_number: 3, run_started_at: '2026-01-01T00:55:00Z', display_title: 'Fix'};
+  const view = (r, open = {}, filter = '', repo = {}) =>
+    model.rows([{repo: 'o/r', ...repo, runs: [r]}], {'repo:o/r': true, ...open}, {}, filter, t);
+  assert.equal(view(run)[1].subtitle, 'main · push · bob · 5m ago · Fix');
+  const staleSubtitle = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true, 'o/r:7': true},
+    {'o/r:7': {jobs: [], updated: new Date(t - 4 * 60000).toISOString()}}, '', t, 'o/r:9')[1].subtitle;
+  assert.equal(staleSubtitle, 'main · push · bob · 5m ago · jobs 4m old, not refreshing · Fix');
+  assert.ok(!view(run)[1].subtitle.includes('#') && !view(run)[1].subtitle.includes('jobs fetched'));
+  const long = {...run, head_branch: 'b'.repeat(40), actor: 'a'.repeat(30), event: 'e'.repeat(30)};
+  assert.deepEqual(view(long)[1].subtitle.split(' · ').slice(0, 3), ['b'.repeat(27) + '…', 'e'.repeat(13) + '…', 'a'.repeat(15) + '…']);
+  assert.equal(view({...run, event: '', actor: undefined})[1].subtitle, 'main · 5m ago · Fix', 'empty parts leave no separators');
+  for (const q of ['failed', 'failure', 'a'.repeat(30), 'e'.repeat(30), 'b'.repeat(40)])
+    assert.equal(view(long, {}, q).length, 2, q);
+  assert.equal(view({...run, status: 'in_progress', conclusion: null}, {}, 'in_progress').length, 2);
+  const job = {id: 8, name: 'build', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/job/8',
+    steps: [{number: 4, name: 'Go', status: 'completed', conclusion: 'failure'}]};
+  const full = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true, 'o/r:7': true, 'o/r:7:8': true}, {'o/r:7': {jobs: [job]}}, '', t);
+  assert.deepEqual([...full.map(row => row.kind)], ['repo', 'run', 'job', 'step']);
+  assert.equal(full[3].url, job.html_url);
+  assert.deepEqual([...full.map(row => row.statusText)], ['neutral', 'failed', 'passed', 'failed']);
+  const msg = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true, 'o/r:7': true}, {}, '', t);
+  assert.deepEqual([msg[2].kind, msg[2].statusText], ['message', '']);
+  // message row for an expanded repository without runs
+  const empty = (repo, filter = '') => model.rows([{repo: 'o/r', ...repo}], {'repo:o/r': true}, {}, filter, t);
+  assert.deepEqual([empty({runs: []})[1].kind, empty({runs: []})[1].title, empty({runs: []})[1].statusText], ['message', 'Loading runs…', '']);
+  assert.equal(empty({runs: [], summaryAt: 1})[1].title, 'No workflow runs');
+  for (const flag of ['archived', 'disabled', 'blocked'])
+    assert.equal(empty({runs: [], [flag]: true}).length, 1, flag + ' repositories have no loading row');
+  assert.equal(empty({}, 'o/r').length, 2, 'filter-matched empty repository keeps its message');
+  assert.equal(empty({runs: [], error: 'boom'}).length, 1);
+  assert.equal(empty({runs: [], hidden: {queued: 2}})[1].kind, 'more');
+  assert.equal(empty({runs: [], hidden: {queued: 2}}).length, 2);
+  // statusText is a shown field: a change is one setProperty
+  assert.ok(model.shownFields.includes('statusText'));
+  const list = model.rows([{repo: 'o/r', runs: [run]}], {'repo:o/r': true}, {}, '', t);
+  let ops = 0;
+  const l = {rows: [], get count() { return this.rows.length; }, get(i) { return this.rows[i]; },
+    insert(i, v) { this.rows.splice(i, 0, v); }, remove(i) { this.rows.splice(i, 1); }, move() {},
+    setProperty(i, k, v) { ops++; this.rows[i][k] = v; }};
+  model.syncRows(l, list); ops = 0;
+  model.syncRows(l, list.map((row, i) => i === 1 ? {...row, statusText: 'passed'} : row));
+  assert.equal(ops, 1);
+}
+console.log('Model: rows subtitle, statusText and message row passed');
+
+// Exercise the QML key handler as JavaScript without a display.
+{
+  const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
+    .split('\n                }\n\n                Column {')[0];
+  const calls = [];
+  const root = {confirm:null, copyLink:() => calls.push('copy'), answer:yes => calls.push(yes ? 'yes' : 'no')};
+  const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_Y:89, Key_N:78, Key_Escape:27};
+  const handler = vm.runInNewContext('(function(event) {' + body + '\n})',
+    {root, Qt, Quickshell:{execDetached:() => calls.push('keys')}});
+  const press = (key, text, modifiers = 0, isAutoRepeat = false) => handler({key, text, modifiers, isAutoRepeat});
+  press(Qt.Key_Y, 'y', 0, true);
+  press(0, '?', 0, true);
+  assert.deepEqual(calls, []);
+  press(Qt.Key_Y, 'y');
+  assert.deepEqual(calls, ['copy']);
+  root.confirm = {text:'confirm'};
+  press(Qt.Key_Y, 'y', Qt.ControlModifier);
+  press(Qt.Key_Y, 'y', 0, true);
+  assert.deepEqual(calls, ['copy']);
+  press(Qt.Key_Y, 'y');
+  press(Qt.Key_N, 'n');
+  press(Qt.Key_Escape, '');
+  assert.deepEqual(calls, ['copy', 'yes', 'no', 'no']);
+}
