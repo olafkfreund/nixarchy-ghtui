@@ -657,6 +657,20 @@ def check_layout(state, fail):
         fail(error)
 
 
+def read_log(path):
+    """The fake's request log; a last line still being written is skipped."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    entries = []
+    for i, line in enumerate(lines):
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            if i != len(lines) - 1:
+                raise
+    return entries
+
+
+WALK_ROWS = 27  # one/repo, its 25 runs, two/repo
 TIMELINE = []  # key run: when each stage was scheduled and when its state matched
 
 
@@ -700,7 +714,6 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
             (home / 'managed-menu').write_text('{}\n')
             menu_path.symlink_to(home / 'managed-menu')
         session = None
-        quickshell = None
         sway_lines = []
         try:
             directory, session, sway_lines, ipc, base_env = start_session(home, os.environ['PATH'], deadline)
@@ -746,7 +759,7 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                 shell_lines = []
                 states = queue.Queue()
                 last = [None]
-                env = {**base_env, **menu_path_env, **extra_env}
+                env = {**base_env, **menu_path_env, 'PATH': str(bin_dir) + os.pathsep + base_env['PATH'], **extra_env}
                 proc = subprocess.Popen([QUICKSHELL, '-p', str(root), '--no-color'], env=env,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 collect(proc, shell_lines, states)
@@ -811,7 +824,7 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     ('Ctrl+0', CTRL('0'), lambda p, s: s['textStep'] == 0, 500),
                     ('End before g', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1 and s['rows'] > 2, 300),
                     ('g', K('g'), lambda p, s: s['cursor'] == 0, 300),
-                    ('walk j', K(*['j'] * 35), None, 150),
+                    ('walk j', [], None, 150),
                     ('Home after walk', K('Home'), lambda p, s: s['cursor'] == 0, 400),
                     ('End after walk', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1
                      and s['layout']['contentHeight'] > s['layout']['listHeight'] and s['scrollY'] > 0, 400),
@@ -828,9 +841,9 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                 log_path = root / 'fake.log'
                 end = time.monotonic() + 30
                 while True:
-                    lines = log_path.read_text().splitlines() if log_path.exists() else []
-                    done = any(json.loads(l)['kind'] == 'summary' and json.loads(l)['status'] == 'requested' for l in lines)
-                    if done and time.time() - json.loads(lines[-1])['t'] >= 1.5:
+                    entries = read_log(log_path)
+                    done = any(e['kind'] == 'summary' and e['status'] == 'requested' for e in entries)
+                    if done and time.time() - entries[-1]['t'] >= 1.5:
                         break
                     if time.monotonic() > end:
                         fail('opening summary chain did not finish')
@@ -846,13 +859,14 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                                         and s['selected'] == 'repo:one/repo', steady['seq'] - 1, timeout=5)
                 assert len({step[0] for step in steps}) == len(steps), 'stage labels must be unique'
                 # One wtype for the whole run: one virtual keyboard and one keymap (plan: option B).
-                # The walk sends one j per pause; extra presses at the bottom change nothing.
+                # The walk sends exactly one j per move from the top to the last of the 27 rows,
+                # so a lost key leaves the cursor short of the last row.
                 argv = ['wtype', '-s', '300']
                 times, offset = {}, 0.3
                 for label, keys, pred, pause in steps:
                     times[label] = offset
                     if label == 'walk j':
-                        for _ in range(35):
+                        for _ in range(WALK_ROWS - 1):
                             argv += ['-k', 'j', '-s', str(pause)]
                             offset += pause / 1000
                     else:
@@ -874,8 +888,9 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                                     fail(f"key walk j: cursor went back {cur['cursor']} -> {nxt['cursor']}")
                                 check_layout(nxt, fail)
                                 cur = nxt
-                            if cur['rows'] < 27:
-                                fail(f"walk: only {cur['rows']} rows; expected the expanded repository's 25 runs")
+                            if cur['rows'] != WALK_ROWS or cur['cursor'] != WALK_ROWS - 1:
+                                fail(f"walk: ended on row {cur['cursor']} of {cur['rows']}; expected the last of {WALK_ROWS} "
+                                     "(two repositories and the expanded repository's 25 runs)")
                             prev = cur
                             print(f'{scenario}: key walk j: {cur["rows"]} rows, layout checked on each')
                             continue
@@ -884,7 +899,7 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                             print(f'{scenario}: key {label} sent')
                             continue
                         prev = wait_state(f'key {label}', lambda s, p=prev, f=pred: f(p, s), prev['seq'],
-                                          timeout=times[label] - (time.time() - start) + 6)
+                                          timeout=max(times[label] - (time.time() - start) + 6, 2))
                         if label.startswith('Ctrl+') and layout_error(prev):
                             # A size change relayouts on the next frame (Qt.callLater); judge the settled state.
                             step, first = prev['textStep'], layout_error(prev)
@@ -899,22 +914,32 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                         print(f'{scenario}: key {label}')
                         if label == 'Return on run':
                             run_key, opened = prev['selected'], prev
+                            # Jobs arrived: the job row replaced "Loading jobs…" (the Return state may already show it).
+                            arrived = lambda s: s['error'] == '' and any(r['key'] == run_key + ':8' for r in s['layout']['rows']) \
+                                and not any(r['key'] == run_key + ':message' for r in s['layout']['rows'])
+                            if not arrived(opened):
+                                opened = wait_state('jobs arrive under the run', arrived, opened['seq'], timeout=5)
+                            check_layout(opened, fail)
                             # Duration tick: the selected run's info changes while selection and scroll stay.
                             ticked = wait_state('running duration ticks', lambda s: s['selected'] == run_key
                                                 and s['scrollY'] == opened['scrollY'] and s['info'] != opened['info']
                                                 and s['t'] - opened['t'] >= 1, opened['seq'], timeout=5)
-                            wait_state('async arrival', lambda s: s['error'] == '' and not s['inFlight'], ticked['seq'] - 1, timeout=5)
-                            prev = last[0]
+                            prev = ticked
                     closed = prev
-                    time.sleep(1.5)
+                    time.sleep(6)  # longer than the 5 s jobs interval, the shortest polling interval
                     while True:
                         try:
                             last[0] = states.get_nowait()
                         except queue.Empty:
                             break
+                except AssertionError as error:
+                    stop(typist)
+                    raise AssertionError(f'{error}\nwtype exit={typist.returncode} output:\n{typist.stdout.read()}') from None
                 finally:
                     stop(typist)
-                log = [json.loads(line) for line in (root / 'fake.log').read_text().splitlines()]
+                if typist.returncode != 0:
+                    fail(f'wtype exit {typist.returncode}: {typist.stdout.read()}')
+                log = read_log(root / 'fake.log')
                 # A summary is a chain of pages; only its first page (status "recent") marks a new summary.
                 chain = lambda e: e['kind'] == 'summary' and e['repo'] == 'one/repo' and e['status'] == 'recent'
                 for label, match in (('r', chain), ('R', lambda e: e['kind'] == 'catalogue')):
@@ -959,10 +984,19 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
 
                 pid_file = root / 'fake.pid'
 
+                def read_pid():
+                    try:
+                        return int(pid_file.read_text())
+                    except (FileNotFoundError, ValueError):
+                        return None  # not written yet, or half written
+
                 def blocked(env, wait_state, fail, last, states):
-                    busy = wait_state('request in flight', lambda s: s['opened'] and s['inFlight'] and pid_file.exists(), timeout=15)
-                    pid = int(pid_file.read_text())
-                    subprocess.run(['wtype', '-s', '300', '-k', 'Escape'], env=env, timeout=10, check=True)
+                    busy = wait_state('request in flight', lambda s: s['opened'] and s['inFlight'] and read_pid() is not None, timeout=15)
+                    pid = read_pid()
+                    typed = subprocess.run(['wtype', '-s', '300', '-k', 'Escape'], env=env, timeout=10,
+                                           capture_output=True, text=True)
+                    if typed.returncode:
+                        fail(f'wtype exit {typed.returncode}: {typed.stdout}{typed.stderr}')
                     shut = wait_state('Escape closes during a request', lambda s: not s['opened'] and not s['inFlight'], busy['seq'])
                     end = time.monotonic() + 3
                     while time.monotonic() < end:
@@ -974,21 +1008,24 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     else:
                         fail(f'helper {pid} still running after close')
                     pid_file.unlink()  # dead: never signal a pid that may be reused
-                    if settle(states, last, 1.5)['requests'] != shut['requests']:
+                    if settle(states, last, 6)['requests'] != shut['requests']:
                         fail('closed panel started requests')
                     print('fresh: failure: close while a request runs')
                 try:
                     run_keys('close during request', {'FAKE_MODE': 'block', 'FAKE_PID': str(pid_file),
                                                       'FAKE_LOG': str(root / 'block.log')}, blocked)
                 finally:
-                    if pid_file.exists():
+                    # The file is unlinked once the helper is seen dead; a live blocked helper is always killed.
+                    end = time.monotonic() + 1
+                    while pid_file.exists() and read_pid() is None and time.monotonic() < end:
+                        time.sleep(0.05)
+                    if read_pid() is not None:
                         try:
-                            os.kill(int(pid_file.read_text()), 9)
-                        except (ProcessLookupError, ValueError):
+                            os.kill(read_pid(), 9)
+                        except ProcessLookupError:
                             pass
             print('QML_CHECKS_PASSED')
         finally:
-            stop(quickshell)
             stop(session)
             if session is not None:
                 shutil.rmtree(directory)
