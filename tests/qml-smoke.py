@@ -37,7 +37,7 @@ if sys.argv[1]=='log':
     os._exit(0)
 kind=request['kind']
 if os.environ.get('FAKE_LOG'):
-    with open(os.environ['FAKE_LOG'],'a') as log: log.write(json.dumps({'t':time.time(),'kind':kind,'repo':request.get('repo',''),'run':str(request.get('run',''))})+'\\n')
+    with open(os.environ['FAKE_LOG'],'a') as log: log.write(json.dumps({'t':time.time(),'kind':kind,'repo':request.get('repo',''),'run':str(request.get('run','')),'status':request.get('status','')})+'\\n')
 if os.environ.get('FAKE_MODE')=='block':
     with open(os.environ['FAKE_PID'],'w') as pid: pid.write(str(os.getpid()))
     signal.pause()
@@ -825,7 +825,10 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                             offset += pause / 1000
                     else:
                         argv += keys + ['-s', str(pause)]
-                        offset += pause / 1000
+                        offset += sum(int(keys[i + 1]) for i in range(len(keys)) if keys[i] == '-s') / 1000 + pause / 1000
+                # A stage's change must show before the next key is sent, or a dead key is blamed on a later stage.
+                labels = [step[0] for step in steps]
+                before_next = {a: times[b] for a, b in zip(labels, labels[1:])}
                 start = time.time()
                 typist = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 try:
@@ -857,6 +860,8 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                             except AssertionError:
                                 fail(first)
                         check_layout(prev, fail)
+                        if label in before_next and prev['t'] >= start + before_next[label]:
+                            fail(f'key {label}: no change before the next key was sent')
                         print(f'{scenario}: key {label}')
                         if label == 'Return on run':
                             run_key, opened = prev['selected'], prev
@@ -876,14 +881,16 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                 finally:
                     stop(typist)
                 log = [json.loads(line) for line in (root / 'fake.log').read_text().splitlines()]
-                for label, kind in (('r', 'summary'), ('R', 'catalogue')):
+                # A summary is a chain of pages; only its first page (status "recent") marks a new summary.
+                chain = lambda e: e['kind'] == 'summary' and e['repo'] == 'one/repo' and e['status'] == 'recent'
+                for label, match in (('r', chain), ('R', lambda e: e['kind'] == 'catalogue')):
                     t0 = start + times[label]
-                    if not any(e['kind'] == kind and t0 - 0.1 <= e['t'] <= t0 + 5 and (kind == 'catalogue' or e['repo'] == 'one/repo')
-                               for e in log):
-                        fail(f'key {label}: expected a {kind} request within 5 s of the key; log={log[-12:]}')
+                    if not any(match(e) and t0 - 0.1 <= e['t'] <= t0 + 5 for e in log):
+                        fail(f'key {label}: expected a new request within 5 s of the key; log={log[-12:]}')
                 t0 = start + times['r']
-                if not any(e['kind'] == 'summary' and e['repo'] == 'one/repo' and t0 - 5 <= e['t'] < t0 - 0.1 for e in log):
-                    fail('key r: no summary in the 5 s before r, so an automatic one could explain the window')
+                # Automatic summaries come 60 s apart, so one started in the 55 s before r rules them out of the window.
+                if not any(chain(e) and t0 - 55 <= e['t'] < t0 - 0.1 for e in log):
+                    fail('key r: no summary started before r, so an automatic one could explain the window')
                 run_id = run_key.split(':')[-1]
                 if not any(e['kind'] == 'jobs' and e['run'] == run_id for e in log):
                     fail(f'jobs for run {run_id} were never requested; log={log[-12:]}')
