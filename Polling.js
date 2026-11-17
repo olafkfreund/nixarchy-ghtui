@@ -176,7 +176,7 @@ function lastResult(r,runs,now,page,size) {
         (!isFinite(Date.parse(candidate.updated_at)) || !isFinite(Date.parse(r.last.at)) || Date.parse(candidate.updated_at)>=Date.parse(r.last.at))))
         r.last={id:candidate.id,conclusion:candidate.conclusion,at:candidate.updated_at,url:candidate.html_url,
             branch:r.default_branch,confirmedAt:now};
-    if (r.last && (candidate || page && (page.length<size || page.some(function(run) { return run.id<=r.last.id; }))))
+    if (r.last && (candidate && candidate.id>=r.last.id || page && (page.length<size || page.some(function(run) { return run.id<=r.last.id; }))))
         r.last.confirmedAt=now;
 }
 function prune(s,r) {
@@ -187,9 +187,10 @@ function prune(s,r) {
 function activity(s,r,items,now,total,unfiltered) {
     var ids={}; items.forEach(function(run) { ids[run.id]=true });
     var previous=r.runs || [], partial=total>items.length || unfiltered && typeof total!=="number" && items.length>=ACTIVITY_PAGE, dropped={};
+    var summaryAuthoritative=unfiltered && s.selected===r.repo && r.summaryAt!==undefined;
     if (unfiltered) lastResult(r,items,now,items,ACTIVITY_PAGE);
     mergeRuns(s,r,items);
-    previous.forEach(function(run) {
+    if (!summaryAuthoritative) previous.forEach(function(run) {
         if ((unfiltered ? run.status!=="completed" : run.status==="in_progress") && !ids[run.id]) {
             var missing=r.runs.filter(function(x) { return x.id===run.id })[0];
             // A partial page can't tell finished from not fetched: look up only runs the user is looking at.
@@ -199,8 +200,9 @@ function activity(s,r,items,now,total,unfiltered) {
     });
     r.runs=r.runs.filter(function(run) { return !dropped[run.id] });
     items.forEach(function(run) { var cached=runFor(s,r.repo,run.id); if (cached) { delete cached.awaitingFinal; delete cached.followupAt; } });
-    r.active=typeof total==="number" ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
-    if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
+    if (!summaryAuthoritative) r.active=typeof total==="number" ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
+    if (unfiltered && s.selected!==r.repo) r.hidden={};
+    else if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
     r.activityAt=now; r.checked=new Date(now).toISOString(); r.error="";
     prune(s,r);
 }

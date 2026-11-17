@@ -127,7 +127,7 @@ function coverage(repos) {
 
 function accessibleName(row, expanded) {
     var kind = row.kind === "repo" ? "repository" : row.kind;
-    var tail = row.kind === "repo" ? row.info : row.statusText;
+    var tail = row.kind === "repo" ? [row.statusText, row.info].filter(Boolean).join(", ") : row.statusText;
     var name = kind + ": " + row.title + (tail ? ", " + tail : "");
     if (["repo", "run", "job"].indexOf(row.kind) >= 0) name += expanded ? ", expanded" : ", collapsed";
     return name;
@@ -138,11 +138,11 @@ function rows(repos, expanded, details, filter, now, live) {
     var result = [];
     var query = filter.toLowerCase();
     // Failing first, then running (most first), then the rest in catalogue order; never by time, so rows do not jump.
-    repos.map(function(repo) {
+    repos.map(function(repo, i) {
         var active = repo.active === undefined ? (repo.runs || []).filter(function(run) { return run.status === "in_progress"; }).length : repo.active;
         var h = health(repo, now, active);
-        return {repo: repo, active: active, h: h, rank: h.status === "failure" ? 0 : active > 0 ? 1 : 2};
-    }).sort(function(a, b) { return a.rank - b.rank || (a.rank === 1 ? b.active - a.active : 0); }).forEach(function(entry) {
+        return {repo: repo, active: active, h: h, rank: h.status === "failure" ? 0 : active > 0 ? 1 : 2, i: i};
+    }).sort(function(a, b) { return a.rank - b.rank || (a.rank === 1 ? b.active - a.active : 0) || a.i - b.i; }).forEach(function(entry) {
         var repo = entry.repo, active = entry.active, h = entry.h;
         var repoMatch = (repo.repo + " " + (repo.description || "")).toLowerCase().indexOf(query) >= 0;
         var runs = (repo.runs || []).filter(function(run) {
@@ -152,7 +152,7 @@ function rows(repos, expanded, details, filter, now, live) {
         var repoKey = "repo:" + repo.repo;
         result.push({key: repoKey, parent: "", kind: "repo", depth: 0, title: repo.repo,
             subtitle: repo.error || repo.description || "", status: h.status, info: h.info,
-            statusText: label(h.status === "failure" ? "failure" : h.status === "success" ? "success" : h.status),
+            statusText: label(h.status),
             repo: repo.repo, url: "https://github.com/" + repo.repo + "/actions"});
         if (!expanded[repoKey]) return;
         // Runs past the first page of each unfinished status are counted, not fetched (#30).

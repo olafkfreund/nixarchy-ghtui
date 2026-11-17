@@ -65,7 +65,8 @@ assert.equal(model.emptyText({repoCount:0, error:'', discoveryComplete:true, fil
 assert.equal(model.emptyText({repoCount:2, error:'oops', discoveryComplete:true, filter:'ci'}), 'No match for "ci" · search covers loaded runs only');
 assert.deepEqual(JSON.parse(JSON.stringify(model.coverage([{summaryAt:'now'}, {runs:[{}]}, {summaryAt:0}, {summaryAt:'later'}]))),
   {loaded:2, total:4});
-assert.equal(model.accessibleName({kind:'repo', title:'o/r', info:'2 running'}, false), 'repository: o/r, 2 running, collapsed');
+assert.equal(model.accessibleName({kind:'repo', title:'o/r', statusText:'failed', info:'✕ 3h · 12 running · stale'}, false),
+  'repository: o/r, failed, ✕ 3h · 12 running · stale, collapsed');
 assert.equal(model.accessibleName({kind:'run', title:'CI', statusText:'running'}, true), 'run: CI, running, expanded');
 assert.equal(model.accessibleName({kind:'step', title:'Checkout', statusText:'passed'}, false), 'step: Checkout, passed');
 assert.equal(model.accessibleName({kind:'message', title:'Loading jobs…', statusText:''}, false), 'message: Loading jobs…');
@@ -328,6 +329,8 @@ console.log('Model: rows subtitle, statusText and message row passed');
   assert.deepEqual(one({repo: 'a/a', disabled: true}), ['neutral', 'disabled']);
   assert.deepEqual(one({repo: 'a/a', checked: undefined}), ['neutral', 'not checked']);
   assert.equal(model.rows([{repo: 'a/a', checked: 'x', last: last('failure')}], {}, {}, '', t)[0].statusText, 'failed');
+  assert.equal(model.rows([{repo: 'a/a', checked: 'x', last: last('success')}], {}, {}, '', t)[0].statusText, 'passed');
+  assert.equal(model.rows([{repo: 'a/a', checked: 'x'}], {}, {}, '', t)[0].statusText, 'neutral');
   for (const [seconds, expected] of [[59, '59s'], [60, '1m'], [3600, '1h'], [3 * 3600 + 40 * 60, '3h']])
     assert.equal(model.ago(new Date(t - seconds * 1000).toISOString(), t), expected);
   const order = (list, now = t) => Array.from(model.rows(list, {}, {}, '', now), row => row.title).join(' ');
@@ -336,6 +339,9 @@ console.log('Model: rows subtitle, statusText and message row passed');
     {repo: 'g/new'}];
   assert.equal(order(mix), 'c/fail e/fail f/failrun d/run3 b/run1 a/idle g/new');
   assert.equal(order(mix, t + 40 * min), order(mix), 'time never reorders');
+  vm.runInContext('var nativeSort = Array.prototype.sort; Array.prototype.sort = function(compare) { this.reverse(); return nativeSort.call(this, compare); }', model);
+  try { assert.equal(order(mix), 'c/fail e/fail f/failrun d/run3 b/run1 a/idle g/new', 'ties follow catalogue order even with unstable sort'); }
+  finally { vm.runInContext('Array.prototype.sort = nativeSort', model); }
   const vmPoll = {};
   vm.createContext(vmPoll);
   vm.runInContext(fs.readFileSync('Polling.js', 'utf8'), vmPoll);

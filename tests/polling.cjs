@@ -248,11 +248,12 @@ req=polling.next(ordered,700000); assert.equal(req.repo,'oldest/check','idle bac
 console.log('Polling: overload preserves budget/fairness; idle data ordered by freshness');
 
 const overlap=polling.create(); reopen(overlap,0); overlap.discover=false; overlap.catalogueComplete=true;
-overlap.repos=[{repo:'a/b',summaryAt:0}]; polling.select(overlap,'a/b','',{},0,true);
+overlap.repos=[{repo:'a/b',summaryAt:0,active:1}]; polling.select(overlap,'a/b','',{},0,true);
 req=polling.next(overlap,0); polling.complete(overlap,response(req,[{id:7,status:'in_progress'}],2),100);
 assert.equal(overlap.repos[0].checked,undefined);
 req=polling.next(overlap,1000); polling.complete(overlap,response(req,[{id:7,status:'in_progress'}]),1100);
 assert.equal(overlap.repos[0].active,1,'overlapping pages cannot double-count active workflows');
+assert.equal(overlap.repos[0].runs.length,1,'overlapping pages keep one copy of each run');
 console.log('Polling: overlapping pages deduplicate workflow IDs');
 
 // Setup errors and malformed data stop polling until a manual refresh; stale ones are ignored.
@@ -312,7 +313,7 @@ const act=selectedRepo([]);
 polling.ensure(act,'activity','a/b','','active',0); req=polling.next(act,0);
 assert.equal(req.kind,'activity');
 polling.complete(act,response(req,Array.from({length:100},(_,i)=>({id:i+1,status:'in_progress'})),0,250),100);
-assert.equal(act.repos[0].active,250); assert.equal(act.repos[0].hidden.in_progress,150);
+assert.equal(act.repos[0].active,250); assert.equal(Object.keys(act.repos[0].hidden).length,0);
 assert.equal(act.requests,1);
 
 const full=selectedRepo([]);
@@ -381,7 +382,23 @@ assert.equal(keep.repos[0].runs.length,11);
 const plain=selectedRepo([]);
 polling.ensure(plain,'activity','a/b','','active',0); req=polling.next(plain,0);
 polling.complete(plain,response(req,[{id:1,status:'in_progress'}]),100);
-assert.deepEqual(plain.repos[0].hidden || {},{}); assert.equal(plain.repos[0].active,1);
+assert.equal(Object.keys(plain.repos[0].hidden || {}).length,0); assert.equal(plain.repos[0].active,1);
+const summaryCounts=selectedRepo(Array.from({length:100},(_,i)=>({id:i+1,status:'in_progress'}))
+  .concat(Array.from({length:40},(_,i)=>({id:i+101,status:'queued'}))));
+summaryCounts.repos[0].summaryAt=100; summaryCounts.repos[0].active=250;
+summaryCounts.repos[0].hidden={in_progress:150,queued:0};
+const queuedPage=Array.from({length:30},(_,i)=>({id:i+300,status:'queued'}));
+polling.select(summaryCounts,'a/b','',{'repo:a/b':true},0,true);
+polling.activity(summaryCounts,summaryCounts.repos[0],queuedPage,10000,undefined,true);
+assert.equal(summaryCounts.repos[0].active,250,'selected summary running total survives activity');
+assert.deepEqual({...summaryCounts.repos[0].hidden},{in_progress:150,queued:0});
+assert.equal(summaryCounts.repos[0].runs.length,170,'selected activity does not drop held runs');
+assert.ok(polling.runFor(summaryCounts,'a/b',1));
+polling.select(summaryCounts,'other/repo','',{},11000,true);
+polling.activity(summaryCounts,summaryCounts.repos[0],queuedPage,20000,undefined,true);
+assert.equal(summaryCounts.repos[0].active,0,'non-selected activity uses its page count');
+assert.equal(Object.keys(summaryCounts.repos[0].hidden).length,0,'non-selected activity clears stale summary counts');
+assert.equal(summaryCounts.repos[0].runs.length,30,'non-selected activity drops missing unfinished runs');
 console.log('Polling: one page per unfinished status, hidden counts and kept runs');
 
 // The latest completed default-branch run is the repository's last result.
@@ -443,6 +460,12 @@ for (const conclusion of ['failure','success']) {
   polling.complete(lookedUp,response(req,result(7,'main',conclusion,conclusion==='failure'?'2026-01-01T00:00:00Z':'2026-01-02T00:00:00Z')),conclusion==='failure'?100:1100);
   assert.equal(lookedUp.repos[0].last.conclusion,conclusion,'single-run lookup updates the result');
 }
+lookedUp.repos[0].last.confirmedAt=1100;
+polling.ensure(lookedUp,'run','a/b',6,'interactive',2000);
+req=polling.next(lookedUp,2000); assert.equal(req.kind,'run');
+polling.complete(lookedUp,response(req,result(6,'main','failure')),2100);
+assert.equal(lookedUp.repos[0].last.id,7);
+assert.equal(lookedUp.repos[0].last.confirmedAt,1100,'older lookup does not confirm newest result');
 
 const summaryLast=selectedRepo([]); summaryLast.repos[0].default_branch='main';
 summaryLast.repos[0].last={id:0,branch:'main',conclusion:'failure',confirmedAt:5};
