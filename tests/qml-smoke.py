@@ -629,25 +629,32 @@ def start_session(home, path, deadline):
         raise
 
 
-def check_layout(state, fail):
+def layout_error(state):
     lay, rows = state['layout'], state['rows']
     if rows <= 0:
-        return
+        return None
     if not (lay['listWidth'] > 0 and lay['listHeight'] > 0):
-        fail('layout: empty (zero-size) list')
+        return 'layout: empty (zero-size) list'
     if lay['count'] != rows:
-        fail(f"layout: list count {lay['count']} != rows {rows}")
+        return f"layout: list count {lay['count']} != rows {rows}"
     mine = [r for r in lay['rows'] if r['key'] == state['selected']]
     if not mine:
-        fail('layout: selected row has no delegate')
+        return 'layout: selected row has no delegate'
     r = mine[0]
     if not (r['w'] > 0 and r['h'] > 0 and r['x'] >= 0 and r['x'] + r['w'] <= lay['listWidth']
             and r['y'] >= -0.5 and r['y'] + r['h'] <= lay['listHeight'] + 0.5):
-        fail(f'layout: selected row outside the list: {r}')
+        return f'layout: selected row outside the list: {r}'
     ordered = sorted(lay['rows'], key=lambda row: row['i'])
     for a, b in zip(ordered, ordered[1:]):
         if a['y'] + a['h'] > b['y'] + 0.5:
-            fail(f'layout: rows overlap: {a} {b}')
+            return f'layout: rows overlap: {a} {b}'
+    return None
+
+
+def check_layout(state, fail):
+    error = layout_error(state)
+    if error:
+        fail(error)
 
 
 def K(*names):
@@ -796,12 +803,12 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     ('Escape with filter', K('Escape'), lambda p, s: s['filter'] == '' and s['opened'] and s['rows'] > 2, 500),
                     ('Ctrl+=', CTRL('equal'), lambda p, s: s['textStep'] == 1, 500),
                     ('Ctrl+0', CTRL('0'), lambda p, s: s['textStep'] == 0, 500),
-                    ('g', K('g'), lambda p, s: s['cursor'] == 0, 300),
+                    ('g', K('End') + ['-s', '300'] + K('g'), lambda p, s: s['cursor'] == 0, 300),
                     ('walk j', K(*['j'] * 35), None, 150),
                     ('Home', K('Home'), lambda p, s: s['cursor'] == 0, 400),
                     ('End', K('End'), lambda p, s: s['cursor'] == s['rows'] - 1
                      and s['layout']['contentHeight'] > s['layout']['listHeight'] and s['scrollY'] > 0, 400),
-                    ('G', K('Home', 'G'), lambda p, s: s['cursor'] == s['rows'] - 1, 400),
+                    ('G', K('Home') + ['-s', '300'] + K('G'), lambda p, s: s['cursor'] == s['rows'] - 1, 400),
                     ('j to run', K('g', 'j'), lambda p, s: s['cursor'] == 1 and s['selected'].startswith('one/repo:'), 400),
                     ('Return on run', K('Return'), lambda p, s: s['rows'] > p['rows'] and s['selected'] == p['selected'], 4500),
                     ('Escape closes', K('Escape'), lambda p, s: not s['opened'], 2000),
@@ -840,6 +847,14 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                             continue
                         prev = wait_state(f'key {label}', lambda s, p=prev, f=pred: f(p, s), prev['seq'],
                                           timeout=times[label] - (time.time() - start) + 6)
+                        if label.startswith('Ctrl+') and layout_error(prev):
+                            # A size change relayouts on the next frame (Qt.callLater); judge the settled state.
+                            step, first = prev['textStep'], layout_error(prev)
+                            try:
+                                prev = wait_state(f'key {label}: settled layout', lambda s: s['textStep'] == step
+                                                  and not layout_error(s), prev['seq'], timeout=2)
+                            except AssertionError:
+                                fail(first)
                         check_layout(prev, fail)
                         print(f'{scenario}: key {label}')
                         if label == 'Return on run':
@@ -916,6 +931,7 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                         time.sleep(0.05)
                     else:
                         fail(f'helper {pid} still running after close')
+                    pid_file.unlink()  # dead: never signal a pid that may be reused
                     if settle(states, last, 1.5)['requests'] != shut['requests']:
                         fail('closed panel started requests')
                     print('fresh: failure: close while a request runs')
