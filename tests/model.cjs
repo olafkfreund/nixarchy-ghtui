@@ -68,6 +68,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(model.coverage([{summaryAt:'now'}, {r
 assert.equal(model.accessibleName({kind:'repo', title:'o/r', statusText:'failed', info:'✕ 3h · 12 running · stale'}, false),
   'repository: o/r, failed, ✕ 3h · 12 running · stale, collapsed');
 assert.equal(model.accessibleName({kind:'run', title:'CI', statusText:'running'}, true), 'run: CI, running, expanded');
+assert.equal(model.accessibleName({kind:'run', title:'CI', statusText:'running', info:'1m 0s · watching'}, true), 'run: CI, running, watching, expanded');
 assert.equal(model.accessibleName({kind:'step', title:'Checkout', statusText:'passed'}, false), 'step: Checkout, passed');
 assert.equal(model.accessibleName({kind:'message', title:'Loading jobs…', statusText:''}, false), 'message: Loading jobs…');
 assert.equal(model.accessibleName({kind:'more', title:'More runs', statusText:''}, false), 'more: More runs');
@@ -422,6 +423,35 @@ console.log('Model: view guard passed');
   assert.equal(model.clampStep(step - 1), step);
 }
 console.log('Model: text size passed');
+// #44 step 9: watched run marker and notification text.
+{
+  const run = {id: 7, status: 'in_progress', name: 'Build'};
+  const repo = [{repo: 'o/r', runs: [run]}], open = {'repo:o/r': true};
+  const row = (watches, item = run) => model.rows([{...repo[0], runs: [item]}], open, {}, '', 0, '', watches)[1];
+  assert.equal(row().info, '');
+  assert.equal(row({}).info, '');
+  assert.equal(row({'o/r:7': true}).info, 'watching');
+  const timed = {...run, started_at: '2026-01-01T00:00:00Z'};
+  const at = Date.parse('2026-01-01T00:01:00Z');
+  assert.equal(model.rows([{repo: 'o/r', runs: [timed]}], open, {}, '', at, '', {'o/r:7': true})[1].info, '1m 0s · watching');
+  assert.equal(model.rows([{repo: 'o/r', runs: [timed]}], open, {}, '', at)[1].info, '1m 0s');
+
+  const words = {success:'succeeded', failure:'failed', cancelled:'cancelled', timed_out:'timed out',
+    startup_failure:'failed to start', skipped:'skipped', neutral:'finished', action_required:'finished', stale:'finished',
+    anything_else:'finished', constructor:'finished'};
+  for (const [conclusion, title] of Object.entries(words))
+    assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'done', repo:'o/r', name:'Build', conclusion}))),
+      {title, body:'o/r · Build'}, conclusion);
+  assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'done', repo:'o/r', name:'R&D <build>', conclusion:'success'}))),
+    {title:'succeeded', body:'o/r · R D  build '});
+  assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'done', repo:'o/r', name:'x'.repeat(81), conclusion:'success'}))),
+    {title:'succeeded', body:'o/r · ' + 'x'.repeat(80)});
+  assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'paused'}))),
+    {title:'Watching paused', body:'Run gh auth login, then open the panel'});
+  assert.deepEqual(JSON.parse(JSON.stringify(model.notice({kind:'lost', repo:'o/r', name:'R&D build'}))),
+    {title:'Watch stopped', body:'o/r · R D build GitHub no longer shows this run.'});
+}
+console.log('Model: watched rows and notices passed');
 
 // Exercise the QML key handler as JavaScript without a display.
 {
@@ -429,13 +459,14 @@ console.log('Model: text size passed');
     .split('\n                }\n\n                Column {')[0];
   const calls = [];
   const root = {confirm:null, textKey:event => { if (event.key === 61 && event.modifiers === 1) { calls.push('zoom'); return true; } return false; },
-    copyLink:() => calls.push('copy'), loadMore:() => calls.push('more'), answer:yes => calls.push(yes ? 'yes' : 'no')};
-  const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_Y:89, Key_N:78, Key_Escape:27};
+    copyLink:() => calls.push('copy'), toggleWatch:() => calls.push('watch'), loadMore:() => calls.push('more'), answer:yes => calls.push(yes ? 'yes' : 'no')};
+  const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_W:87, Key_Y:89, Key_N:78, Key_Escape:27};
   const handler = vm.runInNewContext('(function(event) {' + body + '\n})',
     {root, Qt, Quickshell:{execDetached:() => calls.push('keys')}});
   const press = (key, text, modifiers = 0, isAutoRepeat = false) => { const event = {key, text, modifiers, isAutoRepeat, accepted:false}; handler(event); return event.accepted; };
   press(Qt.Key_Y, 'y', 0, true);
   press(0, '?', 0, true);
+  press(Qt.Key_W, 'w', 0, true);
   press(77, 'm', 0, true);
   assert.deepEqual(calls, []);
   assert.equal(press(77, 'm'), true);
@@ -446,16 +477,44 @@ console.log('Model: text size passed');
   assert.deepEqual(calls, ['more', 'zoom']);
   assert.equal(press(77, 'M'), false, 'Shift+M passes through');
   press(Qt.Key_Y, 'y');
-  assert.deepEqual(calls, ['more', 'zoom', 'copy']);
+  press(Qt.Key_W, 'w');
+  assert.deepEqual(calls, ['more', 'zoom', 'copy', 'watch']);
+  const ctrlWatch = {key:Qt.Key_W, text:'w', modifiers:Qt.ControlModifier, isAutoRepeat:false};
+  handler(ctrlWatch);
+  assert.equal(ctrlWatch.accepted,false);
   root.confirm = {text:'confirm'};
+  press(Qt.Key_W, 'w');
   assert.equal(press(77, 'm'), true);
   press(Qt.Key_Y, 'y', Qt.ControlModifier);
   press(Qt.Key_Y, 'y', 0, true);
-  assert.deepEqual(calls, ['more', 'zoom', 'copy']);
+  assert.deepEqual(calls, ['more', 'zoom', 'copy', 'watch']);
   press(Qt.Key_Y, 'y');
   press(Qt.Key_N, 'n');
   press(Qt.Key_Escape, '');
-  assert.deepEqual(calls, ['more', 'zoom', 'copy', 'yes', 'no', 'no']);
+  assert.deepEqual(calls, ['more', 'zoom', 'copy', 'watch', 'yes', 'no', 'no']);
+}
+
+// Exercise the panel lifecycle and fixed watch messages without a display.
+{
+  const qml=fs.readFileSync('ActionsPanel.qml','utf8');
+  const closeBody=qml.split('    function close() {')[1].split('\n    }\n    function toggle()')[0];
+  const state={opened:true, polling:{watches:{'a/b:1':{}}}, requestProc:{running:true},
+    workerBusy:true, requestInfo:{kind:'run',repo:'a/b',run:'1'}, confirm:{},
+    Polling:{close:() => {}}, root:null};
+  vm.runInNewContext('(function(){'+closeBody+'\n})',state)();
+  assert.equal(state.requestProc.running,false,'closing stops a watched run request');
+  const watchBody=qml.split('    function toggleWatch() {')[1].split('\n    }\n    function copyLink()')[0];
+  const notices=[];
+  const watchState={current:{kind:'run',repo:'a/b',run:'1'}, polling:{}, Date:{now:()=>0},
+    Polling:{runFor:()=>({status:'in_progress',name:'Build'}),watch:()=> 'on'},
+    Model:{notice:()=>({title:'succeeded'})}, showNotice:t=>notices.push(t), adopt:()=>{}, pump:()=>{}};
+  const toggle=vm.runInNewContext('(function(){'+watchBody+'\n})',watchState);
+  toggle();
+  watchState.Polling.watch=()=> 'off'; toggle();
+  watchState.Polling.watch=()=> 'full'; toggle();
+  assert.deepEqual(notices,['Watching this run; lost if the shell restarts','Stopped watching','At most 5 runs can be watched']);
+  assert.match(qml,/onExited: \{ root\.noticeBusy = false; Qt\.callLater\(root\.drainNotices\) \}/);
+  assert.match(qml,/\["notify-send", "--app-name=GitHub Actions", "--", m\.title, m\.body\]/);
 }
 
 {
