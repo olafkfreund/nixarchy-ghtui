@@ -14,10 +14,13 @@ function state(item) {
     return item.awaitingFinal ? "awaiting final status" : item.lookupError ? "unavailable" : item.conclusion || item.status || "unknown";
 }
 
-var failedStatuses = ["failure", "timed_out", "startup_failure"];
+var FAILED = ["failure", "timed_out", "startup_failure"];
+// ponytail: 3 * Polling TIMING.idle, kept equal by tests/model.cjs.
+var STALE = 1800000;
+
 function icon(status) {
     if (status === "success") return "✓";
-    if (failedStatuses.indexOf(status) >= 0) return "✕";
+    if (FAILED.indexOf(status) >= 0) return "✕";
     if (status === "in_progress") return "◷";
     if (status === "cancelled") return "⊘";
     if (["skipped", "neutral"].indexOf(status) >= 0) return "−";
@@ -55,6 +58,28 @@ function age(run, now) {
     if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
     if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
     return Math.floor(seconds / 86400) + "d ago";
+}
+
+// Compact age of a result: Ns, Nm or Nh, floored.
+function ago(at, now) {
+    var start = Date.parse(at || "");
+    if (!isFinite(start)) return "";
+    var seconds = Math.max(0, Math.floor((now - start) / 1000));
+    return seconds < 60 ? seconds + "s" : seconds < 3600 ? Math.floor(seconds / 60) + "m" : Math.floor(seconds / 3600) + "h";
+}
+
+// Repository row status and text from its last default-branch result (#43).
+function health(repo, now, active) {
+    if (repo.archived) return {status: "neutral", info: "archived"};
+    if (repo.disabled) return {status: "neutral", info: "disabled"};
+    if (repo.error) return {status: "error", info: "unavailable"};
+    if (!repo.checked && !repo.runs) return {status: "neutral", info: "not checked"};
+    var last = repo.last, running = active + " running";
+    if (!last) return {status: "neutral", info: "no result · " + running};
+    var failed = FAILED.indexOf(last.conclusion) >= 0, stale = !(now - last.confirmedAt < STALE);
+    var glyph = failed ? "✕" : last.conclusion === "success" ? "✓" : "⊘";
+    return {status: failed ? "failure" : last.conclusion === "success" && !stale ? "success" : "neutral",
+        info: [glyph + " " + ago(last.at, now), running, stale ? "stale" : ""].filter(Boolean).join(" · ")};
 }
 
 function cap(text, n) {
@@ -102,7 +127,7 @@ function coverage(repos) {
 
 function accessibleName(row, expanded) {
     var kind = row.kind === "repo" ? "repository" : row.kind;
-    var tail = row.kind === "repo" ? row.info : row.statusText;
+    var tail = row.kind === "repo" ? [row.statusText, row.info].filter(Boolean).join(", ") : row.statusText;
     var name = kind + ": " + row.title + (tail ? ", " + tail : "");
     if (["repo", "run", "job"].indexOf(row.kind) >= 0) name += expanded ? ", expanded" : ", collapsed";
     return name;
@@ -112,18 +137,22 @@ function accessibleName(row, expanded) {
 function rows(repos, expanded, details, filter, now, live) {
     var result = [];
     var query = filter.toLowerCase();
-    repos.slice().sort(function(a, b) { return (b.active || 0) - (a.active || 0); }).forEach(function(repo) {
+    // Failing first, then running (most first), then the rest in catalogue order; never by time, so rows do not jump.
+    repos.map(function(repo, i) {
+        var active = repo.active === undefined ? (repo.runs || []).filter(function(run) { return run.status === "in_progress"; }).length : repo.active;
+        var h = health(repo, now, active);
+        return {repo: repo, active: active, h: h, rank: h.status === "failure" ? 0 : active > 0 ? 1 : 2, i: i};
+    }).sort(function(a, b) { return a.rank - b.rank || (a.rank === 1 ? b.active - a.active : 0) || a.i - b.i; }).forEach(function(entry) {
+        var repo = entry.repo, active = entry.active, h = entry.h;
         var repoMatch = (repo.repo + " " + (repo.description || "")).toLowerCase().indexOf(query) >= 0;
         var runs = (repo.runs || []).filter(function(run) {
             return repoMatch || [run.name, run.display_title, run.head_branch, run.event, run.actor, state(run), label(state(run))].join(" ").toLowerCase().indexOf(query) >= 0;
         });
         if (query && !repoMatch && !runs.length) return;
-        var active = repo.active === undefined ? (repo.runs || []).filter(function(run) { return run.status === "in_progress"; }).length : repo.active;
         var repoKey = "repo:" + repo.repo;
         result.push({key: repoKey, parent: "", kind: "repo", depth: 0, title: repo.repo,
-            subtitle: repo.error || repo.description || "", status: repo.error ? "error" : (active ? "in_progress" : "neutral"),
-            info: repo.archived ? "archived" : repo.disabled ? "disabled" : repo.error ? "unavailable" : repo.checked || repo.runs ? active + " running" : "not checked",
-            statusText: label(repo.error ? "error" : (active ? "in_progress" : "neutral")),
+            subtitle: repo.error || repo.description || "", status: h.status, info: h.info,
+            statusText: label(h.status),
             repo: repo.repo, url: "https://github.com/" + repo.repo + "/actions"});
         if (!expanded[repoKey]) return;
         // Runs past the first page of each unfinished status are counted, not fetched (#30).
@@ -177,11 +206,11 @@ function logTarget(row, details, runs) {
         var run = runs.find(function(item) { return String(item.id) === row.run; });
         if (!run || run.status !== "completed") return {error: "Logs are available when the run finishes"};
         return {repo: row.repo, run: row.run, job: row.job,
-            mode: failedStatuses.indexOf(job.conclusion) >= 0 ? "failed" : "full"};
+            mode: FAILED.indexOf(job.conclusion) >= 0 ? "failed" : "full"};
     }
     if (row.kind === "run") {
         var run = runs.find(function(item) { return String(item.id) === row.run; });
-        return run && run.status === "completed" && failedStatuses.indexOf(run.conclusion) >= 0
+        return run && run.status === "completed" && FAILED.indexOf(run.conclusion) >= 0
             ? {repo: row.repo, run: row.run, mode: "failed"} : {error: "Select a job to read its log"};
     }
     return null;
