@@ -182,7 +182,7 @@ Item {
     }
     function loadMore() {
         if (!current || !current.repo) return
-        Polling.more(polling, current.repo, Date.now())
+        if (!Polling.more(polling, current.repo, Date.now())) showNotice("Refreshing; press m again in a moment")
         adopt()
         pump()
     }
@@ -395,7 +395,7 @@ Item {
                         return
                     }
                     event.accepted = true
-                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?")) return
+                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?" || event.text === "m")) return
                     if (event.key === Qt.Key_Escape) {
                         if (root.filterText) root.filterText = ""
                         else root.close()

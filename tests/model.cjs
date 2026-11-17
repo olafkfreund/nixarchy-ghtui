@@ -298,6 +298,7 @@ console.log('Model: rows subtitle, statusText and message row passed');
   assert.deepEqual(runIds('Branch:MAIN actor:AL is:failed'), ['1']);
   assert.deepEqual(runIds('actor:bob'), ['2']);
   assert.deepEqual(runIds('is:failed'), ['1']);
+  assert.deepEqual(runIds('IS:FAILED'), ['1']);
   assert.deepEqual(runIds('is:failed branch:feature'), [], 'success is not failed');
   assert.deepEqual(Array.from(view('actor:alice', {...repo, runs: [{...failed, actor_login: 'wrong'}]})
     .filter(row => row.kind === 'run'), row => row.run), ['1'], 'actor token uses the flattened actor from #42');
@@ -338,24 +339,46 @@ console.log('Model: search tokens and fetched-count row passed');
   const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
     .split('\n                }\n\n                Column {')[0];
   const calls = [];
-  const root = {confirm:null, copyLink:() => calls.push('copy'), answer:yes => calls.push(yes ? 'yes' : 'no')};
+  const root = {confirm:null, copyLink:() => calls.push('copy'), loadMore:() => calls.push('more'), answer:yes => calls.push(yes ? 'yes' : 'no')};
   const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_Y:89, Key_N:78, Key_Escape:27};
   const handler = vm.runInNewContext('(function(event) {' + body + '\n})',
     {root, Qt, Quickshell:{execDetached:() => calls.push('keys')}});
-  const press = (key, text, modifiers = 0, isAutoRepeat = false) => handler({key, text, modifiers, isAutoRepeat});
+  const press = (key, text, modifiers = 0, isAutoRepeat = false) => { const event = {key, text, modifiers, isAutoRepeat, accepted:false}; handler(event); return event.accepted; };
   press(Qt.Key_Y, 'y', 0, true);
   press(0, '?', 0, true);
+  press(77, 'm', 0, true);
   assert.deepEqual(calls, []);
+  assert.equal(press(77, 'm'), true);
+  assert.deepEqual(calls, ['more']);
+  assert.equal(press(77, 'm', Qt.ControlModifier), false);
+  assert.deepEqual(calls, ['more']);
+  assert.equal(press(77, 'M'), false, 'Shift+M passes through');
   press(Qt.Key_Y, 'y');
-  assert.deepEqual(calls, ['copy']);
+  assert.deepEqual(calls, ['more', 'copy']);
   root.confirm = {text:'confirm'};
+  assert.equal(press(77, 'm'), true);
   press(Qt.Key_Y, 'y', Qt.ControlModifier);
   press(Qt.Key_Y, 'y', 0, true);
-  assert.deepEqual(calls, ['copy']);
+  assert.deepEqual(calls, ['more', 'copy']);
   press(Qt.Key_Y, 'y');
   press(Qt.Key_N, 'n');
   press(Qt.Key_Escape, '');
-  assert.deepEqual(calls, ['copy', 'yes', 'no', 'no']);
+  assert.deepEqual(calls, ['more', 'copy', 'yes', 'no', 'no']);
+}
+
+{
+  const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('    function loadMore() {')[1]
+    .split('\n    function pump() {')[0];
+  const calls = [];
+  const context = {current:{repo:'a/b'}, polling:{}, Date, Polling:{more:() => false},
+    showNotice:text => calls.push(text), adopt:() => calls.push('adopt'), pump:() => calls.push('pump')};
+  const loadMore = vm.runInNewContext('(function() {' + body + ')', context);
+  loadMore();
+  assert.deepEqual(calls, ['Refreshing; press m again in a moment', 'adopt', 'pump']);
+  calls.length = 0;
+  context.Polling.more = () => true;
+  loadMore();
+  assert.deepEqual(calls, ['adopt', 'pump']);
 }
 
 // #43: repository health row and sort.

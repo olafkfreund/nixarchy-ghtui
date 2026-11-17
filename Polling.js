@@ -40,7 +40,11 @@ function close(s) {
     s.opened = false; s.generation++; s.tasks = {}; s.flight = null;
 }
 function select(s, repo, run, expanded, now, immediate) {
-    if (s.selected !== repo) s.stableAt = now + (immediate ? 0 : TIMING.settle);
+    if (s.selected !== repo) {
+        var previous=repoFor(s,s.selected);
+        if (previous) { delete previous.recentLimit; delete previous.recentFetched; }
+        s.stableAt = now + (immediate ? 0 : TIMING.settle);
+    }
     else if (immediate) s.stableAt = now;
     s.selected = repo || ""; s.inspected = String(run || ""); s.expanded = expanded || {};
 }
@@ -55,8 +59,10 @@ function manual(s, now, catalogue) {
     var r = repoFor(s, s.selected);
     if (r) {
         r.blocked = false; r.error = ""; s.stableAt = now;
-        var summary=ensure(s, "summary", r.repo, "", "interactive", now);
-        summary.due=Math.min(summary.due,now);
+        if (!s.tasks[key("more",r.repo)]) {
+            var summary=ensure(s, "summary", r.repo, "", "interactive", now);
+            summary.due=Math.min(summary.due,now);
+        }
         if (s.inspected && s.expanded[r.repo + ":" + s.inspected]) {
             if (s.details[r.repo+":"+s.inspected]) s.details[r.repo+":"+s.inspected].unavailable=false;
             var jobs=ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
@@ -66,9 +72,10 @@ function manual(s, now, catalogue) {
 }
 function more(s, repo, now) {
     var r=repoFor(s,repo);
-    if (!r || s.tasks[key("more",repo)] || s.tasks[key("summary",repo)]) return;
+    if (!r || s.tasks[key("more",repo)] || s.tasks[key("summary",repo)]) return false;
     r.recentLimit=Math.min(100,(r.recentLimit || 10)+30);
     ensure(s,"more",repo,"","interactive",now);
+    return true;
 }
 function touch(s, repo, run, now) {
     var t=ensure(s,"run",repo,run,"interactive",now);
@@ -297,6 +304,7 @@ function complete(s,reply,now) {
     else if (r && t.kind==="more") {
         lastResult(r,data,now,data,r.recentLimit || 10);
         mergeRuns(s,r,data);
+        prune(s,r);
         r.recentFetched=data.length;
     }
     if (reply.nextPage) { t.page=reply.nextPage; t.due=now; t.order=++s.order; return true; }

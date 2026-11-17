@@ -490,20 +490,19 @@ const loads=selectedRepo([{id:1,status:'queued',followupAt:100000}]);
 const loaded=loads.repos[0];
 Object.assign(loaded,{default_branch:'main',summaryAt:0,activityAt:60000,hidden:{queued:4}});
 polling.select(loads,'a/b','',{},0,true);
-polling.more(loads,'missing/repo',0);
+assert.equal(polling.more(loads,'missing/repo',0),false);
 assert.equal(loaded.recentLimit,undefined);
-polling.more(loads,'a/b',60000);
-polling.more(loads,'a/b',60000);
+assert.equal(polling.more(loads,'a/b',60000),true);
+assert.equal(polling.more(loads,'a/b',60000),false);
 assert.equal(loaded.recentLimit,40);
 assert.deepEqual(Object.keys(loads.tasks),[polling.key('more','a/b')]);
+polling.manual(loads,60000,false);
+assert.deepEqual(Object.keys(loads.tasks),[polling.key('more','a/b')],'r while m is queued does not create a summary');
 let moreReq=polling.next(loads,60000);
 assert.equal(moreReq.kind,'more'); assert.equal(moreReq.status,'recent'); assert.equal(moreReq.limit,40);
 assert.equal(loads.tasks[polling.key('summary','a/b')],undefined,'due summary waits for more');
-polling.more(loads,'a/b',60100);
+assert.equal(polling.more(loads,'a/b',60100),false);
 assert.equal(loaded.recentLimit,40,'in-flight more cannot raise limit');
-polling.select(loads,'other/repo','',{},60100,true); polling.seed(loads,60100);
-polling.select(loads,'a/b','',{},60100,true); polling.seed(loads,60100);
-assert.equal(loads.tasks[polling.key('more','a/b')].key,polling.key('more','a/b'),'selection changes retain one more task');
 const firstMore=[...Array.from({length:30},(_,i)=>result(100-i,'feature')),result(70,'main','failure')];
 polling.complete(loads,response(moreReq,firstMore),60100);
 assert.equal(loaded.last.id,70); assert.equal(loaded.last.conclusion,'failure');
@@ -532,12 +531,47 @@ for (const [limit,now] of [[70,67000],[100,68000],[100,69000]]) {
 }
 assert.equal(loaded.runs.filter(run=>run.id===70).length,1,'more after summary merges by id');
 
+const resetLimit=selectedRepo([]);
+resetLimit.repos.push({repo:'c/d',runs:[]});
+Object.assign(resetLimit.repos[0],{summaryAt:0,activityAt:60000});
+polling.select(resetLimit,'a/b','',{},0,true);
+for (const [limit,at] of [[40,1000],[70,2000]]) {
+  assert.equal(polling.more(resetLimit,'a/b',at),true);
+  const request=polling.next(resetLimit,at); assert.equal(request.limit,limit);
+  polling.complete(resetLimit,response(request,[]),at+100);
+}
+polling.select(resetLimit,'c/d','',{},3000,true);
+assert.equal(resetLimit.repos[0].recentLimit,undefined);
+assert.equal(resetLimit.repos[0].recentFetched,undefined);
+polling.select(resetLimit,'a/b','',{},4000,true);
+req=polling.next(resetLimit,60000); assert.equal(req.kind,'summary');
+assert.equal(req.status,'recent'); assert.equal(req.limit,undefined,'returning to a repository fetches ten runs');
+
+const orderedMore=selectedRepo(Array.from({length:40},(_,i)=>result(100-i,'feature'))), orderedRepo=orderedMore.repos[0];
+Object.assign(orderedRepo,{default_branch:'main',summaryAt:0,activityAt:1000});
+polling.select(orderedMore,'a/b','',{},0,true);
+assert.equal(polling.more(orderedMore,'a/b',1000),true);
+req=polling.next(orderedMore,1000);
+polling.complete(orderedMore,response(req,[result(1,'main','failure')]),1100);
+assert.equal(orderedRepo.last.id,1,'more records the last result before trimming');
+assert.ok(polling.runFor(orderedMore,'a/b',1),'the last result survives the recent cap');
+
+const morePrune=selectedRepo([result(1)]);
+Object.assign(morePrune.repos[0],{summaryAt:0,activityAt:1000});
+morePrune.details['a/b:1']={jobs:[]};
+polling.select(morePrune,'a/b','',{},0,true);
+assert.equal(polling.more(morePrune,'a/b',1000),true);
+req=polling.next(morePrune,1000);
+polling.complete(morePrune,response(req,Array.from({length:40},(_,i)=>result(i+2))),1100);
+assert.equal(polling.runFor(morePrune,'a/b',1),undefined);
+assert.equal(morePrune.details['a/b:1'],undefined,'more removes details for trimmed runs');
+
 const defaultSummary=selectedRepo([]); polling.select(defaultSummary,'a/b','',{},0,true);
 req=polling.next(defaultSummary,0); assert.equal(req.status,'recent');
 assert.equal(Object.hasOwn(req,'limit'),false,'default summary omits limit');
 const blockedMore=selectedRepo([]); polling.select(blockedMore,'a/b','',{},0,true);
 req=polling.next(blockedMore,0); assert.equal(req.kind,'summary');
-polling.more(blockedMore,'a/b',100);
+assert.equal(polling.more(blockedMore,'a/b',100),false);
 assert.equal(blockedMore.repos[0].recentLimit,undefined);
 assert.equal(blockedMore.tasks[polling.key('more','a/b')],undefined);
 
