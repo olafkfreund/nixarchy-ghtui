@@ -616,3 +616,9 @@ These override any step text they contradict. Merge order: #41 -> #42 -> #43(a) 
 - Deviation 2: **#46 waits for #47.** Step 1 confirms #47 is merged; step 6 uses #47's real key events for `i` and Esc. `toggleDetail()` and `escape()` may still exist, but the test drives them by key presses.
 - Deviations 3, 4, 6, 7: accepted as written.
 - Deviation 5: keep #41's `network` type for an invalid login, and test it.
+
+## Deviations during implementation (2026-11-17)
+
+- **Step 5: `escape(searching)` is named `handleEscape(searching)`.** QML refuses `escape` as a method name ("Illegal method name": it clashes with the global JS `escape()`); the first smoke run failed to load the panel with that error.
+- **Step 5: sizes follow the text-size keys (#48, merged after this plan).** `rowMin` is `Math.max(sp(40), fBody + sp(12))`, the same formula the row delegate uses now; the pane line height uses `root.fCaption` and the label width `root.sp(90)`, so the pane scales with Ctrl+=/Ctrl+- like the rest of the panel.
+- **Step 5: the title keeps #44's "N watched" suffix** after the account part, and `layout()` (the #47 test hook) also reports the pane's and the footer's position relative to the list, so the key run can check that list, pane and footer do not overlap.

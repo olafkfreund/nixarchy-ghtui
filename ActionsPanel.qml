@@ -69,6 +69,15 @@ Item {
     function showNotice(text) { notice = text; noticeUntil = Date.now() + 3000 }
     readonly property int checkedCount: repos.filter(function(repo) { return !!repo.checked || repo.archived || repo.disabled }).length
     readonly property var current: entries[cursor] || null
+    // #46: the run detail pane and the verified gh login in the title.
+    property bool detail: false
+    property string account: ""
+    // Same as a row without a subtitle, so it follows the text size keys (#48).
+    readonly property real rowMin: Math.max(sp(40), fBody + sp(12))
+    readonly property var detailRun: current && ["run", "job", "step"].indexOf(current.kind) >= 0 ? Polling.runFor(polling, current.repo, current.run) : null
+    readonly property var detailRows: detail ? Model.detail(detailRun, now) : []
+    readonly property string titleText: "GitHub Actions  ·  " + repos.length + (repos.length === 1 ? " repository" : " repositories") + (account ? "  ·  " + account + "@github.com" : "") + (watching ? "  ·  " + Object.keys(polling.watches).length + " watched" : "")
+    readonly property string detailAccessibleName: "Run details: " + detailRows.map(function(r) { return (r.label ? r.label + " " : "") + r.value }).join(", ")
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
     onFilterTextChanged: {
         rebuild(filterText !== "")
@@ -83,7 +92,7 @@ Item {
         targetScreen = null
         for (var i = 0; i < Quickshell.screens.length; i++)
             if (monitor && Quickshell.screens[i].name === monitor.name) targetScreen = Quickshell.screens[i]
-        if (!opened) Polling.open(polling, Date.now())
+        if (!opened) { Polling.open(polling, Date.now()); account = "" }
         opened = true
         rebuild()
         selectionChanged(true)
@@ -96,6 +105,7 @@ Item {
         Polling.close(polling)
         requestProc.running = false
         confirm = null
+        detail = false
     }
     function toggle() { opened ? close() : open() }
     function status() {
@@ -111,7 +121,8 @@ Item {
     function layout() {  // test hook: geometry of the delegates that exist
         var rows = []
         for (var i = 0; i < list.count; i++) { var item = list.itemAtIndex(i); if (item) rows.push({i: i, key: entries[i].key, x: item.x, y: item.y - list.contentY, w: item.width, h: item.height}) }
-        return JSON.stringify({listWidth: list.width, listHeight: list.height, contentHeight: list.contentHeight, count: list.count, rows: rows})
+        return JSON.stringify({listWidth: list.width, listHeight: list.height, contentHeight: list.contentHeight, count: list.count, rows: rows,
+            pane: pane.visible ? {y: pane.y - list.y, h: pane.height} : null, footerY: footer.y - list.y})
     }
 
     function rebuild(resetSelection) {
@@ -161,6 +172,8 @@ Item {
     }
     function itemAt(index) { return list.itemAtIndex(index) }
     readonly property alias listView: list
+    readonly property alias detailPane: pane
+    readonly property alias footerItem: footer
     function enter() {
         var row = current
         if (!row || ["repo", "run", "job"].indexOf(row.kind) < 0) return
@@ -191,6 +204,14 @@ Item {
         selectionChanged(true)
         pump()
     }
+    function toggleDetail() { detail = !detail }
+    // Esc closes run details first; then the search field clears and returns to the list, else the filter clears, else the popup closes.
+    function handleEscape(searching) {
+        if (detail) detail = false
+        else if (searching) { filterText = ""; keys.forceActiveFocus() }
+        else if (filterText) filterText = ""
+        else close()
+    }
     function selectionChanged(immediate) {
         if (!polling) return
         Polling.select(polling, current ? current.repo : "", current ? current.run : "", expanded, Date.now(), immediate)
@@ -198,6 +219,7 @@ Item {
     }
     function adopt() {
         repos = polling.repos.slice()
+        account = polling.accountVerified && polling.account ? polling.account : ""
         details = Object.assign({}, polling.details)
         expanded = polling.expanded
         error = polling.error || polling.catalogueBlocked
@@ -502,10 +524,8 @@ Item {
                     }
                     event.accepted = true
                     if (event.isAutoRepeat && (event.text === "y" || event.text === "?" || event.text === "m" || event.text === "w")) return
-                    if (event.key === Qt.Key_Escape) {
-                        if (root.filterText) root.filterText = ""
-                        else root.close()
-                    } else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) root.move(1)
+                    if (event.key === Qt.Key_Escape) root.handleEscape(false)
+                    else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) root.move(1)
                     else if (event.key === Qt.Key_Up || event.key === Qt.Key_K) root.move(-1)
                     else if (event.key === Qt.Key_PageDown) root.page(1)
                     else if (event.key === Qt.Key_PageUp) root.page(-1)
@@ -524,6 +544,7 @@ Item {
                         root.refresh(!!(event.modifiers & Qt.ShiftModifier))
                     }
                     else if (event.key === Qt.Key_O) root.openBrowser()
+                    else if (event.key === Qt.Key_I) root.toggleDetail()
                     else if (event.key === Qt.Key_V) root.viewLog()
                     else if (event.key === Qt.Key_A) root.askAction("rerun")
                     else if (event.key === Qt.Key_F) root.askAction("rerun-failed")
@@ -537,7 +558,7 @@ Item {
                     spacing: Style.spacing.md
                     Text {
                         width: parent.width
-                        text: "GitHub Actions  ·  " + root.repos.length + (root.repos.length === 1 ? " repository" : " repositories") + (root.watching ? "  ·  " + Object.keys(root.polling.watches).length + " watched" : "")
+                        text: root.titleText
                         color: Commons.Color.menu.text
                         font { family: Style.font.menuFamily; pixelSize: root.fTitle; bold: true }
                         elide: Text.ElideRight
@@ -563,8 +584,7 @@ Item {
                                 keys.forceActiveFocus()
                                 root.expand(false)
                             } else if (event.key === Qt.Key_Escape) {
-                                root.filterText = ""
-                                keys.forceActiveFocus()
+                                root.handleEscape(true)
                             } else if (event.key === Qt.Key_Tab) {
                                 keys.forceActiveFocus()
                             } else return
@@ -615,7 +635,7 @@ Item {
                     ListView {
                         id: list
                         width: parent.width
-                        height: Math.max(0, parent.height - y - footer.height - Style.spacing.md)
+                        height: Math.max(0, parent.height - y - footer.height - Style.spacing.md - (pane.visible ? pane.height + Style.spacing.md : 0))
                         clip: true
                         model: visibleRows
                         boundsBehavior: Flickable.StopAtBounds
@@ -689,10 +709,52 @@ Item {
                             textFormat: Text.PlainText
                         }
                     }
+                    Flickable {
+                        id: pane
+                        visible: root.detail
+                        width: parent.width
+                        // Column skips invisible items, so the spacing term depends on visibility.
+                        readonly property real avail: parent.height - list.y - footer.height - Style.spacing.md * (visible ? 2 : 1)
+                        readonly property real line: Math.ceil(root.fCaption * 1.4)
+                        height: visible ? Model.paneHeight(parent.height, avail, paneBody.implicitHeight, 3 * root.rowMin, line) : 0
+                        contentHeight: paneBody.implicitHeight
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        Accessible.role: Accessible.Pane
+                        Accessible.name: root.detailAccessibleName
+                        Column {
+                            id: paneBody
+                            width: pane.width
+                            Repeater {
+                                model: root.detailRows
+                                Row {
+                                    required property var modelData
+                                    spacing: Style.spacing.sm
+                                    Text {
+                                        width: root.sp(90)
+                                        text: modelData.label
+                                        color: Commons.Color.menu.text
+                                        opacity: 0.65
+                                        font { family: Style.font.menuFamily; pixelSize: root.fCaption }
+                                        elide: Text.ElideRight
+                                        textFormat: Text.PlainText
+                                    }
+                                    Text {
+                                        width: paneBody.width - root.sp(90) - parent.spacing
+                                        text: modelData.value
+                                        color: Commons.Color.menu.text
+                                        font { family: Style.font.menuFamily; pixelSize: root.fCaption }
+                                        elide: Text.ElideRight
+                                        textFormat: Text.PlainText
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Text {
                         id: footer
                         width: parent.width
-                        text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  v log  w watch  y copy  ? keys  Esc close"
+                        text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  i details  v log  w watch  y copy  ? keys  Esc close"
                         color: root.actionError && !root.confirm && root.actionText ? Commons.Color.urgent : Commons.Color.menu.text
                         opacity: root.confirm || root.actionText ? 1 : 0.65
                         font { family: Style.font.menuFamily; pixelSize: root.fCaption }
