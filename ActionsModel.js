@@ -134,10 +134,21 @@ function accessibleName(row, expanded) {
     return name;
 }
 
+function parseFilter(filter) {
+    var tokens = [], words = [];
+    filter.toLowerCase().split(/\s+/).forEach(function(word) {
+        var match = /^(branch|actor):(.+)$/.exec(word);
+        if (match) tokens.push({kind: match[1], value: match[2]});
+        else if (word === "is:failed") tokens.push({kind: "failed"});
+        else if (word) words.push(word);
+    });
+    return {text: tokens.length ? words.join(" ") : filter.toLowerCase(), tokens: tokens};
+}
+
 // live is "repo:runId" of the run polling refreshes now, or "" / undefined.
 function rows(repos, expanded, details, filter, now, live, watches) {
     var result = [];
-    var query = filter.toLowerCase();
+    var parsed = parseFilter(filter), query = parsed.text, tokens = parsed.tokens;
     watches = watches || {};
     // Failing first, then running (most first), then the rest in catalogue order; never by time, so rows do not jump.
     repos.map(function(repo, i) {
@@ -148,9 +159,12 @@ function rows(repos, expanded, details, filter, now, live, watches) {
         var repo = entry.repo, active = entry.active, h = entry.h;
         var repoMatch = (repo.repo + " " + (repo.description || "")).toLowerCase().indexOf(query) >= 0;
         var runs = (repo.runs || []).filter(function(run) {
-            return repoMatch || [run.name, run.display_title, run.head_branch, run.event, run.actor, state(run), label(state(run))].join(" ").toLowerCase().indexOf(query) >= 0;
+            return tokens.every(function(token) {
+                if (token.kind === "failed") return FAILED.indexOf(run.conclusion) >= 0;
+                return (token.kind === "branch" ? run.head_branch || "" : run.actor || "").toLowerCase().indexOf(token.value) >= 0;
+            }) && (repoMatch || [run.name, run.display_title, run.head_branch, run.event, run.actor, state(run), label(state(run))].join(" ").toLowerCase().indexOf(query) >= 0);
         });
-        if (query && !repoMatch && !runs.length) return;
+        if ((tokens.length || query && !repoMatch) && !runs.length) return;
         var repoKey = "repo:" + repo.repo;
         result.push({key: repoKey, parent: "", kind: "repo", depth: 0, title: repo.repo,
             subtitle: repo.error || repo.description || "", status: h.status, info: h.info,
@@ -161,11 +175,14 @@ function rows(repos, expanded, details, filter, now, live, watches) {
         var hidden = repo.hidden || {};
         var parts = ["in_progress", "queued", "waiting", "pending", "requested"].filter(function(s) { return hidden[s] > 0; })
             .map(function(s) { return "+" + (hidden[s] > 1000 ? "about " : "") + hidden[s] + " more " + s; });
-        var more = parts.length && (!query || repoMatch) ? {key: repoKey + ":more", parent: repoKey, kind: "more", depth: 1,
+        var beforeRuns = !!parts.length;
+        if (repo.recentFetched >= (repo.recentLimit || 10))
+            parts.push("last " + repo.recentFetched + " runs fetched" + (repo.recentFetched < 100 ? " · m loads 30 more" : ""));
+        var more = !tokens.length && parts.length && (!query || repoMatch) ? {key: repoKey + ":more", parent: repoKey, kind: "more", depth: 1,
             title: parts.join(" · "), subtitle: "o opens GitHub", status: "", statusText: "", info: "", repo: repo.repo,
             url: "https://github.com/" + repo.repo + "/actions"} : null;
         runs.forEach(function(run) {
-            if (more && run.status === "completed") { result.push(more); more = null; }
+            if (more && beforeRuns && run.status === "completed") { result.push(more); more = null; }
             var runKey = repo.repo + ":" + run.id;
             var detail = details[runKey];
             var fresh = !!detail && (runKey === live || (run.status === "completed" && detail.finalAttempt === (run.run_attempt || 1)));

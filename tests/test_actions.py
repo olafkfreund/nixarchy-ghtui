@@ -430,6 +430,30 @@ class PageTest(unittest.TestCase):
         self.assertEqual(result["errorType"], "")
         self.assertNotIn("total", result)
 
+    def test_recent_page_limit(self):
+        task = {"kind": "summary", "repo": "a/b", "status": "recent", "requestId": 1}
+        base = "repos/a/b/actions/runs?per_page="
+        self.assertEqual(actions.page_endpoint(task), base + "10")
+        for limit in (1, 40, 100):
+            with self.subTest(limit=limit):
+                self.assertEqual(actions.page_endpoint(dict(task, limit=limit)), base + str(limit))
+        for limit in (0, 101, -1, "10", True, 10.0):
+            with self.subTest(limit=limit), self.assertRaisesRegex(ValueError, "^Invalid page limit$"):
+                actions.page_endpoint(dict(task, limit=limit))
+
+    def test_more_reads_one_recent_page(self):
+        task = {"kind": "more", "repo": "a/b", "status": "queued", "limit": 40, "requestId": 1}
+        self.assertEqual(actions.page_endpoint(task), "repos/a/b/actions/runs?per_page=40")
+        with patch.object(actions, "request", return_value=(
+                'HTTP/2.0 200 OK\nLink: <https://api.github.com/repos/a/b/actions/runs?page=2>; rel="next"\n\n'
+                '{"total_count":250,"workflow_runs":[{"id":7,"status":"completed","actor":{"login":"oc\\nta"}}]}', "", 0)) as request:
+            result = actions.read_page(task)
+        request.assert_called_once_with("repos/a/b/actions/runs?per_page=40", include=True)
+        self.assertEqual((result["errorType"], result["nextPage"], result["data"][0]["actor"]), ("", 0, "oc ta"))
+        self.assertNotIn("total", result)
+        with self.assertRaisesRegex(ValueError, "^Invalid page operation$"):
+            actions.page_endpoint(dict(task, kind="unknown"))
+
     def test_bad_steps_reject_the_page(self):
         task = {"kind": "jobs", "repo": "a/b", "run": "7", "requestId": 1}
         for steps in ([None], ["x"], [1], None):
@@ -506,7 +530,7 @@ class PageTest(unittest.TestCase):
                 self.assertEqual(row, dict(run, **plain_run))
         self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run)), dict(run, **plain_run))
         self.assertEqual(page({"kind": "run", "repo": "a/b", "run": "7"}, dict(run, display_title=emoji))["display_title"], emoji)
-        for actor in (None, "str", {"login": 5}):
+        for actor in (None, "str", [], {"login": 5}):
             with self.subTest(actor=actor):
                 body = dict(run, actor=actor)
                 self.assertEqual(page({"kind": "summary", "repo": "a/b", "status": "recent"},

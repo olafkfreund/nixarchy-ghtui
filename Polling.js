@@ -56,7 +56,11 @@ function watch(s,repo,run,name,now) {
     return "on";
 }
 function select(s, repo, run, expanded, now, immediate) {
-    if (s.selected !== repo) s.stableAt = now + (immediate ? 0 : TIMING.settle);
+    if (s.selected !== repo) {
+        var previous=repoFor(s,s.selected);
+        if (previous) { delete previous.recentLimit; delete previous.recentFetched; }
+        s.stableAt = now + (immediate ? 0 : TIMING.settle);
+    }
     else if (immediate) s.stableAt = now;
     s.selected = repo || ""; s.inspected = String(run || ""); s.expanded = expanded || {};
 }
@@ -71,14 +75,23 @@ function manual(s, now, catalogue) {
     var r = repoFor(s, s.selected);
     if (r) {
         r.blocked = false; r.error = ""; s.stableAt = now;
-        var summary=ensure(s, "summary", r.repo, "", "interactive", now);
-        summary.due=Math.min(summary.due,now);
+        if (!s.tasks[key("more",r.repo)]) {
+            var summary=ensure(s, "summary", r.repo, "", "interactive", now);
+            summary.due=Math.min(summary.due,now);
+        }
         if (s.inspected && s.expanded[r.repo + ":" + s.inspected]) {
             if (s.details[r.repo+":"+s.inspected]) s.details[r.repo+":"+s.inspected].unavailable=false;
             var jobs=ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
             jobs.due=Math.min(jobs.due,now);
         }
     }
+}
+function more(s, repo, now) {
+    var r=repoFor(s,repo);
+    if (!r || s.tasks[key("more",repo)] || s.tasks[key("summary",repo)]) return false;
+    r.recentLimit=Math.min(100,(r.recentLimit || 10)+30);
+    ensure(s,"more",repo,"","interactive",now);
+    return true;
 }
 function requestLog(s,target,now) {
     if (Object.keys(s.tasks).some(function(id) { return s.tasks[id].kind==="log" })) return false;
@@ -114,7 +127,7 @@ function seed(s, now) {
     s.repos.slice().sort(function(a,b) { return (a.activityAt === undefined ? -Infinity : a.activityAt) - (b.activityAt === undefined ? -Infinity : b.activityAt) }).forEach(function(r) {
         if (r.archived || r.disabled || r.blocked) return;
         var selected = r.repo === s.selected && now >= s.stableAt;
-        if (selected && now >= age(r.summaryAt, TIMING.summary)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,TIMING.summary));
+        if (selected && !s.tasks[key("more",r.repo)] && now >= age(r.summaryAt, TIMING.summary)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,TIMING.summary));
         var summary = s.tasks[key("summary",r.repo)];
         var activityKey = key("activity",r.repo);
         if (summary && !(s.flight && s.flight.key === activityKey)) delete s.tasks[activityKey];
@@ -164,6 +177,11 @@ function next(s, now) {
     s.requests++; s.lastStarted=now; s.lastRequest=t.kind + (t.repo ? " " + t.repo : "");
     var request = {kind:t.kind,repo:t.repo,run:t.run,page:t.page,requestId:++s.serial};
     if (t.kind === "summary") request.status = phases[t.phase];
+    if (t.kind === "more") request.status = "recent";
+    if (request.status === "recent") {
+        var r=repoFor(s,t.repo);
+        if (r && r.recentLimit) request.limit=r.recentLimit;
+    }
     if (t.kind === "log") { if (t.job) request.job=t.job; request.mode=t.mode; }
     s.flight = {key:t.key, request:request, generation:s.generation};
     return request;
@@ -195,7 +213,7 @@ function mergeRuns(s,r,incoming) {
 function recent(s,r,runs) {
     var completed=0;
     return runs.sort(function(a,b) { return (a.status==="completed")-(b.status==="completed") || b.id-a.id })
-        .filter(function(run) { return run.status!=="completed" || ++completed<=10 || kept(s,r,run) });
+        .filter(function(run) { return run.status!=="completed" || ++completed<=(r.recentLimit || 10) || kept(s,r,run) });
 }
 function kept(s,r,run) {
     return s.expanded[r.repo+":"+run.id] || r.repo===s.selected && String(run.id)===s.inspected || r.last && run.id===r.last.id;
@@ -341,6 +359,12 @@ function complete(s,reply,now) {
             else s.repos.push(repo);
         });
     } else if (r && t.kind==="summary") mergeRuns(s,r,data);
+    else if (r && t.kind==="more") {
+        lastResult(r,data,now,data,r.recentLimit || 10);
+        mergeRuns(s,r,data);
+        prune(s,r);
+        r.recentFetched=data.length;
+    }
     if (reply.nextPage) { t.page=reply.nextPage; t.due=now; t.order=++s.order; return true; }
     if (t.kind==="catalogue") {
         var names=t.items.map(function(repo) { return repo.repo });
@@ -354,10 +378,10 @@ function complete(s,reply,now) {
         t.all=union(t.all,t.items);
         if (phases[t.phase]==="in_progress") activity(s,r,t.items,now,reply.total);
         if (typeof reply.total==="number") (t.hidden=t.hidden || {})[phases[t.phase]]=Math.max(0,reply.total-t.items.length);
-        if (phases[t.phase]==="recent") t.recent=t.items;
+        if (phases[t.phase]==="recent") { t.recent=t.items; r.recentFetched=t.items.length; }
         t.phase++; t.items=[]; t.page=1;
         if (t.phase<phases.length) { t.due=now; t.order=++s.order; return true; }
-        lastResult(r,t.all,now,t.recent,10);
+        lastResult(r,t.all,now,t.recent,r.recentLimit || 10);
         var keep=(r.runs || []).filter(function(run) { return run.awaitingFinal || kept(s,r,run) });
         r.runs=recent(s,r,union(t.all,keep));
         var seen={}; t.all.forEach(function(run) { seen[String(run.id)]=true });

@@ -203,6 +203,12 @@ Item {
         Polling.manual(polling, Date.now(), !!catalogue)
         pump()
     }
+    function loadMore() {
+        if (!current || !current.repo) return
+        if (!Polling.more(polling, current.repo, Date.now())) showNotice("Refreshing; press m again in a moment")
+        adopt()
+        pump()
+    }
     function pump() {
         if ((!opened && !watching) || workerBusy) return
         var request = Polling.next(polling, Date.now())
@@ -469,7 +475,7 @@ Item {
                         return
                     }
                     event.accepted = true
-                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?" || event.text === "w")) return
+                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?" || event.text === "m" || event.text === "w")) return
                     if (event.key === Qt.Key_Escape) {
                         if (root.filterText) root.filterText = ""
                         else root.close()
@@ -496,6 +502,7 @@ Item {
                     else if (event.key === Qt.Key_A) root.askAction("rerun")
                     else if (event.key === Qt.Key_F) root.askAction("rerun-failed")
                     else if (event.key === Qt.Key_C) root.askAction("cancel")
+                    else if (event.text === "m") root.loadMore()
                     else event.accepted = false
                 }
 

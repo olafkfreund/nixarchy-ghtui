@@ -287,6 +287,53 @@ console.log('Model: not-refreshing marker passed');
 }
 console.log('Model: rows subtitle, statusText and message row passed');
 
+// #43(b) step 10: search tokens match one held run; the fetched count shares the more row.
+{
+  const t = Date.now(), open = {'repo:o/r': true};
+  const failed = {id: 1, status: 'completed', conclusion: 'failure', name: 'Build', head_branch: 'main', actor: 'alice', event: 'push'};
+  const passed = {id: 2, status: 'completed', conclusion: 'success', name: 'Release', head_branch: 'feature', actor: 'bob', event: 'schedule'};
+  const repo = {repo: 'o/r', description: 'release project', runs: [failed, passed]};
+  const view = (filter, r = repo) => model.rows([r], open, {}, filter, t);
+  const runIds = filter => Array.from(view(filter).filter(row => row.kind === 'run'), row => row.run);
+  assert.deepEqual(runIds('branch:main'), ['1']);
+  assert.deepEqual(runIds('Branch:MAIN actor:AL is:failed'), ['1']);
+  assert.deepEqual(runIds('actor:bob'), ['2']);
+  assert.deepEqual(runIds('is:failed'), ['1']);
+  assert.deepEqual(runIds('IS:FAILED'), ['1']);
+  assert.deepEqual(runIds('is:failed branch:feature'), [], 'success is not failed');
+  assert.deepEqual(Array.from(view('actor:alice', {...repo, runs: [{...failed, actor_login: 'wrong'}]})
+    .filter(row => row.kind === 'run'), row => row.run), ['1'], 'actor token uses the flattened actor from #42');
+  assert.equal(view('actor:wrong', {...repo, runs: [{...failed, actor_login: 'wrong'}]}).length, 0);
+  assert.deepEqual(runIds('branch:main actor:bob'), [], 'tokens must match the same run');
+  assert.equal(view('branch:feature is:failed').length, 0);
+  assert.deepEqual(runIds('branch:main release'), ['1'], 'plain text may match the repository');
+  assert.equal(view('branch:main schedule').length, 0, 'plain text must still match');
+  assert.deepEqual(runIds('branch:main Build'), ['1'], 'plain text may match the run');
+  assert.equal(view('branch:feature o/r is:failed').length, 0, 'repository name cannot lift tokens');
+  assert.equal(view('actor:alice', {repo: 'o/r'}).length, 0, 'unchecked repository has no matching run');
+  assert.deepEqual(runIds('push'), ['1'], '#42 plain event search survives');
+  assert.deepEqual(runIds('alice'), ['1'], '#42 plain actor search survives');
+  assert.deepEqual(runIds('failed'), ['1'], '#42 plain state label search survives');
+  assert.equal(view('branch:').length, 0, 'empty token value is plain text');
+  assert.equal(view('is:open').length, 0, 'unknown is value is plain text');
+  assert.equal(view('foo:bar').length, 0, 'unknown prefix is plain text');
+
+  const moreRows = r => model.rows([r], open, {}, '', t);
+  const more = r => moreRows(r).filter(row => row.kind === 'more');
+  assert.equal(more({...repo, recentFetched: 10})[0].title, 'last 10 runs fetched · m loads 30 more');
+  assert.equal(more({...repo, recentLimit: 40, recentFetched: 40})[0].title, 'last 40 runs fetched · m loads 30 more');
+  assert.equal(more({...repo, recentLimit: 100, recentFetched: 100})[0].title, 'last 100 runs fetched');
+  assert.equal(more({...repo, recentLimit: 40, recentFetched: 39}).length, 0);
+  assert.equal(moreRows({...repo, recentFetched: 10}).at(-1).kind, 'more', 'fetched-only row follows runs');
+  const withHidden = {...repo, hidden: {queued: 2}, recentFetched: 10};
+  assert.equal(more(withHidden).length, 1);
+  assert.equal(more(withHidden)[0].title, '+2 more queued · last 10 runs fetched · m loads 30 more');
+  assert.equal(moreRows(withHidden)[1].kind, 'more', 'hidden count stays before completed runs');
+  assert.equal(more({...repo, runs: [{...failed, status: 'queued'}, passed], recentFetched: 10})[0].title,
+    'last 10 runs fetched · m loads 30 more', 'unfinished runs still count toward the fetched page');
+  assert.ok(!view('branch:main', withHidden).some(row => row.kind === 'more'));
+}
+console.log('Model: search tokens and fetched-count row passed');
 // #44 step 2: a selected row resolves to the whole job log or a failed run log.
 {
   const repo = 'o/r', run = '7';
@@ -376,30 +423,37 @@ console.log('Model: watched rows and notices passed');
   const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('Keys.onPressed: function(event) {')[1]
     .split('\n                }\n\n                Column {')[0];
   const calls = [];
-  const root = {confirm:null, copyLink:() => calls.push('copy'), toggleWatch:() => calls.push('watch'), answer:yes => calls.push(yes ? 'yes' : 'no')};
+  const root = {confirm:null, copyLink:() => calls.push('copy'), toggleWatch:() => calls.push('watch'), loadMore:() => calls.push('more'), answer:yes => calls.push(yes ? 'yes' : 'no')};
   const Qt = {ControlModifier:1, AltModifier:2, MetaModifier:4, Key_W:87, Key_Y:89, Key_N:78, Key_Escape:27};
   const handler = vm.runInNewContext('(function(event) {' + body + '\n})',
     {root, Qt, Quickshell:{execDetached:() => calls.push('keys')}});
-  const press = (key, text, modifiers = 0, isAutoRepeat = false) => handler({key, text, modifiers, isAutoRepeat});
+  const press = (key, text, modifiers = 0, isAutoRepeat = false) => { const event = {key, text, modifiers, isAutoRepeat, accepted:false}; handler(event); return event.accepted; };
   press(Qt.Key_Y, 'y', 0, true);
   press(0, '?', 0, true);
   press(Qt.Key_W, 'w', 0, true);
+  press(77, 'm', 0, true);
   assert.deepEqual(calls, []);
+  assert.equal(press(77, 'm'), true);
+  assert.deepEqual(calls, ['more']);
+  assert.equal(press(77, 'm', Qt.ControlModifier), false);
+  assert.deepEqual(calls, ['more']);
+  assert.equal(press(77, 'M'), false, 'Shift+M passes through');
   press(Qt.Key_Y, 'y');
   press(Qt.Key_W, 'w');
-  assert.deepEqual(calls, ['copy', 'watch']);
+  assert.deepEqual(calls, ['more', 'copy', 'watch']);
   const ctrlWatch = {key:Qt.Key_W, text:'w', modifiers:Qt.ControlModifier, isAutoRepeat:false};
   handler(ctrlWatch);
   assert.equal(ctrlWatch.accepted,false);
   root.confirm = {text:'confirm'};
   press(Qt.Key_W, 'w');
+  assert.equal(press(77, 'm'), true);
   press(Qt.Key_Y, 'y', Qt.ControlModifier);
   press(Qt.Key_Y, 'y', 0, true);
-  assert.deepEqual(calls, ['copy', 'watch']);
+  assert.deepEqual(calls, ['more', 'copy', 'watch']);
   press(Qt.Key_Y, 'y');
   press(Qt.Key_N, 'n');
   press(Qt.Key_Escape, '');
-  assert.deepEqual(calls, ['copy', 'watch', 'yes', 'no', 'no']);
+  assert.deepEqual(calls, ['more', 'copy', 'watch', 'yes', 'no', 'no']);
 }
 
 // Exercise the panel lifecycle and fixed watch messages without a display.
@@ -423,6 +477,21 @@ console.log('Model: watched rows and notices passed');
   assert.deepEqual(notices,['Watching this run; lost if the shell restarts','Stopped watching','At most 5 runs can be watched']);
   assert.match(qml,/onExited: \{ root\.noticeBusy = false; Qt\.callLater\(root\.drainNotices\) \}/);
   assert.match(qml,/\["notify-send", "--app-name=GitHub Actions", "--", m\.title, m\.body\]/);
+}
+
+{
+  const body = fs.readFileSync('ActionsPanel.qml', 'utf8').split('    function loadMore() {')[1]
+    .split('\n    function pump() {')[0];
+  const calls = [];
+  const context = {current:{repo:'a/b'}, polling:{}, Date, Polling:{more:() => false},
+    showNotice:text => calls.push(text), adopt:() => calls.push('adopt'), pump:() => calls.push('pump')};
+  const loadMore = vm.runInNewContext('(function() {' + body + ')', context);
+  loadMore();
+  assert.deepEqual(calls, ['Refreshing; press m again in a moment', 'adopt', 'pump']);
+  calls.length = 0;
+  context.Polling.more = () => true;
+  loadMore();
+  assert.deepEqual(calls, ['adopt', 'pump']);
 }
 
 // #43: repository health row and sort.
