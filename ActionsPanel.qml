@@ -114,6 +114,23 @@ Item {
         list.positionViewAtIndex(cursor, ListView.Contain)
         selectionChanged(false)
     }
+    function page(dir) {
+        var top = list.indexAt(1, list.contentY)
+        var bottom = list.indexAt(1, list.contentY + list.height - 1)
+        if (top < 0) top = 0
+        if (bottom < 0) bottom = entries.length - 1
+        move(dir * Math.max(1, bottom - top))
+    }
+    function enter() {
+        var row = current
+        if (!row || ["repo", "run", "job"].indexOf(row.kind) < 0) return
+        if (!expanded[row.key]) { expand(false); return }
+        if (entries[cursor + 1] && entries[cursor + 1].parent === row.key) {
+            cursor++
+            list.positionViewAtIndex(cursor, ListView.Contain)
+            selectionChanged(false)
+        }
+    }
     function expand(collapse) {
         var row = current
         if (!row) return
@@ -192,6 +209,17 @@ Item {
     function openBrowser() {
         if (current && Model.browsable(current.url))
             Quickshell.execDetached(["xdg-open", current.url])
+    }
+    function copyLink() {
+        if (copyProc.copyBusy) { showNotice("Copy in progress"); return }
+        if (!current || current.kind === "message" || current.kind === "more" || !Model.browsable(current.url)) {
+            showNotice("Nothing to copy")
+            return
+        }
+        copyProc.copyBusy = true
+        copyProc.copyStarted = false
+        copyProc.command = ["wl-copy", "--", current.url]
+        copyProc.running = true
     }
     function say(text, error) {
         actionText = text
@@ -279,6 +307,20 @@ Item {
         // Quickshell 0.3.1: a failed start emits neither started nor exited, only running=false.
         onRunningChanged: if (!running && root.workerBusy && !root.helperStarted) root.failedToStart()
     }
+    Process {
+        id: copyProc
+        property bool copyBusy: false
+        property bool copyStarted: false
+        onStarted: copyStarted = true
+        onExited: function(code) {
+            copyBusy = false
+            root.showNotice(code === 0 ? "Copied link" : "Copy failed (exit " + code + ")")
+        }
+        onRunningChanged: if (!running && copyBusy && !copyStarted) {
+            copyBusy = false
+            root.showNotice("Install wl-clipboard to copy links")
+        }
+    }
     // Writes have their own process: close() must not kill one in flight, and its reply must not be dropped.
     Process {
         id: actionProc
@@ -325,25 +367,35 @@ Item {
                 anchors.bottomMargin: card.contentBottomInset
                 focus: true
                 Keys.onPressed: function(event) {
-                    event.accepted = true
                     if (root.confirm) {
+                        event.accepted = true
                         if (!event.isAutoRepeat) {
                             if (event.key === Qt.Key_Y) root.answer(true)
                             else if (event.key === Qt.Key_N || event.key === Qt.Key_Escape) root.answer(false)
                         }
                         return
                     }
+                    if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) {
+                        event.accepted = false
+                        return
+                    }
+                    event.accepted = true
                     if (event.key === Qt.Key_Escape) {
                         if (root.filterText) root.filterText = ""
                         else root.close()
                     } else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) root.move(1)
                     else if (event.key === Qt.Key_Up || event.key === Qt.Key_K) root.move(-1)
-                    else if (event.key === Qt.Key_PageDown) root.move(8)
-                    else if (event.key === Qt.Key_PageUp) root.move(-8)
+                    else if (event.key === Qt.Key_PageDown) root.page(1)
+                    else if (event.key === Qt.Key_PageUp) root.page(-1)
                     else if (event.key === Qt.Key_Home) root.move(-root.entries.length)
                     else if (event.key === Qt.Key_End) root.move(root.entries.length)
                     else if (event.key === Qt.Key_Left || event.key === Qt.Key_H) root.expand(true)
-                    else if ([Qt.Key_Right, Qt.Key_L, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space].indexOf(event.key) >= 0) root.expand(false)
+                    else if (event.key === Qt.Key_Right || event.key === Qt.Key_L) root.enter()
+                    else if ([Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space].indexOf(event.key) >= 0) root.expand(false)
+                    else if (event.text === "g") root.move(-root.entries.length)
+                    else if (event.text === "G") root.move(root.entries.length)
+                    else if (event.text === "y") root.copyLink()
+                    else if (event.text === "?") Quickshell.execDetached(["bash", decodeURIComponent(Qt.resolvedUrl("keybindings.sh").toString().replace(/^file:\/\//, ""))])
                     else if (event.key === Qt.Key_Slash) { searchField.forceActiveFocus(); searchField.selectAll() }
                     else if (event.key === Qt.Key_R) {
                         root.refresh(!!(event.modifiers & Qt.ShiftModifier))
