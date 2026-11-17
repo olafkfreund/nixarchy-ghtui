@@ -152,7 +152,7 @@ ShellRoot {
         interval: 1000; running: true
         onTriggered: {
             check(Commons.Color.background.toString()===Quickshell.env("EXPECTED_BACKGROUND"),"active Omarchy theme")
-            check(panel.textScale===undefined,"no panel scale factor")
+            check(panel.textStep===0 && panel.fTitle===Style.font.title && panel.fBody===Style.font.body && panel.fCaption===Style.font.caption && panel.sp(18)===Style.space(18) && panel.sp(64)===Style.space(64),"default text size is the theme size")
             menuFile.reload()
             check(!panel.opened && panel.polling.requests===0,"registration does not open or poll")
             if (Quickshell.env("MENU_SCENARIO") === "fresh")
