@@ -22,6 +22,7 @@ Esc → Clear filter, then close
 r → Refresh selected repository, expanded run and activity
 Shift + R → Rediscover accessible repositories
 o → Open selected repository, run or job on GitHub
+v → Open the log of the selected failed run, job or step in a terminal
 y → Copy the selected row's link (needs wl-copy)
 ? → This keybindings list
 a → Rerun all jobs of the selected finished run (asks y/n)
