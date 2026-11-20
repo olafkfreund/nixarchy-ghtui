@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: 60
 intent: intent/2026-11-20-60-polling-correctness.md
 ---
