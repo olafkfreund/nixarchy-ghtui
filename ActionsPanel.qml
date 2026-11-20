@@ -272,8 +272,14 @@ Item {
     }
     function failedToStart() {
         console.warn("GitHub Actions helper: python3 failed to start")
-        receivePage(Model.reply("", 127, requestInfo.requestId), requestInfo)
-        workerBusy = false
+        finishRequest("", 127)
+    }
+    function finishRequest(text, code) {
+        try { receivePage(Model.reply(text, code, requestInfo.requestId), requestInfo) }
+        catch (e) {
+            console.warn("GitHub Actions reply handling failed: " + (e && e.message))
+            Polling.drop(polling, requestInfo.requestId, Date.now())
+        } finally { workerBusy = false }
     }
     function receivePage(text, request) {
         var reply
@@ -423,8 +429,7 @@ Item {
         stderr: StdioCollector { id: pageErrors }
         onExited: function(code) {
             if (pageErrors.text.trim()) console.warn("GitHub Actions helper (exit " + code + "): " + pageErrors.text.trim())
-            root.receivePage(Model.reply(pageOutput.text, code, root.requestInfo.requestId), root.requestInfo)
-            root.workerBusy = false
+            root.finishRequest(pageOutput.text, code)
         }
         onStarted: root.helperStarted = true
         // Quickshell 0.3.1: a failed start emits neither started nor exited, only running=false.

@@ -363,6 +363,52 @@ assert.equal(req.kind,'activity');
 polling.complete(act,response(req,Array.from({length:100},(_,i)=>({id:i+1,status:'in_progress'})),0,250),100);
 assert.equal(act.repos[0].active,250); assert.equal(Object.keys(act.repos[0].hidden).length,0);
 assert.equal(act.requests,1);
+assert.equal(act.repos[0].activeFromTotal,true);
+polling.ensure(act,'run','a/b','1','interactive',1000);
+req=polling.next(act,1000); assert.equal(req.kind,'run');
+polling.complete(act,response(req,{id:1,status:'in_progress'}),1100);
+assert.equal(act.repos[0].active,250,'a single lookup preserves the API total');
+act.repos[0].summaryAt=100;
+polling.select(act,'a/b','',{},2000,true);
+polling.activity(act,act.repos[0],[{id:1,status:'in_progress'}],2000,undefined,true);
+assert.equal(act.repos[0].active,250,'selected activity without total keeps the summary count');
+assert.equal(act.repos[0].activeFromTotal,true);
+polling.ensure(act,'run','a/b','1','interactive',3000);
+req=polling.next(act,3000); assert.equal(req.kind,'run');
+polling.complete(act,response(req,{id:1,status:'completed'}),3100);
+assert.equal(act.repos[0].active,249,'a counted run finishing reduces the API total once');
+
+const zeroTotal=selectedRepo([]);
+polling.activity(zeroTotal,zeroTotal.repos[0],[],100,0);
+polling.ensure(zeroTotal,'run','a/b','7','interactive',1000);
+req=polling.next(zeroTotal,1000); assert.equal(req.kind,'run');
+polling.complete(zeroTotal,response(req,{id:7,status:'in_progress'}),1100);
+assert.equal(zeroTotal.repos[0].active,1,'a confirmed run raises a zero API total');
+
+const freshRun={id:7,status:'in_progress',updated_at:'2026-01-02T00:00:00Z'};
+const staleTotal=selectedRepo([]);
+polling.activity(staleTotal,staleTotal.repos[0],[freshRun],100,250);
+polling.ensure(staleTotal,'run','a/b','7','interactive',1000);
+req=polling.next(staleTotal,1000); assert.equal(req.kind,'run');
+polling.complete(staleTotal,response(req,{id:7,status:'completed',updated_at:'2026-01-01T00:00:00Z'}),1100);
+assert.equal(staleTotal.repos[0].active,250,'a stale completed reply does not decrement the total');
+
+const trimmedCount=selectedRepo([{id:1,status:'in_progress'},
+  ...Array.from({length:10},(_,i)=>({id:i+2,status:'completed'}))]);
+Object.assign(trimmedCount.repos[0],{active:250,activeFromTotal:true,activityAt:100});
+polling.ensure(trimmedCount,'run','a/b','1','interactive',1000);
+req=polling.next(trimmedCount,1000); assert.equal(req.kind,'run');
+polling.complete(trimmedCount,response(req,{id:1,status:'completed'}),1100);
+assert.equal(polling.runFor(trimmedCount,'a/b',1),undefined);
+assert.equal(trimmedCount.repos[0].active,249,'a trimmed completed run still reduces the total');
+
+const localCount=selectedRepo([]);
+polling.activity(localCount,localCount.repos[0],[{id:1,status:'in_progress'},{id:2,status:'in_progress'}],100);
+assert.equal(localCount.repos[0].activeFromTotal,false);
+polling.ensure(localCount,'run','a/b','1','interactive',1000);
+req=polling.next(localCount,1000); assert.equal(req.kind,'run');
+polling.complete(localCount,response(req,{id:1,status:'completed'}),1100);
+assert.equal(localCount.repos[0].active,1,'without total the local run count remains authoritative');
 
 const full=selectedRepo([]);
 polling.ensure(full,'activity','a/b','','active',0); req=polling.next(full,0);
@@ -1138,3 +1184,230 @@ console.log('Polling: closed-panel watches are capped, finish once and recover')
   }
 }
 console.log('Polling: account change clears watches, low quota stretches them');
+
+// #60 step 1: manual refresh restarts partial snapshots without losing retry history.
+{
+  const s=selectedRepo([]), r=s.repos[0];
+  Object.assign(r,{summaryAt:0,activityAt:0});
+  polling.select(s,'a/b','',{},0,true);
+  const task=polling.ensure(s,'summary','a/b','','interactive',0);
+  task.phase=1; task.page=3; task.items=[{id:1,status:'in_progress'}];
+  task.all=[{id:2,status:'completed'}]; task.hidden={in_progress:9}; task.recent=[{id:2}]; task.failures=3;
+  polling.manual(s,100,false);
+  assert.equal(task.phase,0); assert.equal(task.page,1); assert.equal(task.due,100);
+  assert.equal(task.items.length,0); assert.equal(task.all.length,0);
+  assert.equal(task.hidden,undefined); assert.equal(task.recent,undefined);
+  assert.equal(task.failures,3);
+  let request=polling.next(s,100); assert.equal(request.status,'recent'); assert.equal(request.page,1);
+  polling.complete(s,response(request,[{id:3,status:'completed'}]),200);
+  for (let phase=1;phase<polling.phases.length;phase++) {
+    request=polling.next(s,100+phase*1000);
+    polling.complete(s,response(request,[]),200+phase*1000);
+  }
+  assert.deepEqual(Array.from(r.runs,run=>run.id),[3]);
+  assert.equal(r.hidden.in_progress,undefined,'a reply without total cannot reuse an old hidden count');
+}
+{
+  const s=selectedRepo([]), r=s.repos[0];
+  Object.assign(r,{summaryAt:0,activityAt:0});
+  polling.select(s,'a/b','',{},0,true);
+  polling.ensure(s,'summary','a/b','','interactive',0);
+  const request=polling.next(s,0); assert.equal(request.kind,'summary');
+  const task=s.tasks[polling.key('summary','a/b')]; task.failures=2;
+  polling.manual(s,100,false); assert.equal(task.restart,true);
+  assert.equal(polling.complete(s,{...response(request,[{id:4,status:'completed'}]),remaining:0,resetAt:3000},200),true);
+  assert.equal(r.runs.length,0); assert.equal(task.restart,undefined);
+  assert.equal(task.due,200); assert.equal(task.failures,2);
+  assert.equal(s.cooldown,3000); assert.equal(polling.next(s,2999),null);
+  const retry=polling.next(s,3000); assert.equal(retry.status,'recent');
+  polling.complete(s,response(retry,[]),3100);
+  assert.equal(polling.next(s,3999),null,'restart still observes the one-second gap');
+  s.starts=Array.from({length:60},(_,i)=>3000+i);
+  assert.equal(polling.next(s,4000),null,'restart still observes the rolling window');
+  assert.equal(polling.next(s,63059).status,'in_progress');
+}
+{
+  const s=jobsFixture(false), task=s.tasks[polling.key('jobs','a/b','7')];
+  task.page=2; task.items=[{id:1,status:'in_progress'}]; task.failures=2;
+  polling.manual(s,100,false);
+  assert.equal(task.page,1); assert.equal(task.items.length,0); assert.equal(task.failures,2);
+  assert.equal(polling.next(s,100).page,1);
+}
+{
+  const s=jobsFixture(false), r=s.repos[0], task=s.tasks[polling.key('jobs','a/b','7')];
+  let request=polling.next(s,0); assert.equal(request.kind,'jobs');
+  polling.complete(s,response(request,[{id:1,status:'completed'}],2),100);
+  assert.equal(task.page,2);
+  polling.mergeRuns(s,r,[{id:7,status:'in_progress',run_attempt:2}]);
+  assert.equal(task.page,1); assert.equal(task.items.length,0);
+  request=polling.next(s,1000); assert.equal(request.kind,'jobs'); assert.equal(request.page,1);
+  polling.complete(s,response(request,[{id:2,status:'completed'}]),1100);
+  assert.deepEqual(Array.from(s.details['a/b:7'].jobs,job=>job.id),[2]);
+}
+{
+  const newer='2026-01-02T00:00:00Z', older='2026-01-01T00:00:00Z';
+  for (const [cached,stale] of [['completed','in_progress'],['in_progress','completed']]) {
+    const s=selectedRepo([{id:7,status:cached,run_attempt:2,updated_at:newer}]);
+    polling.select(s,'a/b','7',{'a/b:7':true},0,true);
+    s.details['a/b:7']={jobs:[{id:1}]};
+    const task=polling.ensure(s,'jobs','a/b','7','interactive',5000);
+    task.page=2; task.items=[{id:1}];
+    polling.mergeRuns(s,s.repos[0],[{id:7,status:stale,run_attempt:1,updated_at:older}]);
+    assert.equal(polling.runFor(s,'a/b',7).status,cached);
+    assert.equal(s.details['a/b:7'].jobs[0].id,1);
+    assert.equal(task.page,2); assert.equal(task.items.length,1);
+  }
+  const s=selectedRepo([{id:7,status:'in_progress',run_attempt:2,updated_at:newer}]);
+  s.repos[0].activityAt=0; s.repos[0].summaryAt=0;
+  polling.select(s,'a/b','7',{'a/b:7':true},0,true);
+  const request=polling.next(s,0); assert.equal(request.kind,'jobs');
+  polling.complete(s,response(request,[]),100);
+  polling.ensure(s,'run','a/b','7','interactive',1000);
+  const lookup=polling.next(s,1000); assert.equal(lookup.kind,'run');
+  polling.complete(s,response(lookup,{id:7,status:'completed',run_attempt:1,updated_at:older}),1100);
+  assert.equal(s.tasks[polling.key('jobs','a/b','7')],undefined);
+  assert.equal(polling.runFor(s,'a/b',7).status,'in_progress');
+}
+console.log('Polling: restart discards partial replies and stale run payloads leave details intact');
+
+// #60 step 3: merging frees details for evicted runs immediately.
+{
+  const s=selectedRepo([{id:1,status:'in_progress'},...Array.from({length:10},(_,i)=>result(i+2))]);
+  s.repos[0].activityAt=0; s.details['a/b:1']={jobs:[{id:1}]};
+  polling.ensure(s,'run','a/b','1','interactive',0);
+  const request=polling.next(s,0); assert.equal(request.kind,'run');
+  polling.complete(s,response(request,result(1)),100);
+  assert.equal(polling.runFor(s,'a/b',1),undefined);
+  assert.equal(s.details['a/b:1'],undefined,'single-run merge prunes evicted details');
+}
+{
+  const s=selectedRepo(Array.from({length:15},(_,i)=>result(i+1))), r=s.repos[0];
+  polling.select(s,'a/b','2',{'a/b:1':true},0,true);
+  r.last={id:3};
+  for (const id of [1,2,3,4]) s.details[`a/b:${id}`]={jobs:[{id}]};
+  polling.mergeRuns(s,r,[result(16)]);
+  for (const id of [1,2,3]) assert.ok(s.details[`a/b:${id}`],`kept run ${id} retains details`);
+  assert.equal(s.details['a/b:4'],undefined);
+  assert.equal(s.expanded['a/b:1'],true,'pruning does not clear expansion state');
+}
+{
+  const s=selectedRepo(Array.from({length:11},(_,i)=>result(i+1)));
+  polling.select(s,'a/b','',{},0,true);
+  s.details['a/b:1']={jobs:[{id:1}]};
+  const request=polling.next(s,0); assert.equal(request.kind,'summary');
+  polling.complete(s,response(request,[result(12)]),100);
+  assert.equal(s.repos[0].summaryAt,undefined,'summary is still between phases');
+  assert.equal(s.details['a/b:1'],undefined,'intermediate page prunes evicted details');
+}
+
+// Idle calls share one seed; writers and exact scheduler deadlines wake it.
+{
+  const s=selectedRepo([]); s.repos=[];
+  for (let now=0;now<1000;now+=100) assert.equal(polling.next(s,now),null);
+  assert.equal(s.seeds,1);
+  polling.select(s,'','',{},950,true);
+  assert.equal(polling.next(s,950),null); assert.equal(s.seeds,2);
+  polling.ensure(s,'run','a/b','7','interactive',1500);
+  assert.equal(polling.next(s,1499),null);
+  assert.equal(polling.next(s,1500).kind,'run','queued work starts at its own due');
+}
+{
+  const s=selectedRepo([]);
+  s.repos[0].activityAt=0;
+  polling.select(s,'a/b','',{},0,false);
+  assert.equal(polling.next(s,200),null);
+  assert.equal(s.wakeAt,250);
+  assert.equal(polling.next(s,249),null);
+  assert.equal(polling.next(s,250).kind,'summary');
+}
+{
+  const s=selectedRepo([]);
+  s.repos[0].active=1; s.repos[0].activityAt=-5000;
+  s.remaining=100; s.resetAt=10000;
+  assert.equal(polling.next(s,9999),null);
+  assert.equal(s.wakeAt,10000);
+  assert.equal(polling.next(s,10000).kind,'activity');
+}
+const stoppedCatalogue=blockedCatalogue();
+assert.equal(polling.next(stoppedCatalogue,300000),null,'permission stop lasts beyond catalogue interval');
+
+{
+  const s=selectedRepo([]);
+  polling.select(s,'a/b','',{},0,true);
+  const task=polling.ensure(s,'summary','a/b','','interactive',0);
+  task.page=2; task.phase=1; task.items=[result(1)]; task.all=[result(2)];
+  task.hidden={queued:9}; task.recent=[result(2)]; task.restart=true;
+  const request=polling.next(s,0); assert.equal(request.kind,'summary');
+  s.wakeAt=1000;
+  assert.equal(polling.drop(s,request.requestId+1,100),false);
+  assert.equal(s.wakeAt,0); assert.equal(s.flight.request.requestId,request.requestId);
+  assert.equal(polling.drop(s,request.requestId,100),true);
+  assert.equal(s.flight,null); assert.equal(task.failures,1); assert.equal(task.due,5100);
+  assert.equal(task.page,1); assert.equal(task.phase,0);
+  assert.equal(task.items.length,0); assert.equal(task.all.length,0);
+  assert.equal(task.restart,undefined); assert.equal(task.hidden,undefined); assert.equal(task.recent,undefined);
+  assert.equal(polling.next(s,5099),null);
+  const retry=polling.next(s,5100); assert.equal(retry.status,'recent'); assert.equal(retry.page,1);
+  assert.equal(polling.drop(s,request.requestId,5150),false);
+  assert.equal(s.flight.request.requestId,retry.requestId,'stale drop leaves the newer flight intact');
+  polling.complete(s,response(retry,[result(3)]),5200);
+  assert.equal(task.phase,1,'the good retry reply is accepted');
+  assert.equal(s.repos[0].hidden,undefined,'stale hidden counts are not published');
+}
+{
+  const s=selectedRepo([]);
+  s.repos[0].activityAt=0;
+  polling.select(s,'a/b','',{},0,true);
+  const task=polling.ensure(s,'summary','a/b','','interactive',0);
+  const request=polling.next(s,0); assert.equal(request.kind,'summary');
+  const bad=response(request,[]);
+  Object.defineProperty(bad,'data',{get() { throw new Error('complete fault'); }});
+  assert.throws(()=>polling.complete(s,bad,100),/complete fault/);
+  assert.equal(s.flight,null); assert.ok(s.handling);
+  assert.equal(polling.drop(s,request.requestId,100),true);
+  assert.equal(s.handling,undefined); assert.equal(task.due,5100);
+  assert.equal(polling.next(s,5099),null);
+  const retry=polling.next(s,5100); assert.equal(retry.kind,'summary');
+  polling.complete(s,response(retry,[]),5200);
+  assert.equal(s.handling,undefined,'a normal completion leaves no handling marker');
+  assert.equal(polling.drop(s,retry.requestId,5200),false,'a later adopt fault does not retry a completed reply');
+}
+{
+  const s=selectedRepo([]);
+  s.repos[0].summaryAt=0;
+  polling.requestLog(s,{repo:'a/b',run:'7',mode:'failed'},0);
+  const request=polling.next(s,0); assert.equal(request.kind,'log');
+  assert.equal(polling.drop(s,request.requestId,100),true);
+  assert.deepEqual({...s.log},{error:'Could not load log'});
+  assert.equal(s.tasks[polling.key('log','a/b','7')],undefined);
+}
+{
+  const s=watchState();
+  const request=polling.next(s,30000); assert.equal(request.kind,'run');
+  const task=s.tasks[polling.key('run','a/b','1')];
+  polling.drop(s,request.requestId,30100);
+  assert.equal(task.due,60100,'a dropped watched run waits for its watch interval');
+}
+{
+  const s=watchState(); s.remaining=100; s.resetAt=900000;
+  const request=polling.next(s,300000); assert.equal(request.kind,'run');
+  polling.drop(s,request.requestId,300100);
+  assert.equal(s.tasks[polling.key('run','a/b','1')].due,600100,'watch retry respects quota pacing');
+}
+{
+  const s=selectedRepo([]), r=s.repos[0];
+  r.activityAt=0; r.summaryAt=599200;
+  assert.equal(polling.next(s,599100),null);
+  const task=s.tasks[polling.key('activity','a/b')];
+  assert.equal(task.due,600000,'idle activity is queued early');
+  polling.select(s,'a/b','',{},599200,true);
+  assert.equal(polling.next(s,599200).kind,'activity','selection advances a queued activity');
+}
+{
+  const s=selectedRepo([]), r=s.repos[0];
+  r.active=1; r.activityAt=0; s.remaining=400; s.resetAt=44950;
+  assert.equal(polling.next(s,44900),null);
+  assert.equal(s.tasks[polling.key('activity','a/b')].due,45000);
+  assert.equal(polling.next(s,44950).kind,'activity','quota reset advances a queued activity');
+}
+console.log('Polling: merge pruning, capped reseeding and dropped-flight retry passed');
