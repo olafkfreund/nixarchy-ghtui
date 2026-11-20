@@ -1264,3 +1264,84 @@ console.log('Polling: account change clears watches, low quota stretches them');
   assert.equal(polling.runFor(s,'a/b',7).status,'in_progress');
 }
 console.log('Polling: restart discards partial replies and stale run payloads leave details intact');
+
+// #60 step 3: merging frees details for evicted runs immediately.
+{
+  const s=selectedRepo([{id:1,status:'in_progress'},...Array.from({length:10},(_,i)=>result(i+2))]);
+  s.repos[0].activityAt=0; s.details['a/b:1']={jobs:[{id:1}]};
+  polling.ensure(s,'run','a/b','1','interactive',0);
+  const request=polling.next(s,0); assert.equal(request.kind,'run');
+  polling.complete(s,response(request,result(1)),100);
+  assert.equal(polling.runFor(s,'a/b',1),undefined);
+  assert.equal(s.details['a/b:1'],undefined,'single-run merge prunes evicted details');
+}
+{
+  const s=selectedRepo(Array.from({length:15},(_,i)=>result(i+1))), r=s.repos[0];
+  polling.select(s,'a/b','2',{'a/b:1':true},0,true);
+  r.last={id:3};
+  for (const id of [1,2,3,4]) s.details[`a/b:${id}`]={jobs:[{id}]};
+  polling.mergeRuns(s,r,[result(16)]);
+  for (const id of [1,2,3]) assert.ok(s.details[`a/b:${id}`],`kept run ${id} retains details`);
+  assert.equal(s.details['a/b:4'],undefined);
+  assert.equal(s.expanded['a/b:1'],true,'pruning does not clear expansion state');
+}
+{
+  const s=selectedRepo(Array.from({length:11},(_,i)=>result(i+1)));
+  polling.select(s,'a/b','',{},0,true);
+  s.details['a/b:1']={jobs:[{id:1}]};
+  const request=polling.next(s,0); assert.equal(request.kind,'summary');
+  polling.complete(s,response(request,[result(12)]),100);
+  assert.equal(s.repos[0].summaryAt,undefined,'summary is still between phases');
+  assert.equal(s.details['a/b:1'],undefined,'intermediate page prunes evicted details');
+}
+
+// Idle calls share one seed; writers and exact scheduler deadlines wake it.
+{
+  const s=selectedRepo([]); s.repos=[];
+  for (let now=0;now<1000;now+=100) assert.equal(polling.next(s,now),null);
+  assert.equal(s.seeds,1);
+  polling.select(s,'','',{},950,true);
+  assert.equal(polling.next(s,950),null); assert.equal(s.seeds,2);
+  polling.ensure(s,'run','a/b','7','interactive',1500);
+  assert.equal(polling.next(s,1499),null);
+  assert.equal(polling.next(s,1500).kind,'run','queued work starts at its own due');
+}
+{
+  const s=selectedRepo([]);
+  s.repos[0].activityAt=0;
+  polling.select(s,'a/b','',{},0,false);
+  assert.equal(polling.next(s,200),null);
+  assert.equal(s.wakeAt,250);
+  assert.equal(polling.next(s,249),null);
+  assert.equal(polling.next(s,250).kind,'summary');
+}
+{
+  const s=selectedRepo([]);
+  s.repos[0].active=1; s.repos[0].activityAt=-5000;
+  s.remaining=100; s.resetAt=10000;
+  assert.equal(polling.next(s,9999),null);
+  assert.equal(s.wakeAt,10000);
+  assert.equal(polling.next(s,10000).kind,'activity');
+}
+const stoppedCatalogue=blockedCatalogue();
+assert.equal(polling.next(stoppedCatalogue,300000),null,'permission stop lasts beyond catalogue interval');
+
+{
+  const s=selectedRepo([]);
+  polling.select(s,'a/b','',{},0,true);
+  const task=polling.ensure(s,'summary','a/b','','interactive',0);
+  task.page=2; task.phase=1; task.items=[result(1)]; task.all=[result(2)];
+  const request=polling.next(s,0); assert.equal(request.kind,'summary');
+  s.wakeAt=1000;
+  assert.equal(polling.drop(s,request.requestId+1,100),false);
+  assert.equal(s.wakeAt,0); assert.equal(s.flight.request.requestId,request.requestId);
+  assert.equal(polling.drop(s,request.requestId,100),true);
+  assert.equal(s.flight,null); assert.equal(task.failures,1); assert.equal(task.due,5100);
+  assert.equal(task.page,1); assert.equal(task.phase,0);
+  assert.equal(task.items.length,0); assert.equal(task.all.length,0);
+  assert.equal(polling.next(s,5099),null);
+  const retry=polling.next(s,5100); assert.equal(retry.status,'recent'); assert.equal(retry.page,1);
+  assert.equal(polling.drop(s,request.requestId,5200),false);
+  assert.equal(s.flight.request.requestId,retry.requestId,'stale drop leaves the newer flight intact');
+}
+console.log('Polling: merge pruning, capped reseeding and dropped-flight retry passed');

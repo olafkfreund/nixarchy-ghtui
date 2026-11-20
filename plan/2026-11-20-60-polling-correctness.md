@@ -208,7 +208,11 @@ copy files.
 
 ## Deviations
 
-None yet.
+- **Step 3:** `seed()` queues a repository's activity task up to
+  `TIMING.reseed` (1 s) before its due time (`now + TIMING.reseed >=
+  age(...)`), so `next()` still starts it exactly on time despite the
+  reseed cap; the other time-based rules can still start up to a second
+  late, as decision 7 says.
 
 ## Rollback
 
