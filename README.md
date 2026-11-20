@@ -147,7 +147,7 @@ The panel title shows the active `gh` login as `login@github.com` once it has be
 | Enter while filtering | Expand selected result and resume navigation |
 | Tab while filtering | Resume navigation without expanding |
 | Esc | Close run details, then clear filter, then close |
-| r | Refresh summaries and selected expanded run |
+| r | Restart the selected repository's summary (unless a load-more is running) and the jobs of the inspected expanded run, from the start |
 | Shift + R | Rediscover repositories from GitHub |
 | m | Load 30 more recent runs (up to 100) for the selected repository |
 | o | Open selected repository/run/job on GitHub |
