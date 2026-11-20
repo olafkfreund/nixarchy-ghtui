@@ -150,10 +150,29 @@ ShellRoot {
     Process {
         id: flagProc
         command: ["python3", "-c", "import os;open(os.environ['HOME']+'/run-done','w')"]
-        onExited: { panel.polling.watches["one/repo:7"].at = 0; var run = panel.polling.repos[0].runs.filter(function(r) { return r.id === 7 })[0]; if (run) delete run.followupAt; flagReady = true }  // both clocks: the watch and the 15 s follow-up
+        onExited: { panel.polling.watches["one/repo:7"].at = 0; panel.polling.wakeAt = 0; var task = panel.polling.tasks["run:one/repo:7"]; if (task) task.due = 0; var run = panel.polling.repos[0].runs.filter(function(r) { return r.id === 7 })[0]; if (run) delete run.followupAt; flagReady = true }  // both clocks: the watch and the 15 s follow-up
     }
     function launched() { launchFile.reload(); return launchFile.text().split("\\n").length > 5 }
     function check(value, label) { if (!value) throw new Error("CHECK FAILED: " + label) }
+    function replyFaults() {
+        var state = Polling.create()
+        state.opened = true; state.generation = 1
+        var task = Polling.ensure(state,"account","","","interactive",0)
+        state.flight = {key:task.key,request:{requestId:900},generation:1}
+        panel.polling = state; panel.requestInfo = {requestId:900}; panel.workerBusy = true
+        panel.finishRequest({trim:function() { throw new Error("before complete fault") }},0)
+        check(!panel.workerBusy && !state.flight && task.failures===1,"reply fault before complete clears the worker and retries")
+
+        state = Polling.create()
+        state.opened = true; state.generation = 1
+        task = Polling.ensure(state,"account","","","interactive",0)
+        state.flight = {key:task.key,request:{requestId:901},generation:1}
+        state.notices = [{kind:"done",repo:"one/repo",name:{toString:function() { throw new Error("adopt fault") }}}]
+        panel.polling = state; panel.requestInfo = {requestId:901}; panel.workerBusy = true
+        panel.finishRequest(JSON.stringify({requestId:901,data:{login:"tester"},error:"",errorType:""}),0)
+        check(!panel.workerBusy && !state.flight && state.accountChecked && state.notices.length===0,
+            "reply fault inside adopt clears the worker without handling it twice")
+    }
     Timer {
         interval: 1000; running: true
         onTriggered: {
@@ -178,6 +197,7 @@ ShellRoot {
             check(panel.textStep===-3 && panel.notice==="Text size 70%","minus four clamps to minus three")
             panel.setTextStep(0)
             check(panel.fBody===Style.font.body && panel.notice==="Text size 100%","reset restores theme body")
+            replyFaults()
             menuFile.reload()
             check(!panel.opened && panel.polling.requests===0,"registration does not open or poll")
             if (Quickshell.env("MENU_SCENARIO") === "fresh")
@@ -301,6 +321,7 @@ ShellRoot {
             selected=panel.current.key
             panel.toggleDetail()  // open while the popup opens, so its layout has settled by the stage-1 checks
             panel.open()
+            check(panel.workerBusy && panel.polling.requests>0,"a later request starts after reply faults")
             stage=1
         }
     }
