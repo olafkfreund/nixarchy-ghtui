@@ -77,12 +77,12 @@ function manual(s, now, catalogue) {
         r.blocked = false; r.error = ""; s.stableAt = now;
         if (!s.tasks[key("more",r.repo)]) {
             var summary=ensure(s, "summary", r.repo, "", "interactive", now);
-            summary.due=Math.min(summary.due,now);
+            restart(s,summary,now);
         }
         if (s.inspected && s.expanded[r.repo + ":" + s.inspected]) {
             if (s.details[r.repo+":"+s.inspected]) s.details[r.repo+":"+s.inspected].unavailable=false;
             var jobs=ensure(s, "jobs", r.repo, s.inspected, "interactive", now);
-            jobs.due=Math.min(jobs.due,now);
+            restart(s,jobs,now);
         }
     }
 }
@@ -105,6 +105,12 @@ function touch(s, repo, run, now) {
     if (s.flight && s.flight.key===t.key) t.again=true;
     var r=repoFor(s,repo);
     if (r) delete r.summaryAt;
+}
+function restart(s,t,now) {
+    if (s.flight && s.flight.key===t.key) { t.restart=true; return; }
+    t.page=1; t.phase=0; t.items=[]; t.all=[];
+    delete t.hidden; delete t.recent;
+    t.due=now;
 }
 function seed(s, now) {
     if (s.opened && !s.accountChecked) { ensure(s,"account","","","interactive",now); return; }
@@ -194,21 +200,22 @@ function union(a,b) {
     });
     return Object.keys(map).map(function(id) { return map[id] });
 }
-function invalidateJobs(s,r,incoming) {
-    incoming.forEach(function(run) {
-        var old=(r.runs || []).filter(function(x) { return x.id===run.id })[0];
-        if (old && ((old.run_attempt || 1)!==(run.run_attempt || 1) || old.status==="completed" && run.status!=="completed"))
-            delete s.details[r.repo + ":" + run.id];
-    });
-}
 function mergeRuns(s,r,incoming) {
+    var previous=(r.runs || []).slice();
+    r.runs=recent(s,r,union(previous,incoming));
     incoming.forEach(function(run) {
-        var old=runFor(s,r.repo,run.id);
-        if (s.opened && old && old.status!=="completed" && run.status==="completed" && s.selected===r.repo && s.inspected===String(run.id) && s.expanded[r.repo+":"+run.id])
+        var old=previous.filter(function(x) { return x.id===run.id })[0];
+        var accepted=runFor(s,r.repo,run.id);
+        if (!old || !accepted) return;
+        if ((old.run_attempt || 1)!==(accepted.run_attempt || 1)) {
+            delete s.details[r.repo + ":" + run.id];
+            var jobs=s.tasks[key("jobs",r.repo,run.id)];
+            if (jobs) restart(s,jobs,s.clock || 0);
+        } else if (old.status==="completed" && accepted.status!=="completed")
+            delete s.details[r.repo + ":" + run.id];
+        if (s.opened && old.status!=="completed" && accepted.status==="completed" && s.selected===r.repo && s.inspected===String(run.id) && s.expanded[r.repo+":"+run.id])
             ensure(s,"jobs",r.repo,run.id,"interactive",s.clock || 0);
     });
-    invalidateJobs(s,r,incoming);
-    r.runs=recent(s,r,union(r.runs || [], incoming));
 }
 function recent(s,r,runs) {
     var completed=0;
@@ -277,6 +284,7 @@ function complete(s,reply,now) {
     if (!reply.errorType && !reply.error && !okData)
         reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
     cool(s,reply,now);
+    if (t.restart) { delete t.restart; restart(s,t,now); return true; }
     if (t.kind==="log") {
         if (reply.errorType || reply.error) {
             s.log={error:reply.error || "Invalid GitHub response"};
@@ -335,8 +343,9 @@ function complete(s,reply,now) {
             var resolved=Object.assign({},data,{awaitingFinal:false,followupAt:now});
             lastResult(r,[resolved],now,null,0);
             mergeRuns(s,r,[resolved]);
+            var accepted=runFor(s,t.repo,t.run);
             r.active=(r.runs || []).filter(function(run) { return run.status==="in_progress" && !run.awaitingFinal }).length;
-            if (s.opened && resolved.status==="completed" && t.repo===s.selected && t.run===s.inspected && s.expanded[t.repo+":"+t.run])
+            if (s.opened && accepted && accepted.status==="completed" && t.repo===s.selected && t.run===s.inspected && s.expanded[t.repo+":"+t.run])
                 ensure(s,"jobs",t.repo,t.run,"interactive",now);
         }
         var w=s.watches[t.repo+":"+t.run];

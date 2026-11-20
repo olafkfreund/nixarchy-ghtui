@@ -1138,3 +1138,83 @@ console.log('Polling: closed-panel watches are capped, finish once and recover')
   }
 }
 console.log('Polling: account change clears watches, low quota stretches them');
+
+// #60 step 1: manual refresh restarts partial snapshots without losing retry history.
+{
+  const s=selectedRepo([]), r=s.repos[0];
+  Object.assign(r,{summaryAt:0,activityAt:0});
+  polling.select(s,'a/b','',{},0,true);
+  const task=polling.ensure(s,'summary','a/b','','interactive',0);
+  task.phase=1; task.page=3; task.items=[{id:1,status:'in_progress'}];
+  task.all=[{id:2,status:'completed'}]; task.hidden={in_progress:9}; task.recent=[{id:2}]; task.failures=3;
+  polling.manual(s,100,false);
+  assert.equal(task.phase,0); assert.equal(task.page,1); assert.equal(task.due,100);
+  assert.equal(task.items.length,0); assert.equal(task.all.length,0);
+  assert.equal(task.hidden,undefined); assert.equal(task.recent,undefined);
+  assert.equal(task.failures,3);
+  let request=polling.next(s,100); assert.equal(request.status,'recent'); assert.equal(request.page,1);
+  polling.complete(s,response(request,[{id:3,status:'completed'}]),200);
+  for (let phase=1;phase<polling.phases.length;phase++) {
+    request=polling.next(s,100+phase*1000);
+    polling.complete(s,response(request,[]),200+phase*1000);
+  }
+  assert.deepEqual(Array.from(r.runs,run=>run.id),[3]);
+  assert.equal(r.hidden.in_progress,undefined,'a reply without total cannot reuse an old hidden count');
+}
+{
+  const s=selectedRepo([]), r=s.repos[0];
+  Object.assign(r,{summaryAt:0,activityAt:0});
+  polling.select(s,'a/b','',{},0,true);
+  polling.ensure(s,'summary','a/b','','interactive',0);
+  const request=polling.next(s,0); assert.equal(request.kind,'summary');
+  const task=s.tasks[polling.key('summary','a/b')]; task.failures=2;
+  polling.manual(s,100,false); assert.equal(task.restart,true);
+  assert.equal(polling.complete(s,{...response(request,[{id:4,status:'completed'}]),remaining:0,resetAt:3000},200),true);
+  assert.equal(r.runs.length,0); assert.equal(task.restart,undefined);
+  assert.equal(task.due,200); assert.equal(task.failures,2);
+  assert.equal(s.cooldown,3000); assert.equal(polling.next(s,2999),null);
+  assert.equal(polling.next(s,3000).status,'recent');
+}
+{
+  const s=jobsFixture(false), task=s.tasks[polling.key('jobs','a/b','7')];
+  task.page=2; task.items=[{id:1,status:'in_progress'}]; task.failures=2;
+  polling.manual(s,100,false);
+  assert.equal(task.page,1); assert.equal(task.items.length,0); assert.equal(task.failures,2);
+  assert.equal(polling.next(s,100).page,1);
+}
+{
+  const s=jobsFixture(false), r=s.repos[0], task=s.tasks[polling.key('jobs','a/b','7')];
+  let request=polling.next(s,0); assert.equal(request.kind,'jobs');
+  polling.complete(s,response(request,[{id:1,status:'completed'}],2),100);
+  assert.equal(task.page,2);
+  polling.mergeRuns(s,r,[{id:7,status:'in_progress',run_attempt:2}]);
+  assert.equal(task.page,1); assert.equal(task.items.length,0);
+  request=polling.next(s,1000); assert.equal(request.kind,'jobs'); assert.equal(request.page,1);
+  polling.complete(s,response(request,[{id:2,status:'completed'}]),1100);
+  assert.deepEqual(Array.from(s.details['a/b:7'].jobs,job=>job.id),[2]);
+}
+{
+  const newer='2026-01-02T00:00:00Z', older='2026-01-01T00:00:00Z';
+  for (const [cached,stale] of [['completed','in_progress'],['in_progress','completed']]) {
+    const s=selectedRepo([{id:7,status:cached,run_attempt:2,updated_at:newer}]);
+    polling.select(s,'a/b','7',{'a/b:7':true},0,true);
+    s.details['a/b:7']={jobs:[{id:1}]};
+    const task=polling.ensure(s,'jobs','a/b','7','interactive',5000);
+    task.page=2; task.items=[{id:1}];
+    polling.mergeRuns(s,s.repos[0],[{id:7,status:stale,run_attempt:1,updated_at:older}]);
+    assert.equal(polling.runFor(s,'a/b',7).status,cached);
+    assert.equal(s.details['a/b:7'].jobs[0].id,1);
+    assert.equal(task.page,2); assert.equal(task.items.length,1);
+  }
+  const s=selectedRepo([{id:7,status:'in_progress',run_attempt:2,updated_at:newer}]);
+  s.repos[0].activityAt=0; s.repos[0].summaryAt=0;
+  polling.select(s,'a/b','7',{'a/b:7':true},0,true);
+  const request=polling.next(s,0); assert.equal(request.kind,'jobs');
+  polling.complete(s,response(request,[]),100);
+  polling.ensure(s,'run','a/b','7','interactive',1000);
+  const lookup=polling.next(s,1000); assert.equal(lookup.kind,'run');
+  polling.complete(s,response(lookup,{id:7,status:'completed',run_attempt:1,updated_at:older}),1100);
+  assert.equal(s.tasks[polling.key('jobs','a/b','7')],undefined);
+  assert.equal(polling.runFor(s,'a/b',7).status,'in_progress');
+}
+console.log('Polling: restart discards partial replies and stale run payloads leave details intact');
