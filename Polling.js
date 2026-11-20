@@ -150,7 +150,9 @@ function seed(s, now) {
             var interval = selected ? TIMING.selected : (r.active > 0 ? TIMING.active : TIMING.idle)*pace(s,now);
             var group = selected ? "interactive" : r.active > 0 ? "active" : "background";
             if (now+TIMING.reseed >= age(r.activityAt, interval) && (group!=="background" || !backgroundQueued || s.tasks[activityKey])) {
-                ensure(s, "activity",r.repo,"",group,age(r.activityAt,interval));
+                var due=age(r.activityAt,interval), activityTask=ensure(s, "activity",r.repo,"",group,due);
+                if (!(s.flight && s.flight.key===activityKey) && !activityTask.failures)
+                    activityTask.due=Math.min(activityTask.due,isFinite(due) ? due : now);
                 if (group==="background") backgroundQueued=true;
             }
             else if (s.tasks[activityKey] && !(s.flight && s.flight.key === activityKey) && !s.tasks[activityKey].failures)
@@ -291,18 +293,31 @@ function cool(s,reply,now) {
 function noteWrite(s,reply,now) { s.wakeAt=0; cool(s,reply,now); }
 function drop(s,requestId,now) {
     s.wakeAt=0;
-    if (!s.flight || s.flight.request.requestId!==requestId) return false;
-    var t=s.tasks[s.flight.key]; s.flight=null;
+    var flight=s.flight && s.flight.request.requestId===requestId ? s.flight
+        : s.handling && s.handling.request.requestId===requestId ? s.handling : null;
+    if (!flight) return false;
+    var t=s.tasks[flight.key];
+    if (s.flight===flight) s.flight=null;
+    if (s.handling===flight) delete s.handling;
     if (!t) return false;
+    if (t.kind==="log") { s.log={error:"Could not load log"}; delete s.tasks[t.key]; return true; }
     t.failures++;
     t.due=now+Math.min(TIMING.retryMax,TIMING.retryBase*Math.pow(2,t.failures-1));
+    if (t.kind==="run" && s.watches[t.repo+":"+t.run]) t.due=Math.max(t.due,now+TIMING.watch*pace(s,now));
     t.page=1; t.phase=0; t.items=[]; t.all=[];
+    delete t.restart; delete t.hidden; delete t.recent;
     return true;
 }
 function complete(s,reply,now) {
     var flight=s.flight;
     if ((!s.opened && !hasWatches(s)) || !flight || flight.generation!==s.generation || reply.requestId!==flight.request.requestId) return false;
     var t=s.tasks[flight.key]; s.flight=null; s.wakeAt=0;
+    s.handling=flight;
+    var result=completeReply(s,reply,now,t);
+    delete s.handling;
+    return result;
+}
+function completeReply(s,reply,now,t) {
     if (!t) return false;
     if (typeof reply.remaining==="number") { s.remaining=reply.remaining; s.resetAt=reply.resetAt || 0; }
     var okData=t.kind==="run" || t.kind==="account" || t.kind==="log" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)

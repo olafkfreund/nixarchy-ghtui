@@ -1219,7 +1219,12 @@ console.log('Polling: account change clears watches, low quota stretches them');
   assert.equal(r.runs.length,0); assert.equal(task.restart,undefined);
   assert.equal(task.due,200); assert.equal(task.failures,2);
   assert.equal(s.cooldown,3000); assert.equal(polling.next(s,2999),null);
-  assert.equal(polling.next(s,3000).status,'recent');
+  const retry=polling.next(s,3000); assert.equal(retry.status,'recent');
+  polling.complete(s,response(retry,[]),3100);
+  assert.equal(polling.next(s,3999),null,'restart still observes the one-second gap');
+  s.starts=Array.from({length:60},(_,i)=>3000+i);
+  assert.equal(polling.next(s,4000),null,'restart still observes the rolling window');
+  assert.equal(polling.next(s,63059).status,'in_progress');
 }
 {
   const s=jobsFixture(false), task=s.tasks[polling.key('jobs','a/b','7')];
@@ -1331,6 +1336,7 @@ assert.equal(polling.next(stoppedCatalogue,300000),null,'permission stop lasts b
   polling.select(s,'a/b','',{},0,true);
   const task=polling.ensure(s,'summary','a/b','','interactive',0);
   task.page=2; task.phase=1; task.items=[result(1)]; task.all=[result(2)];
+  task.hidden={queued:9}; task.recent=[result(2)]; task.restart=true;
   const request=polling.next(s,0); assert.equal(request.kind,'summary');
   s.wakeAt=1000;
   assert.equal(polling.drop(s,request.requestId+1,100),false);
@@ -1339,9 +1345,69 @@ assert.equal(polling.next(stoppedCatalogue,300000),null,'permission stop lasts b
   assert.equal(s.flight,null); assert.equal(task.failures,1); assert.equal(task.due,5100);
   assert.equal(task.page,1); assert.equal(task.phase,0);
   assert.equal(task.items.length,0); assert.equal(task.all.length,0);
+  assert.equal(task.restart,undefined); assert.equal(task.hidden,undefined); assert.equal(task.recent,undefined);
   assert.equal(polling.next(s,5099),null);
   const retry=polling.next(s,5100); assert.equal(retry.status,'recent'); assert.equal(retry.page,1);
-  assert.equal(polling.drop(s,request.requestId,5200),false);
+  assert.equal(polling.drop(s,request.requestId,5150),false);
   assert.equal(s.flight.request.requestId,retry.requestId,'stale drop leaves the newer flight intact');
+  polling.complete(s,response(retry,[result(3)]),5200);
+  assert.equal(task.phase,1,'the good retry reply is accepted');
+  assert.equal(s.repos[0].hidden,undefined,'stale hidden counts are not published');
+}
+{
+  const s=selectedRepo([]);
+  s.repos[0].activityAt=0;
+  polling.select(s,'a/b','',{},0,true);
+  const task=polling.ensure(s,'summary','a/b','','interactive',0);
+  const request=polling.next(s,0); assert.equal(request.kind,'summary');
+  const bad=response(request,[]);
+  Object.defineProperty(bad,'data',{get() { throw new Error('complete fault'); }});
+  assert.throws(()=>polling.complete(s,bad,100),/complete fault/);
+  assert.equal(s.flight,null); assert.ok(s.handling);
+  assert.equal(polling.drop(s,request.requestId,100),true);
+  assert.equal(s.handling,undefined); assert.equal(task.due,5100);
+  assert.equal(polling.next(s,5099),null);
+  const retry=polling.next(s,5100); assert.equal(retry.kind,'summary');
+  polling.complete(s,response(retry,[]),5200);
+  assert.equal(s.handling,undefined,'a normal completion leaves no handling marker');
+  assert.equal(polling.drop(s,retry.requestId,5200),false,'a later adopt fault does not retry a completed reply');
+}
+{
+  const s=selectedRepo([]);
+  s.repos[0].summaryAt=0;
+  polling.requestLog(s,{repo:'a/b',run:'7',mode:'failed'},0);
+  const request=polling.next(s,0); assert.equal(request.kind,'log');
+  assert.equal(polling.drop(s,request.requestId,100),true);
+  assert.deepEqual({...s.log},{error:'Could not load log'});
+  assert.equal(s.tasks[polling.key('log','a/b','7')],undefined);
+}
+{
+  const s=watchState();
+  const request=polling.next(s,30000); assert.equal(request.kind,'run');
+  const task=s.tasks[polling.key('run','a/b','1')];
+  polling.drop(s,request.requestId,30100);
+  assert.equal(task.due,60100,'a dropped watched run waits for its watch interval');
+}
+{
+  const s=watchState(); s.remaining=100; s.resetAt=900000;
+  const request=polling.next(s,300000); assert.equal(request.kind,'run');
+  polling.drop(s,request.requestId,300100);
+  assert.equal(s.tasks[polling.key('run','a/b','1')].due,600100,'watch retry respects quota pacing');
+}
+{
+  const s=selectedRepo([]), r=s.repos[0];
+  r.activityAt=0; r.summaryAt=599200;
+  assert.equal(polling.next(s,599100),null);
+  const task=s.tasks[polling.key('activity','a/b')];
+  assert.equal(task.due,600000,'idle activity is queued early');
+  polling.select(s,'a/b','',{},599200,true);
+  assert.equal(polling.next(s,599200).kind,'activity','selection advances a queued activity');
+}
+{
+  const s=selectedRepo([]), r=s.repos[0];
+  r.active=1; r.activityAt=0; s.remaining=400; s.resetAt=44950;
+  assert.equal(polling.next(s,44900),null);
+  assert.equal(s.tasks[polling.key('activity','a/b')].due,45000);
+  assert.equal(polling.next(s,44950).kind,'activity','quota reset advances a queued activity');
 }
 console.log('Polling: merge pruning, capped reseeding and dropped-flight retry passed');

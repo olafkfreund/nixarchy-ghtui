@@ -213,6 +213,25 @@ copy files.
   age(...)`), so `next()` still starts it exactly on time despite the
   reseed cap; the other time-based rules can still start up to a second
   late, as decision 7 says.
+- **Review fixes** (agy and Opus final reviews; Codex found none):
+  - `drop()` also clears `t.restart`, `t.hidden` and `t.recent`, so the
+    retried reply is not discarded as a restart.
+  - `complete()` records the flight it is handling in `s.handling`
+    (cleared when it returns normally); `drop()` backs off that task when
+    `complete()` itself threw, so such a fault retries with backoff
+    instead of every second (decision 8 covered only throws before
+    `complete()`).
+  - `drop()` ends a `log` task like a failed log reply and keeps a
+    watched run on its watch pace, as `complete()`'s error path does.
+  - The early-queued activity task's `due` is lowered when the
+    repository becomes selected or the pace drops (extends the step 3
+    deviation).
+  - The smoke's `replyFaults()` runs after the registration check, and
+    the restart tests also check the 1 s gap and the 60-a-minute window.
+- **Not changed** (pre-existing, outside #60): a single-run reply that
+  `union()` rejects as stale leaves an `awaitingFinal` run without a
+  follow-up time, so its lookup repeats at the 1 s gap.
+- **Coders:** every step ran with its planned coder (no fallback).
 
 ## Rollback
 
