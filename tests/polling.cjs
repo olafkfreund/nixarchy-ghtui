@@ -363,6 +363,52 @@ assert.equal(req.kind,'activity');
 polling.complete(act,response(req,Array.from({length:100},(_,i)=>({id:i+1,status:'in_progress'})),0,250),100);
 assert.equal(act.repos[0].active,250); assert.equal(Object.keys(act.repos[0].hidden).length,0);
 assert.equal(act.requests,1);
+assert.equal(act.repos[0].activeFromTotal,true);
+polling.ensure(act,'run','a/b','1','interactive',1000);
+req=polling.next(act,1000); assert.equal(req.kind,'run');
+polling.complete(act,response(req,{id:1,status:'in_progress'}),1100);
+assert.equal(act.repos[0].active,250,'a single lookup preserves the API total');
+act.repos[0].summaryAt=100;
+polling.select(act,'a/b','',{},2000,true);
+polling.activity(act,act.repos[0],[{id:1,status:'in_progress'}],2000,undefined,true);
+assert.equal(act.repos[0].active,250,'selected activity without total keeps the summary count');
+assert.equal(act.repos[0].activeFromTotal,true);
+polling.ensure(act,'run','a/b','1','interactive',3000);
+req=polling.next(act,3000); assert.equal(req.kind,'run');
+polling.complete(act,response(req,{id:1,status:'completed'}),3100);
+assert.equal(act.repos[0].active,249,'a counted run finishing reduces the API total once');
+
+const zeroTotal=selectedRepo([]);
+polling.activity(zeroTotal,zeroTotal.repos[0],[],100,0);
+polling.ensure(zeroTotal,'run','a/b','7','interactive',1000);
+req=polling.next(zeroTotal,1000); assert.equal(req.kind,'run');
+polling.complete(zeroTotal,response(req,{id:7,status:'in_progress'}),1100);
+assert.equal(zeroTotal.repos[0].active,1,'a confirmed run raises a zero API total');
+
+const freshRun={id:7,status:'in_progress',updated_at:'2026-01-02T00:00:00Z'};
+const staleTotal=selectedRepo([]);
+polling.activity(staleTotal,staleTotal.repos[0],[freshRun],100,250);
+polling.ensure(staleTotal,'run','a/b','7','interactive',1000);
+req=polling.next(staleTotal,1000); assert.equal(req.kind,'run');
+polling.complete(staleTotal,response(req,{id:7,status:'completed',updated_at:'2026-01-01T00:00:00Z'}),1100);
+assert.equal(staleTotal.repos[0].active,250,'a stale completed reply does not decrement the total');
+
+const trimmedCount=selectedRepo([{id:1,status:'in_progress'},
+  ...Array.from({length:10},(_,i)=>({id:i+2,status:'completed'}))]);
+Object.assign(trimmedCount.repos[0],{active:250,activeFromTotal:true,activityAt:100});
+polling.ensure(trimmedCount,'run','a/b','1','interactive',1000);
+req=polling.next(trimmedCount,1000); assert.equal(req.kind,'run');
+polling.complete(trimmedCount,response(req,{id:1,status:'completed'}),1100);
+assert.equal(polling.runFor(trimmedCount,'a/b',1),undefined);
+assert.equal(trimmedCount.repos[0].active,249,'a trimmed completed run still reduces the total');
+
+const localCount=selectedRepo([]);
+polling.activity(localCount,localCount.repos[0],[{id:1,status:'in_progress'},{id:2,status:'in_progress'}],100);
+assert.equal(localCount.repos[0].activeFromTotal,false);
+polling.ensure(localCount,'run','a/b','1','interactive',1000);
+req=polling.next(localCount,1000); assert.equal(req.kind,'run');
+polling.complete(localCount,response(req,{id:1,status:'completed'}),1100);
+assert.equal(localCount.repos[0].active,1,'without total the local run count remains authoritative');
 
 const full=selectedRepo([]);
 polling.ensure(full,'activity','a/b','','active',0); req=polling.next(full,0);

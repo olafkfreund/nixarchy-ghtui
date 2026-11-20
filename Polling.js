@@ -258,7 +258,10 @@ function activity(s,r,items,now,total,unfiltered) {
     });
     r.runs=r.runs.filter(function(run) { return !dropped[run.id] });
     items.forEach(function(run) { var cached=runFor(s,r.repo,run.id); if (cached) { delete cached.awaitingFinal; delete cached.followupAt; } });
-    if (!summaryAuthoritative) r.active=typeof total==="number" ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
+    if (!summaryAuthoritative) {
+        r.activeFromTotal=typeof total==="number" && total>=0;
+        r.active=r.activeFromTotal ? total : items.filter(function(run) { return run.status==="in_progress" }).length;
+    }
     if (unfiltered && s.selected!==r.repo) r.hidden={};
     else if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
     r.activityAt=now; r.checked=new Date(now).toISOString(); r.error="";
@@ -340,11 +343,15 @@ function complete(s,reply,now) {
     }
     if (t.kind==="run") {
         if (r) {
+            var old=runFor(s,t.repo,t.run), counted=old && old.status==="in_progress" && !old.awaitingFinal;
             var resolved=Object.assign({},data,{awaitingFinal:false,followupAt:now});
             lastResult(r,[resolved],now,null,0);
             mergeRuns(s,r,[resolved]);
             var accepted=runFor(s,t.repo,t.run);
-            r.active=(r.runs || []).filter(function(run) { return run.status==="in_progress" && !run.awaitingFinal }).length;
+            var running=(r.runs || []).filter(function(run) { return run.status==="in_progress" && !run.awaitingFinal }).length;
+            if (r.activeFromTotal && counted && (!accepted || accepted.status!=="in_progress"))
+                r.active=Math.max(running,(r.active || 0)-1);
+            else r.active=r.activeFromTotal ? Math.max(r.active || 0,running) : running;
             if (s.opened && accepted && accepted.status==="completed" && t.repo===s.selected && t.run===s.inspected && s.expanded[t.repo+":"+t.run])
                 ensure(s,"jobs",t.repo,t.run,"interactive",now);
         }
