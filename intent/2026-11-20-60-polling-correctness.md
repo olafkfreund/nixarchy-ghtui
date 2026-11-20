@@ -16,13 +16,13 @@ gives:
 
 | # | Bug | Here today |
 |---|---|---|
-| 1 | A stage named `constructor`, `__proto__` or `toString` crashes stage grouping | Not applicable: there is no stage grouping, keys always carry a prefix (`Polling.js` `key`, `ActionsModel.js` `"repo:"`), and label lookups use `hasOwnProperty` |
-| 2 | A job list saved as final while it mixes two run attempts | **Present.** `invalidateJobs` (`Polling.js` 197-203) deletes the cached jobs on an attempt change, but an in-flight multi-page jobs task keeps merging pages into `t.items` and stamps the result with the new `run_attempt` (lines 353, 394-397) |
-| 3 | The server's running total overwritten by a smaller local count | **Present.** A single-run reply sets `r.active` to the local in-progress count (line 338), replacing the total from the activity page (lines 254, 379); the row then shows too few running |
-| 4 | `r` does not cut short a retry wait | **Partly fixed.** `manual()` already moves a backing-off task's `due` to now (ghtui #41). Missing: a task already in flight when `r` is pressed is not re-run after its reply. ghtui #41 deliberately kept the failure count (its plan step 5) |
+| 1 | A stage named `constructor`, `__proto__` or `toString` crashes stage grouping | Not applicable: jobs are listed without stage grouping (`ActionsModel.js` 233) and label lookups use `hasOwnProperty` (line 75) |
+| 2 | A job list saved as final while it mixes two run attempts | **Present.** `invalidateJobs` (`Polling.js` 197-203) deletes the cached jobs when the attempt changes, but a multi-page jobs task that is between pages keeps the pages it already merged into `t.items` and stamps the result with the new `run_attempt` (lines 353, 394-397) |
+| 3 | The server's running total overwritten by a smaller local count | **Present.** The `in_progress` summary phase passes GitHub's total to `activity()` (line 379); a later single-run reply sets `r.active` to the locally listed in-progress count (line 338), so a project with 250 running shows the few it has listed. A server total of 0 must still rise when a lookup confirms a run has started, or the project stays on the idle schedule (gltui #21 step 8) |
+| 4 | `r` does not cut short a retry wait | **Partly fixed.** `manual()` already moves a backing-off summary or jobs task's `due` to now (ghtui #41, decision 5 in its step 3). Missing: a multi-page or multi-phase task that is between requests, or in flight, keeps its partial data and carries on from where it was, instead of starting again from the first page and phase. ghtui #41 deliberately kept the failure count |
 | 5 | Polling follows a row no longer highlighted | Already fixed: `adopt()` always calls `selectionChanged` (`ActionsPanel.qml` 240-241) |
-| 6 | Job caches never freed | **Mostly fixed** by ghtui #41's `prune()`. Gap: a single-run reply that drops a completed run from the list (`Polling.js` 335-337) does not prune its jobs until the next activity or summary reply |
-| 7 | The scheduler re-sorts every project ten times a second while idle | **Present.** `next()` calls `seed()`, which sorts every repo, on each 100 ms pump tick (`Polling.js` 163, 127; `ActionsPanel.qml` 418) |
+| 6 | Job caches never freed | **Mostly fixed** by ghtui #41's `prune()`. Gaps: a single-run reply (`Polling.js` 335-337) and an intermediate summary page or phase (line 361, which returns before the prune at line 391) can drop a run from the list without freeing its jobs until a later full summary or activity reply |
+| 7 | The scheduler re-sorts every project ten times a second while idle | **Present.** On each eligible 100 ms pump tick `next()` calls `seed()`, which sorts every repo (`Polling.js` 163, 127; `ActionsPanel.qml` 418). ghtui has more inputs to wake on than gltui: the quota pace (`pace`, `resetAt`), closed-panel watches, load-more and the account check |
 | 8 | A busy flag left stuck when handling a reply throws | **Present.** `requestProc.onExited` clears `workerBusy` after `receivePage` without `finally` (`ActionsPanel.qml` 424-428); `failedToStart` has the same shape. The action path already uses `try/finally` |
 
 Of the other gltui #21 items, one applies and is present: `menu.py`
@@ -39,12 +39,16 @@ When this is done:
 
 - A re-run that starts while its jobs are loading never shows a job list
   that mixes the old and the new attempt.
-- A project row keeps the server's running count after a single run
-  reply, instead of dropping to the runs the panel has listed.
-- `r` pressed while a request for the selected run or repository is in
-  flight makes that request run again once its reply arrives, instead of
-  waiting for the next normal interval.
-- Job details of a run that drops out of the list are freed at once.
+- A project row keeps at least the server's running count after a single
+  run reply, instead of dropping to the runs the panel has listed; a
+  confirmed new run still raises a count of 0.
+- `r` restarts the selected repository's summary and the inspected run's
+  jobs from their first phase and page: partial data is dropped, and a
+  reply that was in flight when `r` was pressed is discarded and the task
+  starts again (still within the cooldown, the 1 s gap and the rate
+  limit, and with the failure count kept).
+- Job details of a run that drops out of the list are freed at once, on
+  every reply path, except for the expanded and inspected runs.
 - An idle panel does no sorting or scheduling work between due times.
 - A reply that throws while being handled never leaves the panel stuck
   waiting; polling carries on.
@@ -82,6 +86,7 @@ When this is done:
    re-run.
 2. **`menu.py` dangling marker.** Not in the issue's list but the same
    bug. Recommended: include it (one line and a test).
-3. **Unselected queued runs** (gltui #21 item 7, follow-up lookups for
-   queued runs of other projects). ghtui #41 chose the narrow reading.
+3. **Unselected queued runs** (gltui #21 item 4, step 7: follow-up
+   lookups for queued runs of other projects; here activity already
+   marks a missing run for a final lookup, and watches have their own). ghtui #41 chose the narrow reading.
    Recommended: leave it out.
