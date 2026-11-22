@@ -664,7 +664,7 @@ ShellRoot {
     property double countsAt: 0
     property double writtenAt: 0
     property string savedStatus: ""
-    function check(ok, label) { if (!ok) throw new Error("CHECK FAILED: " + label) }
+    function check(ok, label) { if (!ok) { console.log("CHECK FAILED: " + label); Qt.exit(1); throw new Error("CHECK FAILED: " + label) } }
     function status() { file.reload(); try { return JSON.parse(file.text()) } catch (e) { return null } }
     function payload(state, stamp, cooldown) {
         return {version:1,instance:"test",account:"tester",state:state,running:2,failed:1,
@@ -991,8 +991,12 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                 (root / 'shell.qml').write_text(WIDGET_QML)
                 widget_env = {**env, 'WIDGET_STATUS_PATH': str(root / 'widget-status.json'),
                               'TOGGLE_LOG': str(root / 'omarchy-shell.log')}
-                widget_result = subprocess.run([QUICKSHELL, '-p', str(root), '--no-color'],
-                                               capture_output=True, text=True, timeout=30, env=widget_env)
+                try:
+                    widget_result = subprocess.run([QUICKSHELL, '-p', str(root), '--no-color'],
+                                                   capture_output=True, text=True, timeout=30, env=widget_env)
+                except subprocess.TimeoutExpired as hung:
+                    print(*(part.decode() if isinstance(part, bytes) else part or '' for part in (hung.stdout, hung.stderr)))
+                    raise SystemExit(f'{scenario}: QML widget checks timed out')
                 widget_output = widget_result.stdout + widget_result.stderr
                 if widget_result.returncode or 'WIDGET_CHECKS_PASSED' not in widget_output or any(
                         term in widget_output for term in ('ERROR:', 'ReferenceError', 'TypeError',
