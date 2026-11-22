@@ -724,7 +724,7 @@ ShellRoot {
                 p.polling=state; p.noticeBusy=true
                 check(Polling.watch(state,"one/repo","7","CI",now)==="on","closed watch starts")
                 p.adopt(); countsAt=state.countsAt
-                var request=Polling.next(state,now+31000)
+                var request=Polling.next(p.polling,now+31000)
                 check(request && request.kind==="run","closed watch requests a run")
                 p.receivePage(JSON.stringify({requestId:request.requestId,data:{id:7,name:"CI",status:"completed",
                     conclusion:"success"},nextPage:0,error:"",errorType:"",remaining:4000}),request)
@@ -738,7 +738,7 @@ ShellRoot {
                 next()
             } else if (stage===8) {
                 if (!ready(s && s.state==="rate" && a.statusView.state==="rate")) return
-                p.polling.auth=true; p.polling.error="Stopped"; p.adopt(); next()
+                p.polling.cooldown=0; p.polling.auth=true; p.polling.error="Stopped"; p.adopt(); next()
             } else if (stage===9) {
                 if (!ready(s && s.state==="stopped")) return
                 p.workerBusy=true; p.open(); next()

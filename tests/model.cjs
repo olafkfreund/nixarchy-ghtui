@@ -25,8 +25,11 @@ vm.runInContext(fs.readFileSync('ActionsModel.js', 'utf8'), model);
   assert.deepEqual(status({cooldown:now+1}),{...ok,state:'rate',cooldownUntil:now+1});
   assert.deepEqual(status({cooldown:now+1,countsAt:undefined}),
     {...ok,state:'rate',countsAt:0,cooldownUntil:now+1});
-  assert.deepEqual(status({cooldown:now+1,repos:[{error:'rate',active:9}]},{running:7,failed:3,countsAt:42}),
+  assert.deepEqual(status({cooldown:now+1,repos:[{error:'rate',active:9}]},{account:'tester',running:7,failed:3,countsAt:42}),
     {...ok,state:'rate',countsAt:42,cooldownUntil:now+1});
+  // A previous payload from another account is never reused (a failed reset write).
+  assert.deepEqual(status({cooldown:now+1,repos:[]},{account:'other',running:7,failed:3,countsAt:42}),
+    {...ok,state:'rate',running:0,failed:0,cooldownUntil:now+1});
   assert.deepEqual(status({cooldown:now+1,repos:[],countsAt:undefined,account:'new'},
     {running:7,failed:3,countsAt:42}),
     {...ok,account:'new',state:'rate',running:0,failed:0,countsAt:0,cooldownUntil:now+1});

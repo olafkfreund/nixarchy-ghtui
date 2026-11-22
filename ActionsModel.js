@@ -131,8 +131,10 @@ function barCounts(repos, now) {
 function barStatus(polling, instance, now, previous) {
     var state=polling.auth || polling.catalogueBlocked ? "stopped" : polling.cooldown>now ? "rate" :
         polling.countsAt===undefined ? "none" : "ok";
-    var counts=state==="rate" && polling.countsAt!==undefined && previous && previous.countsAt>0 ? previous : barCounts(polling.repos, now);
-    return {version:1, instance:instance, account:polling.accountVerified && polling.account ? polling.account : "",
+    var account=polling.accountVerified && polling.account ? polling.account : "";
+    var counts=state==="rate" && polling.countsAt!==undefined && previous && previous.countsAt>0 &&
+        previous.account===account ? previous : barCounts(polling.repos, now);
+    return {version:1, instance:instance, account:account,
         state:state, running:counts.running, failed:counts.failed,
         countsAt:counts===previous ? previous.countsAt : polling.countsAt===undefined ? 0 : polling.countsAt,
         cooldownUntil:state==="rate" ? polling.cooldown : 0,
