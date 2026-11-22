@@ -691,7 +691,8 @@ ShellRoot {
                 countsAt=Date.now()
                 p.polling.countsAt=countsAt
                 p.polling.repos=[{repo:"one/repo",active:2,checked:"x",
-                    runs:[{id:7,status:"completed",conclusion:"failure"}]}]
+                    runs:[{id:7,status:"completed",conclusion:"failure"}],
+                    last:{id:7,conclusion:"failure",at:new Date().toISOString(),confirmedAt:Date.now()}}]
                 p.adopt(); next()
             } else if (stage===2) {
                 if (!ready(s && s.state==="ok" && s.running===2 && s.failed===1 &&
