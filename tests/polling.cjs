@@ -1411,3 +1411,42 @@ assert.equal(polling.next(stoppedCatalogue,300000),null,'permission stop lasts b
   assert.equal(polling.next(s,44950).kind,'activity','quota reset advances a queued activity');
 }
 console.log('Polling: merge pruning, capped reseeding and dropped-flight retry passed');
+
+// The bar timestamp changes only when activity is read or an unpollable catalogue completes.
+{
+  const s=polling.create();
+  assert.equal(s.countsAt,undefined);
+  const reply=data => ({data,error:'',errorType:'',remaining:4000});
+  const complete=(kind,data,at,repo='',run='') => {
+    const task=polling.ensure(s,kind,repo,run,'interactive',at);
+    polling.completeReply(s,reply(data),at,task);
+  };
+  complete('catalogue',[],10);
+  assert.equal(s.countsAt,10,'empty catalogue is a known zero');
+  complete('catalogue',[{repo:'a/b'}],20);
+  assert.equal(s.countsAt,10,'a pollable catalogue waits for activity');
+  complete('activity',[],0,'a/b');
+  assert.equal(s.countsAt,0,'clock zero is a valid read');
+  complete('run',{id:1,status:'completed'},30,'a/b','1');
+  complete('jobs',[],40,'a/b','1');
+  complete('log',{text:'log'},50,'a/b','1');
+  complete('more',[],60,'a/b');
+  complete('account',{login:'a'},70);
+  assert.equal(s.countsAt,0,'run, jobs, log, more and same-account replies leave it');
+  complete('account',{login:'b'},80);
+  assert.equal(s.countsAt,undefined,'a different verified login discards old counts');
+  const page=polling.ensure(s,'catalogue','','','background',90);
+  polling.completeReply(s,{...reply([]),nextPage:2},90,page);
+  assert.equal(s.countsAt,undefined,'a partial catalogue is not complete');
+  polling.completeReply(s,reply([{repo:'a/b',archived:true},{repo:'a/c',disabled:true},{repo:'a/d',blocked:true}]),100,page);
+  assert.equal(s.countsAt,100,'a completed catalogue with no pollable repositories is a known zero');
+}
+{
+  const s=watchState(); s.countsAt=123; s.repos[0].active=1;
+  const request=polling.next(s,30000);
+  polling.complete(s,response(request,{id:1,status:'completed',conclusion:'failure',head_branch:'main',updated_at:'2026-01-01T00:00:00Z'}),30100);
+  assert.equal(s.repos[0].active,0);
+  assert.equal(s.repos[0].runs[0].status,'completed');
+  assert.equal(s.countsAt,123,'a closed watch updates cached counts without moving the activity timestamp');
+}
+console.log('Polling: bar counts timestamp lifecycle passed');

@@ -118,6 +118,27 @@ function health(repo, now, active) {
         info: [glyph + " " + ago(last.at, now), running, stale ? "stale" : ""].filter(Boolean).join(" · ")};
 }
 
+function barCounts(repos, now) {
+    var running=0, failed=0;
+    repos.forEach(function(repo) {
+        if (repo.archived || repo.disabled || repo.blocked || repo.error) return;
+        running+=repo.active === undefined ? (repo.runs || []).filter(function(run) { return run.status === "in_progress"; }).length : repo.active;
+        if (health(repo, now, 0).status === "failure") failed++;
+    });
+    return {running:running, failed:failed};
+}
+
+function barStatus(polling, instance, now, previous) {
+    var state=polling.auth || polling.catalogueBlocked ? "stopped" : polling.cooldown>now ? "rate" :
+        polling.countsAt===undefined ? "none" : "ok";
+    var counts=state==="rate" && polling.countsAt!==undefined && previous && previous.countsAt>0 ? previous : barCounts(polling.repos, now);
+    return {version:1, instance:instance, account:polling.accountVerified && polling.account ? polling.account : "",
+        state:state, running:counts.running, failed:counts.failed,
+        countsAt:counts===previous ? previous.countsAt : polling.countsAt===undefined ? 0 : polling.countsAt,
+        cooldownUntil:state==="rate" ? polling.cooldown : 0,
+        reason:state==="stopped" ? (polling.auth ? polling.error : polling.catalogueBlocked) || "" : "", writtenAt:now};
+}
+
 function cap(text, n) {
     if (typeof text !== "string") return "";
     return text.length > n ? text.slice(0, n - 1) + "…" : text;

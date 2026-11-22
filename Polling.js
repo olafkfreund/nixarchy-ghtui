@@ -7,7 +7,7 @@ var TIMING = {settle:250, catalogue:300000, summary:60000, selected:10000, activ
 function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
-        stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, discover:true, catalogueBlocked:"",
+        stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, countsAt:undefined, discover:true, catalogueBlocked:"",
         account:"", accountChecked:false, accountVerified:false, remaining:null, resetAt:0, error:"", log:null, watches:{}, notices:[], paused:false,
         requests:0, lastRequest:"", lastStarted:0, wakeAt:0, seeds:0};
 }
@@ -279,7 +279,7 @@ function activity(s,r,items,now,total,unfiltered) {
     }
     if (unfiltered && s.selected!==r.repo) r.hidden={};
     else if (typeof total==="number") r.hidden=Object.assign({},r.hidden,{in_progress:Math.max(0,total-items.length)});
-    r.activityAt=now; r.checked=new Date(now).toISOString(); r.error="";
+    r.activityAt=now; s.countsAt=now; r.checked=new Date(now).toISOString(); r.error="";
     prune(s,r);
 }
 function cool(s,reply,now) {
@@ -376,6 +376,7 @@ function completeReply(s,reply,now,t) {
         if (s.account && s.account!==data.login) {
             s.tasks={}; s.repos=[]; s.details={}; s.expanded={}; s.selected=""; s.inspected="";
             s.catalogueComplete=false; s.catalogueBlocked=""; s.discover=true; s.watches={};
+            delete s.countsAt;
         }
         s.account=data.login; s.accountChecked=true; s.accountVerified=true; delete s.tasks[t.key]; return true;
     }
@@ -427,6 +428,7 @@ function completeReply(s,reply,now,t) {
         // GitHub's pushed-descending catalogue order is retained across refreshes.
         s.repos.sort(function(a,b) { return names.indexOf(a.repo)-names.indexOf(b.repo) });
         s.catalogueComplete=true; s.catalogueAt=now; s.discover=false;
+        if (!s.repos.some(function(repo) { return !repo.archived && !repo.disabled && !repo.blocked; })) s.countsAt=now;
     } else if (r && t.kind==="activity") activity(s,r,t.items,now,reply.total,true);
     else if (r && t.kind==="summary") {
         t.all=union(t.all,t.items);
