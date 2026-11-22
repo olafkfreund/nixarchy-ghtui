@@ -34,6 +34,13 @@ Ensure your running session matches the installed Omarchy generation first. If y
 omarchy plugin add https://github.com/olafkfreund/nixarchy-ghtui.git --enable
 ```
 
+To add the separate bar widget, link its directory beside the panel plugin, then place it on the bar:
+
+```sh
+ln -s "$HOME/.config/omarchy/plugins/olafkfreund.github-actions/bar-widget" "$HOME/.config/omarchy/plugins/olafkfreund.github-actions-bar"
+omarchy bar put olafkfreund.github-actions-bar
+```
+
 ### Nix flake installation
 
 For an existing NixOS configuration with Nixarchy and its Home Manager module already enabled for your user, add this input to your `flake.nix`:
@@ -65,6 +72,8 @@ Import a NixOS module with the following content, replacing `YOUR_USER` with you
 ```
 
 The default package supports `x86_64-linux` and `aarch64-linux`. It contains the plugin files; adding it to `environment.systemPackages` alone does not register it with Omarchy. The Nixarchy module validates it and installs a link into your plugin directory. Your existing desktop supplies Quickshell and the Omarchy shell commands; the packages above supply the helpers' runtime commands. The package lists these as `passthru.runtimeDeps` (`gh`, `python3`, `xdg-utils`, `wl-clipboard`, `less`, `libnotify`). No second desktop stack or standalone Home Manager installation is needed.
+
+The flake also exposes `packages.<system>.bar` for the separate bar widget. Declaring that package as a nixarchy plugin and placing it on the bar is follow-up work; the panel's `default` package does not include it.
 
 Nix must have permission to fetch this repository. Your `gh auth login` is for runtime API access and does not automatically configure Nix's fetch credentials. An SSH input URL such as `git+ssh://git@github.com/olafkfreund/nixarchy-ghtui.git` is another option when your SSH access is configured. Never put tokens in `flake.nix` or `flake.lock`.
 
@@ -115,6 +124,23 @@ A `menu.managed` file beside `menu.py` turns registration off entirely: the pane
 For a symlink-managed or read-only `~/.config/omarchy/extensions/omarchy-menu.jsonc`, declare the entries from `menu.example.json` in the host configuration instead. Automatic registration leaves managed or malformed files untouched and reports an error in the shell log; the panel remains usable through its shortcut. To retry registration after correcting a writable file, run `python3 ~/.config/omarchy/plugins/olafkfreund.github-actions/menu.py register`.
 
 **Super+K** opens Omarchy’s keyboard menu: search **GitHub Actions** to find the launcher and **GitHub Actions keybindings**. The latter also opens directly with **Super+Ctrl+Alt+A**. Panel-local keys are documented in this reference; they only act inside the popup. The two bindings and menu entries are installed on this desktop.
+
+## Bar widget
+
+The separate bar widget (`olafkfreund.github-actions-bar`, packaged in `bar-widget/` and `packages.<system>.bar`) shows `●N` running workflow runs and `✕N` failing repositories. A failing repository is one whose latest finished run on the default branch that the panel has seen failed (`failure`, `timed_out` or `startup_failure`), matching the panel's repository rows. Left click anywhere on the widget to toggle the panel.
+
+Repository counts are from the last repository activity read; the tooltip shows that time and notes that watched runs are checked every 30 seconds (slower when the quota is low). Watched runs can update the running and failing counts while the panel is closed without advancing the repository activity timestamp.
+
+| State | Bar | Meaning |
+| --- | --- | --- |
+| No data | Dimmed GitHub glyph | Open the panel to load counts. |
+| Ready | Glyph and nonzero counts; urgent colour when repositories are failing | The tooltip shows the verified `gh` login (when known), both counts (`N running workflow runs, N failing repositories`) and the last repository activity read time. |
+| Stopped | Urgent glyph and `!` | The tooltip names the authentication, setup or repository-catalogue error. Open the panel to fix it. |
+| Rate limited | Dimmed glyph and the last counts (urgent if failing) | The tooltip shows when GitHub polling resumes (`GitHub paused until HH:MM`) and the last counts when loaded. The widget rechecks at that time. |
+
+Install it from a Git checkout by linking `~/.config/omarchy/plugins/olafkfreund.github-actions-bar` to `bar-widget/` and running `omarchy bar put olafkfreund.github-actions-bar`, or build the `packages.<system>.bar` flake output (nixarchy integration is a follow-up).
+
+Limits: repository counts stay at their last activity read while the panel is closed, except for watched runs; failing repositories cover only runs the panel has seen; a `gh auth switch` while the panel is closed is not noticed until the next open; two shells on the same Wayland display share one status file. To remove the widget, remove `olafkfreund.github-actions-bar` from the bar layout and remove `~/.config/omarchy/plugins/olafkfreund.github-actions-bar` (or its declarative plugin entry).
 
 ## Repositories
 
@@ -211,14 +237,16 @@ Run from the repository root:
 python3 -m unittest discover -s tests -v
 node tests/model.cjs
 node tests/polling.cjs
+node tests/bar.cjs
 nix develop -c python3 tests/qml-smoke.py
 ```
 
-The flake checks the built runtime files and runs the Python/model/polling suites without a graphical session or live GitHub requests:
+The flake checks the built runtime files and runs the Python/model/polling/bar suites without a graphical session or live GitHub requests:
 
 ```sh
 nix flake check
 nix build .#default
+nix build .#bar --no-link
 omarchy plugin validate "$(readlink -f result)"
 nix develop -c python3 tests/qml-smoke.py ./result
 ```
@@ -231,4 +259,4 @@ CI runs `nix flake check` and, as a separate `qml-smoke` job, `nix develop -c py
 
 ## Remove
 
-For Git installations, run `omarchy plugin remove olafkfreund.github-actions`. For Nix-managed installations, remove the declarative plugin entry and rebuild. Then remove both keybindings and the `apps.github-actions` and `learn.github-actions-keybindings` entries from your menu configuration. Remove any remaining legacy `github-actions` or `system.github-actions` entry belonging to this plugin as well. No NixOS rebuild is required for a user-owned plugin.
+For Git installations, run `omarchy plugin remove olafkfreund.github-actions`. For Nix-managed installations, remove the declarative plugin entry and rebuild. Remove `olafkfreund.github-actions-bar` from the bar layout and remove its `~/.config/omarchy/plugins/olafkfreund.github-actions-bar` link (or declarative widget entry) as well. Then remove both keybindings and the `apps.github-actions` and `learn.github-actions-keybindings` entries from your menu configuration. Remove any remaining legacy `github-actions` or `system.github-actions` entry belonging to this plugin as well. No NixOS rebuild is required for a user-owned plugin.
