@@ -4,6 +4,36 @@ const vm = require('node:vm');
 const model = {};
 vm.createContext(model);
 vm.runInContext(fs.readFileSync('ActionsModel.js', 'utf8'), model);
+{
+  const now=Date.now(), last=conclusion => ({conclusion,confirmedAt:now,at:new Date(now).toISOString()});
+  const repos=[{active:2,last:last('failure'),checked:'x'}, {runs:[{status:'in_progress'}],last:last('timed_out'),checked:'x'},
+    {active:3,last:last('startup_failure'),checked:'x'}, {active:1,last:last('success'),checked:'x'},
+    ...['archived','disabled','blocked','error'].map(flag => ({[flag]:true,active:10,last:last('failure'),checked:'x'}))];
+  assert.deepEqual({...model.barCounts(repos,now)},{running:7,failed:3});
+  const base={repos,account:'tester',accountVerified:true,cooldown:0,countsAt:0,error:'transient'};
+  const status=(changes={},previous) => ({...model.barStatus({...base,...changes},'instance',now,previous)});
+  const keys=['version','instance','account','state','running','failed','countsAt','cooldownUntil','reason','writtenAt'];
+  const ok=status();
+  assert.deepEqual(Object.keys(ok),keys);
+  assert.deepEqual(ok,{version:1,instance:'instance',account:'tester',state:'ok',running:7,failed:3,
+    countsAt:0,cooldownUntil:0,reason:'',writtenAt:now});
+  assert.deepEqual(status({countsAt:undefined,accountVerified:false}),{...ok,account:'',state:'none',countsAt:0});
+  assert.deepEqual(status({auth:true,error:'login',catalogueBlocked:'catalogue',cooldown:now+1}),
+    {...ok,state:'stopped',reason:'login'});
+  assert.deepEqual(status({catalogueBlocked:'catalogue',cooldown:now+1}),
+    {...ok,state:'stopped',reason:'catalogue'});
+  assert.deepEqual(status({cooldown:now+1}),{...ok,state:'rate',cooldownUntil:now+1});
+  assert.deepEqual(status({cooldown:now+1,countsAt:undefined}),
+    {...ok,state:'rate',countsAt:0,cooldownUntil:now+1});
+  assert.deepEqual(status({cooldown:now+1,repos:[{error:'rate',active:9}]},{account:'tester',running:7,failed:3,countsAt:42}),
+    {...ok,state:'rate',countsAt:42,cooldownUntil:now+1});
+  // A previous payload from another account is never reused (a failed reset write).
+  assert.deepEqual(status({cooldown:now+1,repos:[]},{account:'other',running:7,failed:3,countsAt:42}),
+    {...ok,state:'rate',running:0,failed:0,cooldownUntil:now+1});
+  assert.deepEqual(status({cooldown:now+1,repos:[],countsAt:undefined,account:'new'},
+    {running:7,failed:3,countsAt:42}),
+    {...ok,account:'new',state:'rate',running:0,failed:0,countsAt:0,cooldownUntil:now+1});
+}
 const repos = [{repo: 'owner/repo', runs: [{id: 7, status: 'in_progress', name: 'CI', head_branch: 'main', run_number: 3}]}];
 const expanded = {'repo:owner/repo': true, 'owner/repo:7': true, 'owner/repo:7:8': true};
 const details = {'owner/repo:7': {jobs: [{id: 8, name: 'build', status: 'in_progress', steps: [{number: 1, name: 'Checkout', status: 'completed', conclusion: 'success'}]}]}};

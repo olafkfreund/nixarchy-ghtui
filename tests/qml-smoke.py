@@ -629,6 +629,172 @@ ShellRoot {
 }
 '''
 
+WIDGET_QML = r'''
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import "Polling.js" as Polling
+import "bar-widget" as BarPlugin
+ShellRoot {
+    QtObject { id: horizontal; property bool vertical: false }
+    QtObject { id: verticalBar; property bool vertical: true }
+    BarPlugin.BarWidget { id: a; bar: horizontal; statusPath: Quickshell.env("WIDGET_STATUS_PATH") }
+    BarPlugin.BarWidget { id: b; bar: verticalBar; statusPath: Quickshell.env("WIDGET_STATUS_PATH") }
+    Loader {
+        id: fixture
+        active: false
+        sourceComponent: Component { ActionsPanel { statusPath: Quickshell.env("WIDGET_STATUS_PATH") } }
+    }
+    FileView { id: file; path: Quickshell.env("WIDGET_STATUS_PATH"); blockLoading: true; printErrors: false }
+    FileView { id: writer; path: Quickshell.env("WIDGET_STATUS_PATH"); atomicWrites: true; blockWrites: true; printErrors: false }
+    FileView { id: toggleLog; path: Quickshell.env("TOGGLE_LOG"); blockLoading: true; printErrors: false }
+    Process {
+        id: removeFile
+        command: ["python3", "-c", "import os,sys; os.unlink(sys.argv[1])", Quickshell.env("WIDGET_STATUS_PATH")]
+    }
+    Process {
+        id: pathChange
+        property bool restore: false
+        command: ["python3", "-c",
+            "import os,sys; p=sys.argv[1]; os.rmdir(p) if sys.argv[2]=='restore' else (os.unlink(p),os.mkdir(p))",
+            Quickshell.env("WIDGET_STATUS_PATH"), restore ? "restore" : "block"]
+    }
+    property int stage: 0
+    property double entered: Date.now()
+    property double countsAt: 0
+    property double writtenAt: 0
+    property string savedStatus: ""
+    function check(ok, label) { if (!ok) { console.log("CHECK FAILED: " + label); Qt.exit(1); throw new Error("CHECK FAILED: " + label) } }
+    function status() { file.reload(); try { return JSON.parse(file.text()) } catch (e) { return null } }
+    function payload(state, stamp, cooldown) {
+        return {version:1,instance:"test",account:"tester",state:state,running:2,failed:1,
+            countsAt:stamp,cooldownUntil:cooldown || 0,reason:"",writtenAt:Date.now()}
+    }
+    function write(value) { writer.setText(JSON.stringify(value)+"\n") }
+    function next() { stage++; entered=Date.now() }
+    function ready(ok) {
+        if (ok) return true
+        check(Date.now()-entered<5000,"widget stage " + stage + " timeout")
+        return false
+    }
+    Timer { interval: 50; running: true; repeat: true
+        onTriggered: {
+            var s=status(), p=fixture.item, button=a.children[0]
+            if (stage===0) {
+                check(a.statusView.state==="none" && b.statusView.state==="none","widgets start empty")
+                check(button.text==="\uF09B" && button.dimmed,"empty widget label")
+                fixture.active=true; next()
+            } else if (stage===1) {
+                if (!ready(p && s && s.state==="none" && s.instance)) return
+                check(p.statusPath===Quickshell.env("WIDGET_STATUS_PATH"),"panel status path is isolated")
+                p.workerBusy=true
+                countsAt=Date.now()
+                p.polling.countsAt=countsAt
+                p.polling.repos=[{repo:"one/repo",active:2,checked:"x",
+                    runs:[{id:7,status:"completed",conclusion:"failure"}],
+                    last:{id:7,conclusion:"failure",at:new Date().toISOString(),confirmedAt:Date.now()}}]
+                p.adopt(); next()
+            } else if (stage===2) {
+                if (!ready(s && s.state==="ok" && s.running===2 && s.failed===1 &&
+                           a.statusView.state==="ok" && b.statusView.state==="ok")) return
+                check(button.text==="\uF09B ●2 ✕1" && b.children[0].text==="\uF09B\n●2\n✕1","both widget labels")
+                check(button.active && !button.dimmed && button.tooltipText.indexOf("2 running workflow runs, 1 failing repository")>=0,"widget counts and tooltip")
+                check(button.Accessible.name===a.statusView.accessible,"widget accessible name")
+                writtenAt=s.writtenAt
+                p.adopt(); next()
+            } else if (stage===3) {
+                if (!ready(Date.now()-entered>300)) return
+                check(status().writtenAt===writtenAt,"unchanged payload keeps writtenAt")
+                p.polling.auth=true; p.polling.error="Bad credentials"; p.adopt(); next()
+            } else if (stage===4) {
+                if (!ready(s && s.state==="stopped" && a.statusView.state==="stopped")) return
+                check(button.active && button.text.indexOf("!")>=0,"stopped is urgent")
+                p.polling.auth=false; p.polling.error=""; p.polling.cooldown=Date.now()+10000; p.adopt(); next()
+            } else if (stage===5) {
+                if (!ready(s && s.state==="rate" && a.statusView.state==="rate")) return
+                check(button.dimmed && s.running===2 && s.failed===1,"rate keeps last counts")
+                p.polling.cooldown=0; p.adopt(); next()
+            } else if (stage===6) {
+                if (!ready(s && s.state==="ok" && a.statusView.state==="ok")) return
+                var state=Polling.create(), now=Date.now()
+                state.opened=false; state.discover=false; state.catalogueComplete=true
+                state.catalogueAt=now; state.countsAt=now
+                state.repos=[{repo:"one/repo",checked:"x",active:1,activeFromTotal:true,
+                    runs:[{id:7,name:"CI",status:"in_progress"}]}]
+                p.polling=state; p.noticeBusy=true
+                check(Polling.watch(state,"one/repo","7","CI",now)==="on","closed watch starts")
+                p.adopt(); countsAt=state.countsAt
+                var request=Polling.next(p.polling,now+31000)
+                check(request && request.kind==="run","closed watch requests a run")
+                p.receivePage(JSON.stringify({requestId:request.requestId,data:{id:7,name:"CI",status:"completed",
+                    conclusion:"success"},nextPage:0,error:"",errorType:"",remaining:4000}),request)
+                check(p.polling.countsAt===countsAt,"closed run preserves countsAt")
+                next()
+            } else if (stage===7) {
+                if (!ready(s && s.state==="ok" && s.running===0 && s.countsAt===countsAt &&
+                           a.statusView.state==="ok")) return
+                p.receiveAction(JSON.stringify({requestId:91,ok:false,error:"Rate limited",errorType:"rate",
+                    retryAt:Date.now()+10000,remaining:0}),{requestId:91,done:"Rerun",repo:"one/repo",run:"7"})
+                next()
+            } else if (stage===8) {
+                if (!ready(s && s.state==="rate" && a.statusView.state==="rate")) return
+                p.polling.cooldown=0; p.polling.auth=true; p.polling.error="Stopped"; p.adopt(); next()
+            } else if (stage===9) {
+                if (!ready(s && s.state==="stopped")) return
+                p.workerBusy=true; p.open(); next()
+            } else if (stage===10) {
+                if (!ready(s && s.state!=="stopped")) return
+                p.close()
+                savedStatus=p.lastStatus
+                pathChange.restore=false; pathChange.running=true; next()
+            } else if (stage===11) {
+                if (!ready(!pathChange.running)) return
+                p.polling.repos[0].active=3; p.adopt(); next()
+            } else if (stage===12) {
+                if (!ready(Date.now()-entered>400)) return
+                check(p.lastStatus===savedStatus,"failed save remains unrecorded")
+                pathChange.restore=true; pathChange.running=true; next()
+            } else if (stage===13) {
+                if (!ready(!pathChange.running)) return
+                p.publishStatus(); next()
+            } else if (stage===14) {
+                if (!ready(s && s.running===3 && a.statusView.label.indexOf("●3")>=0)) return
+                p.polling.auth=true; p.polling.error="Stopped"; p.adopt(); next()
+            } else if (stage===15) {
+                if (!ready(s && s.state==="stopped")) return
+                fixture.active=false; next()
+            } else if (stage===16) {
+                if (!ready(!fixture.item && s && s.state==="none")) return
+                write(payload("ok",Date.now(),0)); next()
+            } else if (stage===17) {
+                if (!ready(a.statusView.state==="ok" && b.statusView.state==="ok")) return
+                write(payload("unknown",Date.now(),0)); next()
+            } else if (stage===18) {
+                if (!ready(a.statusView.state==="none" && b.statusView.state==="none")) return
+                write(payload("rate",Date.now(),Date.now()+500)); next()
+            } else if (stage===19) {
+                if (!ready(a.statusView.state==="rate" && b.statusView.state==="rate")) return
+                next()
+            } else if (stage===20) {
+                if (!ready(a.statusView.state==="ok" && b.statusView.state==="ok")) return
+                removeFile.running=true; next()
+            } else if (stage===21) {
+                if (!ready(!removeFile.running && a.statusView.state==="none" && b.statusView.state==="none")) return
+                button.triggerPress(Qt.RightButton); button.triggerPress(Qt.MiddleButton)
+                toggleLog.reload()
+                check(toggleLog.text().trim()==="","other buttons do not toggle")
+                button.triggerPress(Qt.LeftButton); next()
+            } else if (stage===22) {
+                toggleLog.reload()
+                if (!ready(toggleLog.text().trim()!=="")) return
+                check(toggleLog.text().trim()==="shell toggle olafkfreund.github-actions {}","one left click toggles once")
+                console.log("WIDGET_CHECKS_PASSED"); Qt.quit()
+            }
+        }
+    }
+}
+'''
+
 
 def collect(proc, lines, states=None):
     def read():
@@ -751,6 +917,12 @@ for scenario in ('fresh', 'managed'):
             (root / name).symlink_to(stubs / name)
         for name in ('ActionsPanel.qml', 'ActionsModel.js', 'Polling.js', 'menu.py', 'menu.example.json'):
             (root / name).symlink_to(source / name)
+        widget_available = (source / 'bar-widget').is_dir()
+        if widget_available:
+            widget_dir = root / 'bar-widget'
+            widget_dir.mkdir()
+            for name in ('BarWidget.qml', 'BarModel.js'):
+                (widget_dir / name).symlink_to(source / 'bar-widget' / name)
         (root / 'actions.py').write_text(FAKE)
         home = root / 'home'
         home.mkdir()
@@ -761,6 +933,10 @@ for scenario in ('fresh', 'managed'):
         for stub in ('omarchy-launch-tui', 'notify-send'):
             (bin_dir / stub).write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >> "$HOME/' + stub + '.log"\n')
             (bin_dir / stub).chmod(0o755)
+        (bin_dir / 'omarchy-shell').write_text(
+            '#!/usr/bin/env python3\nimport os,sys\n'
+            'open(os.environ["TOGGLE_LOG"],"a").write(" ".join(sys.argv[1:])+"\\n")\n')
+        (bin_dir / 'omarchy-shell').chmod(0o755)
         if scenario == 'fresh':
             (bin_dir / 'wl-copy').write_text('''#!/bin/sh
 printf '%s\\n' "$*" >> "$HOME/wl-copy.log"
@@ -810,6 +986,26 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                 assert '"apps.github-actions"' in menu_path.read_text()
             (home / 'run-done').unlink(missing_ok=True)
             print(f'{scenario}: feature checks passed')
+
+            if widget_available:
+                (root / 'shell.qml').write_text(WIDGET_QML)
+                widget_env = {**env, 'WIDGET_STATUS_PATH': str(root / 'widget-status.json'),
+                              'TOGGLE_LOG': str(root / 'omarchy-shell.log')}
+                try:
+                    widget_result = subprocess.run([QUICKSHELL, '-p', str(root), '--no-color'],
+                                                   capture_output=True, text=True, timeout=30, env=widget_env)
+                except subprocess.TimeoutExpired as hung:
+                    print(*(part.decode() if isinstance(part, bytes) else part or '' for part in (hung.stdout, hung.stderr)))
+                    raise SystemExit(f'{scenario}: QML widget checks timed out')
+                widget_output = widget_result.stdout + widget_result.stderr
+                if widget_result.returncode or 'WIDGET_CHECKS_PASSED' not in widget_output or any(
+                        term in widget_output for term in ('ERROR:', 'ReferenceError', 'TypeError',
+                                                          'CHECK FAILED', 'binding loop')):
+                    print(widget_output)
+                    raise SystemExit(f'{scenario}: QML widget checks failed')
+                print(f'{scenario}: widget checks passed')
+            else:
+                print(f'{scenario}: widget stage skipped (no bar-widget directory)')
 
             # --- Run 2 (and failure runs): real key presses ---
             (root / 'shell.qml').write_text(KEYS_QML)

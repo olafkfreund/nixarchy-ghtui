@@ -22,6 +22,15 @@ Item {
     property alias filterText: searchField.text
     readonly property bool filtering: searchField.activeFocus
     property string error: ""
+    property string statusPath: {
+        var runtime = Quickshell.env("XDG_RUNTIME_DIR")
+        var display = Quickshell.env("WAYLAND_DISPLAY")
+        return runtime && display ? runtime + "/omarchy-github-actions-" + display + ".json" : ""
+    }
+    property string statusInstance: ""
+    property string lastStatus: ""
+    property string pendingStatus: ""
+    onStatusPathChanged: { lastStatus = ""; pendingStatus = "" }
     property string updated: ""
     property var polling: Polling.create()
     readonly property bool watching: Object.keys(polling.watches).length > 0
@@ -92,7 +101,7 @@ Item {
         targetScreen = null
         for (var i = 0; i < Quickshell.screens.length; i++)
             if (monitor && Quickshell.screens[i].name === monitor.name) targetScreen = Quickshell.screens[i]
-        if (!opened) { Polling.open(polling, Date.now()); account = "" }
+        if (!opened) { Polling.open(polling, Date.now()); account = ""; publishStatus() }
         opened = true
         rebuild()
         selectionChanged(true)
@@ -108,6 +117,18 @@ Item {
         detail = false
     }
     function toggle() { opened ? close() : open() }
+    function publishStatus() {
+        if (!statusPath || !statusInstance) return
+        var previous = lastStatus ? JSON.parse(lastStatus) : undefined
+        var payload = Model.barStatus(polling, statusInstance, Date.now(), previous)
+        var writtenAt = payload.writtenAt
+        delete payload.writtenAt
+        var next = JSON.stringify(payload)
+        if (next === lastStatus) return
+        pendingStatus = next
+        payload.writtenAt = writtenAt
+        statusFile.setText(JSON.stringify(payload) + "\n")
+    }
     function status() {
         return JSON.stringify({opened: opened, rows: entries.length, repositories: repos.length,
             checked: checkedCount, discoveryComplete: discoveryComplete, error: error, updated: updated,
@@ -236,6 +257,7 @@ Item {
         drainNotices()
         // Reassign the state reference to notify bindings after pure-JS mutations.
         polling = Object.assign({}, polling)
+        publishStatus()
         if (!opened) return
         rebuild()
         selectionChanged(false)
@@ -252,6 +274,7 @@ Item {
     function refresh(catalogue) {
         selectionChanged(true)
         Polling.manual(polling, Date.now(), !!catalogue)
+        publishStatus()
         pump()
     }
     function loadMore() {
@@ -398,6 +421,7 @@ Item {
             reply = JSON.parse(Model.actionReply("", 1, info.requestId))
         }
         Polling.noteWrite(polling, reply, Date.now())
+        publishStatus()
         if (reply.ok === true && !reply.errorType) {
             say(info.done + (Date.now() < polling.cooldown ? " · refresh waits until " + new Date(polling.cooldown).toLocaleTimeString() : ""), false)
             if (opened) {
@@ -409,8 +433,21 @@ Item {
     }
 
     Component.onCompleted: {
+        statusInstance = String(Date.now()) + "-" + Math.random().toString(36).slice(2)
+        publishStatus()
         rebuild()
         registrationProc.running = true
+    }
+    Component.onDestruction: {
+        if (statusPath) {
+            var payload = Model.barStatus(polling, statusInstance, Date.now())
+            payload.state = "none"
+            var writtenAt = payload.writtenAt
+            delete payload.writtenAt
+            pendingStatus = JSON.stringify(payload)
+            payload.writtenAt = writtenAt
+            statusFile.setText(JSON.stringify(payload) + "\n")
+        }
     }
     Process {
         id: registrationProc
@@ -421,6 +458,14 @@ Item {
         }
     }
     ListModel { id: visibleRows; dynamicRoles: true }
+    FileView {
+        id: statusFile
+        path: root.statusPath
+        atomicWrites: true
+        blockWrites: true
+        printErrors: false
+        onSaved: root.lastStatus = root.pendingStatus
+    }
     Timer { interval: 100; running: root.opened || root.watching; repeat: true; onTriggered: root.pump() }
     Timer { interval: 1000; running: root.opened; repeat: true; triggeredOnStart: true; onTriggered: root.now = Date.now() }
     Process {
