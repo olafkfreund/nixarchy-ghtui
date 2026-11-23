@@ -17,6 +17,8 @@ function state(item) {
 var FAILED = ["failure", "timed_out", "startup_failure"];
 // ponytail: 3 * Polling TIMING.idle, kept equal by tests/model.cjs.
 var STALE = 1800000;
+var PR_REFRESH = 60000;
+var PR_REFRESH_ACTIVE = 15000;
 
 function icon(status) {
     if (status === "success") return "✓";
@@ -153,9 +155,9 @@ function clock(ms, seconds) {
     return time.map(function(part) { return ("0" + part).slice(-2); }).join(":");
 }
 
-function quotaText(remaining, resetAt, now) {
+function quotaText(remaining, resetAt, now, unit) {
     if (typeof remaining !== "number" || !(now < resetAt)) return "";
-    return String(remaining).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " API requests left" + (remaining < 500 ? " · resets " + clock(resetAt) : "");
+    return String(remaining).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " " + (unit || "API requests") + " left" + (remaining < 500 ? " · resets " + clock(resetAt) : "");
 }
 
 function statusLine(s, now) {
@@ -173,6 +175,18 @@ function statusLine(s, now) {
     return {text: parts.join(" · "), urgent: !!(error || paused), quota: quotaText(s.remaining, s.resetAt, now)};
 }
 
+function prStatusLine(s, now) {
+    var prs = s.prs || {}, parts = [];
+    if (s.notice && now < s.noticeUntil) parts.push(s.notice);
+    var error = prs.error || "";
+    if (error) parts.push(error);
+    var paused = now < s.cooldown;
+    if (paused) parts.push("GitHub paused until " + clock(s.cooldown, true));
+    var count = typeof prs.total === "number" ? prs.total : Array.isArray(prs.list) ? prs.list.length : 0;
+    if (!error && !paused) parts.push(count + " open pull requests");
+    return {text: parts.join(" · "), urgent: !!(error || paused), quota: quotaText(s.gqlRemaining, s.gqlResetAt, now, "GraphQL points")};
+}
+
 function emptyText(s) {
     if (!s.repoCount && s.error) return s.error;
     if (!s.repoCount && !s.discoveryComplete) return "Discovering repositories…";
@@ -180,16 +194,25 @@ function emptyText(s) {
     return 'No match for "' + s.filter + '" · search covers loaded runs only';
 }
 
+function prEmptyText(s, filter) {
+    if (!s.accountChecked) return "Verifying your GitHub login…";
+    if (!s.accountVerified) return "Pull requests need a verified GitHub login; check gh auth status";
+    var prs = s.prs || s;
+    if (prs.list === null) return prs.error || "Loading pull requests…";
+    if (!prs.list || !prs.list.length) return "No open pull requests";
+    return 'No match for "' + (filter !== undefined ? filter : s.filter || "") + '"';
+}
+
 function coverage(repos) {
     return {loaded: repos.filter(function(repo) { return !!repo.summaryAt; }).length, total: repos.length};
 }
 
 function accessibleName(row, expanded) {
-    var kind = row.kind === "repo" ? "repository" : row.kind;
+    var kind = row.kind === "repo" ? "repository" : row.kind === "pr" ? "pull request" : row.kind;
     var tail = row.kind === "repo" ? [row.statusText, row.info].filter(Boolean).join(", ") : row.statusText;
     var name = kind + ": " + row.title + (tail ? ", " + tail : "");
     if (row.kind === "run" && /watching$/.test(row.info || "")) name += ", watching";
-    if (["repo", "run", "job"].indexOf(row.kind) >= 0) name += expanded ? ", expanded" : ", collapsed";
+    if (["repo", "pr", "run", "job"].indexOf(row.kind) >= 0) name += expanded ? ", expanded" : ", collapsed";
     return name;
 }
 
@@ -273,6 +296,54 @@ function rows(repos, expanded, details, filter, now, live, watches) {
         else if (!(repo.runs || []).length && !repo.error && !repo.archived && !repo.disabled && !repo.blocked) result.push({key: repoKey + ":message", parent: repoKey, kind: "message", depth: 1,
             title: repo.summaryAt ? "No workflow runs" : "Loading runs…", subtitle: "", status: "", statusText: "", info: "", repo: repo.repo});
     });
+    return result;
+}
+
+function prRows(prs, expanded, filter, now) {
+    if (!prs || !Array.isArray(prs.list)) return [];
+    var list = prs.list, result = [], query = String(filter || "").toLowerCase();
+    expanded = expanded || {};
+    var interval = list.some(function(pr) { return pr && pr.checks && pr.checks.state === "pending"; }) ? PR_REFRESH_ACTIVE : PR_REFRESH;
+    var stale = typeof prs.at === "number" && now - prs.at > interval
+        ? "checked " + (now - prs.at < 60000 ? Math.floor((now - prs.at) / 1000) + "s" : Math.floor((now - prs.at) / 60000) + "m") + " ago" : "";
+    list.forEach(function(pr) {
+        var checks = pr.checks || {}, cState = checks.state;
+        var status = cState === "success" ? "success" : cState === "failure" ? "failure" : cState === "pending" ? "in_progress" : cState === "none" ? "" : "error";
+        var statusText = cState === "none" ? "no checks" : status === "error" ? "checks unavailable" : label(status);
+        var title = (pr.draft ? "Draft · " : "") + pr.repo + " #" + pr.number + " " + (pr.title || "");
+        var subtitle = pr.branch || "";
+        var allItems = Array.isArray(checks.items) ? checks.items : [];
+        var total = typeof checks.total === "number" ? checks.total : allItems.length;
+        var hasCount = cState === "success" || cState === "failure" || cState === "pending";
+        var info = [hasCount ? total + " checks" : "", stale].filter(Boolean).join(" · ");
+        var prUrl = browsable(pr.url) ? pr.url : "";
+        var prMatch = !query || [pr.repo, pr.title, title, subtitle, cState, status, statusText].join(" ").toLowerCase().indexOf(query) >= 0;
+        var items = [];
+        for (var i = 0; i < allItems.length; i++) {
+            var item = allItems[i], itemStatus = state(item), itemText = label(itemStatus);
+            if (prMatch || [item.name, item.status, item.conclusion, itemStatus, itemText].join(" ").toLowerCase().indexOf(query) >= 0)
+                items.push({item: item, index: i, status: itemStatus, statusText: itemText});
+        }
+        if (query && !prMatch && !items.length) return;
+        var prKey = "pr:" + pr.repo + "#" + pr.number;
+        result.push({kind: "pr", key: prKey, parent: "", depth: 0, title: title, subtitle: subtitle,
+            status: status, statusText: statusText, info: info, repo: pr.repo, url: prUrl});
+        if (!expanded[prKey]) return;
+        items.forEach(function(entry) {
+            var item = entry.item, itemUrl = browsable(item.url) ? item.url : "";
+            result.push({kind: "check", key: prKey + ":" + entry.index + ":" + item.name, parent: prKey, depth: 1,
+                title: item.name, subtitle: "", status: entry.status, statusText: entry.statusText, info: "",
+                repo: item.repo || "", run: item.run || "", url: itemUrl, external: Boolean(item.url && !itemUrl)});
+        });
+        if ((!query || prMatch) && total > allItems.length)
+            result.push({kind: "more", key: prKey + ":more", parent: prKey, depth: 1,
+                title: (total - allItems.length) + " more checks on GitHub", subtitle: "", status: "", statusText: "", info: "",
+                repo: pr.repo, url: prUrl ? prUrl + "/checks" : ""});
+    });
+    if (!query && prs.total > list.length)
+        result.push({kind: "more", key: "prs:more", parent: "", depth: 0,
+            title: (prs.total - list.length) + " more on GitHub", subtitle: "", status: "", statusText: "", info: "",
+            repo: "", url: "https://github.com/pulls"});
     return result;
 }
 
