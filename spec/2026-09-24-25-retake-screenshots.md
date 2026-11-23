@@ -28,15 +28,20 @@ are spelled out here.
 The images are taken once, from v1.3.0. Capture starts only when razer's
 running shell has loaded v1.3.0. On 2026-11-23 razer still ran v0.4.0 from
 memory: its shell ignored `quickshell kill`, and the owner chose to restart
-it themselves. The check is that the loaded panel reports the pull-request
-view: `status()` over IPC has a `view` field.
+it themselves. Readiness, all four checked before §1:
+
+1. razer's quickshell process started after the owner's restart.
+2. The plugin link's `manifest.json` says 1.3.0.
+3. `status()` over IPC has a `view` field; it was added in v1.3.0.
+4. Press `p`: `status().view` becomes `prs`. Press `p` again: it is back
+   to `repos`. `status().textStep` is 0, the theme size.
 
 ### 1. Claim razer
 
 Before touching razer, post a claim in `#agents` on the agent bus, saying
 that razer's desktop is in use for #25 screenshots. Read the room first. If
-someone else has claimed razer and not released it, wait. When step 6 is
-finished, post "done" in the same room.
+someone else has claimed razer and not released it, wait. Post "done" in
+the same room only at the end of §8.
 
 ### 2. Drive razer only
 
@@ -51,7 +56,8 @@ for your grant, keys to a throwaway `foot` window (olafkfreund/ai-mirror#29),
 and the panel's `status()` IPC to confirm them. On `not_owner` or
 `stale_generation`, stop.
 
-Preparation (#20 plan steps 1, 2 and 5):
+Preparation (#20 plan step 5; #20's steps 1 and 2 updated the checkout,
+which no longer exists):
 
 - razer's `~/.config/omarchy/plugins/olafkfreund.github-actions` is
   nixarchy's link to the Nix store, and its `manifest.json` says 1.3.0.
@@ -64,7 +70,9 @@ Preparation (#20 plan steps 1, 2 and 5):
 
 ### 3. Take sequence and framing
 
-These are the same as #20 so that only the text size differs. The allow-list
+The four existing images use #20's framing and sequence, so they differ
+from #20's only by the theme text size and what v1.3.0 adds to the card
+(such as the login in the title and new footer keys). The allow-list
 is re-checked with `gh repo view --json visibility`.
 
 - **Stills** (`grim` of the card region, then WebP at the card's native
@@ -76,14 +84,27 @@ is re-checked with `gh repo view --json visibility`.
     job to its steps.
   - `github-actions-search.webp`: search narrowed to `nixarchy-p`.
   - **New:** `github-actions-prs.webp`, the pull-request view (`p`), with
-    one pull request expanded to its checks.
+    one pull request expanded to its checks. It is taken **last** of the
+    stills, with no recording running.
     - The view lists your pull requests across all of github.com, private
-      repositories included. So the search is narrowed first to public
-      repositories on the allow-list (for example `nixarchy`), and the
-      §7 gate also reads every pull-request title and branch by eye.
-    - If no open pull request on a public allow-listed repository exists
-      at capture time, the still is skipped and the PR says so. No pull
-      request is opened to create one.
+      repositories included. Its search is a plain substring match over
+      repository, title, branch, status and check names, with no
+      visibility filter. So:
+      1. Type the full `owner/name` of one allow-listed public repository
+         into the search.
+      2. Before taking the still, check every visible row: each pull
+         request's full repository name is on the allow-list (§7), and no
+         title, branch or check name shows anything private.
+      3. If any visible row cannot be verified, skip the still.
+    - The header and status strip show the total number of your open pull
+      requests, private ones included. It is a count only, like the
+      repository count in the existing images, and is accepted.
+    - If no open pull request on a public allow-listed repository exists at
+      capture time, skip the still and say so in the PR. Don't open a pull
+      request to create one.
+    - Afterwards, press `p` to return to the repositories view. The panel
+      remembers its view across reopens, and the GIF must open on
+      repositories.
 - **GIF** (`github-actions.gif`, #20 plan step 16): the panel opens already
   filtered to `nixarchy`, a run is expanded to its job and then to its steps,
   everything is collapsed again, and Super+Alt+A closes it (Esc would clear
@@ -121,13 +142,16 @@ The PR says which one happened.
 The #20 gate (plan step 17) runs unchanged on every file that will be
 published. `tesseract` reads each still, and a GIF frame every 0.5 s. Every
 `owner/name` it finds is diffed against the public allow-list, then every
-file is checked by eye. No calendar, task or notification text may appear.
+file is checked by eye. For `github-actions-prs.webp`, the eye check also
+covers every pull-request title, branch and check name. OCR misses
+elided text, so the visible rows must already have been identified in §3. No calendar, task or notification text may appear.
 If any check fails, that file is not committed.
 
 ### 8. Restore razer
 
 - Set notification silencing back to its recorded state.
 - The plugin link and the `.bak-0.4.0` checkout are left as they are.
+- The panel is left in the repositories view: `status().view` is `repos`.
 - Close the throwaway `foot` window and run `ai-mirror control off`.
 - Post "done" in `#agents` (§1).
 
@@ -135,8 +159,9 @@ If any check fails, that file is not committed.
 
 - Commit the images: `docs: retake screenshots at theme text size (#25)`.
   Fix the README alt text only if it is now wrong.
-- Add `github-actions-prs.webp` to the README's Screenshots section, under
-  the table, with alt text that describes it, the way the keybindings
+- Only if `github-actions-prs.webp` passed the gate and is committed, add
+  it to the README's Screenshots section. It goes under the table, with
+  descriptive alt text and a one-line caption, the way the keybindings
   sheet is shown.
 - Open a PR linking the intent, spec and plan. I don't merge it.
 - nixarchy (the copies and the pin bump) is a separate nixarchy issue and
@@ -151,10 +176,8 @@ If any check fails, that file is not committed.
 - **Updating razer's old checkout instead of using the Nix link:** future
   deploys would skip it again.
 
-- **Capturing now, before #30 and #32:** you chose to capture once, after
-  both have merged.
-- **Changing framing, repositories or sequence:** readers should see only
-  the text-size change, and #20's framing already passed the privacy gate.
+- **Changing framing, repositories or sequence of the existing images:**
+  #20's framing already passed the privacy gate.
 - **Always retaking the keybindings sheet:** it's Omarchy's own sheet, so
   a new capture without a difference is churn.
 - **Importing only #20's three variables:** that misses `OMARCHY_PATH`.
@@ -180,7 +203,8 @@ If any check fails, that file is not committed.
 
 ## Verification
 
-- `git diff --stat` shows only `docs/img/*` and the README.
+- The image commit's `git diff --stat` shows only `docs/img/*`, and the
+  README if the pull-request still was added or the alt text changed.
 - The OCR allow-list diff prints nothing for every published file, and every
   file was checked by eye.
 - `stat -c %s docs/img/github-actions.gif` is at most about 1,050,000.
