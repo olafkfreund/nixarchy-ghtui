@@ -418,6 +418,7 @@ class PageTest(unittest.TestCase):
                                   {"total_count":250, "workflow_runs":[{"id":7,"status":"in_progress"}]})
         self.assertEqual((result["errorType"], result["nextPage"], result.get("total")), ("", 0, 250))
 
+
     def test_missing_total_count_is_network_error(self):
         for body in [{"workflow_runs":[]}, {"total_count":-1, "workflow_runs":[]}, {"total_count":"9", "workflow_runs":[]}]:
             with self.subTest(body=body):
@@ -740,6 +741,148 @@ class WriteTest(unittest.TestCase):
             code = actions.main()
         self.assertEqual((code, json.loads(output.getvalue())),
                          (1, {"error": "Invalid action", "errorType": "setup", "requestId": 9}))
+
+
+class PullRequestTest(unittest.TestCase):
+    task = {"kind": "prs", "page": 1, "requestId": 7}
+    sha = "a" * 40
+
+    def reply(self, body, status=200, code=0, headers=""):
+        output = f"HTTP/2.0 {status} Response\n{headers}\n" + (json.dumps(body) if not isinstance(body, str) else body)
+        with patch.object(actions, "request", return_value=(output, "private stderr", code)) as request:
+            result = actions.read_page(self.task)
+        request.assert_called_once_with("graphql", include=True, fields={"query": actions.PRS_QUERY, "q": actions.PRS_SEARCH})
+        self.assertEqual(result["resource"], "graphql")
+        self.assertNotIn("private stderr", json.dumps(result))
+        return result
+
+    def node(self, **changes):
+        return {"number": 3, "title": "A title", "headRefName": "main", "isDraft": False,
+                "headRefOid": self.sha, "url": "https://github.com/o/r/pull/3",
+                "repository": {"nameWithOwner": "o/r"},
+                "commits": {"nodes": [{"commit": {"oid": self.sha, "statusCheckRollup": None}}]}, **changes}
+
+    def data(self, *nodes, **changes):
+        return {"data": {"search": {"issueCount": len(nodes), "nodes": list(nodes), **changes}}}
+
+    def test_request_argv_and_validation(self):
+        child = type("Child", (), {"returncode": 0, "communicate": lambda self, timeout: ("", ""),
+                                     "poll": lambda self: 0})()
+        with patch.object(actions.subprocess, "Popen", return_value=child) as popen:
+            actions.request("graphql", include=True, fields={"query": actions.PRS_QUERY, "q": actions.PRS_SEARCH})
+        self.assertEqual(popen.call_args.args[0], ["gh", "api", "--hostname", "github.com", "--include", "graphql",
+                                                    "-f", "query=" + actions.PRS_QUERY, "-f", "q=" + actions.PRS_SEARCH])
+        for bad in (dict(self.task, page=True), dict(self.task, page=2), dict(self.task, repo="o/r"),
+                    {"kind": "prs", "requestId": 7}, dict(self.task, requestId=True)):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                actions.read_page(bad)
+
+    def test_transport_and_http_errors(self):
+        for failure, kind in ((FileNotFoundError("gh"), "setup"), (("", "gh auth login", 1), "auth"),
+                              (("", "offline", 1), "network")):
+            with patch.object(actions, "request", side_effect=failure if isinstance(failure, Exception) else None,
+                              return_value=None if isinstance(failure, Exception) else failure):
+                self.assertEqual(actions.read_page(self.task)["errorType"], kind)
+                self.assertEqual(actions.read_page(self.task)["resource"], "graphql")
+        for status, body, kind in ((403, {"message": "refused"}, "permission"), (404, {}, "permission"),
+                                   (429, {}, "rate"), (401, {}, "auth")):
+            result = self.reply(body, status, 1)
+            self.assertEqual(result["errorType"], kind)
+            self.assertIsNone(result["data"])
+            if status in (403, 404):
+                self.assertEqual(result["error"], "Pull requests unavailable; token cannot search them")
+
+    def test_rows_and_checks(self):
+        run = {"__typename": "CheckRun", "name": "Run\n" + "x" * 110, "status": "COMPLETED",
+               "conclusion": "SUCCESS", "detailsUrl": "https://example.test/a\n",
+               "checkSuite": {"repository": {"nameWithOwner": "o/r"}, "workflowRun": {"databaseId": 12}}}
+        context = {"__typename": "StatusContext", "context": "CI\t" + "y" * 110,
+                   "state": "ERROR", "targetUrl": "https://example.test/check"}
+        other = {"__typename": "Other"}
+        rollup = {"state": "FAILURE", "contexts": {"totalCount": 4, "nodes": [run, context, other]}}
+        node = self.node(title="Title\n" + "a" * 210, headRefName="branch\t" + "b" * 110,
+                         isDraft=True, commits={"nodes": [{"commit": {"oid": self.sha, "statusCheckRollup": rollup}}]})
+        result = self.reply(self.data(node), code=1, headers="X-RateLimit-Remaining: 45\nX-RateLimit-Reset: 1700000000\n")
+        row = result["data"]["list"][0]
+        self.assertEqual((result["remaining"], result["resetAt"], result["errorType"]), (45, 1700000000000, ""))
+        self.assertEqual((len(row["title"]), len(row["branch"]), row["draft"]), (200, 100, True))
+        self.assertEqual((row["checks"]["state"], row["checks"]["total"]), ("failure", 4))
+        self.assertEqual(row["checks"]["items"], [
+            {"name": "Run " + "x" * 96, "status": "completed", "conclusion": "success", "url": "", "repo": "o/r", "run": "12"},
+            {"name": "CI " + "y" * 97, "status": "completed", "conclusion": "failure", "url": "https://example.test/check", "repo": "", "run": ""}])
+
+    def test_skips_and_unavailable(self):
+        nodes = [None, self.node(number=True), self.node(repository={"nameWithOwner": "../r"}),
+                 self.node(headRefOid=None), self.node(commits={"nodes": [{"commit": {"oid": "b" * 40}}]}),
+                 self.node(url="https://github.com/other/r/pull/3"), self.node(number=4)]
+        result = self.reply(self.data(*nodes, issueCount="bad"))
+        rows = result["data"]["list"]
+        self.assertEqual((len(rows), result["data"]["total"]), (4, 4))
+        self.assertEqual([row["checks"]["state"] for row in rows], ["unavailable", "unavailable", "none", "none"])
+        self.assertEqual(rows[2]["url"], "")
+        self.assertEqual(rows[3]["url"], "")
+        self.assertEqual(rows[3]["checks"], {"state": "none"})
+
+    def test_enums_and_partial_errors(self):
+        check = {"__typename": "CheckRun", "name": 4, "status": 5, "conclusion": "BOGUS",
+                 "detailsUrl": 7, "checkSuite": {"workflowRun": {"databaseId": True}}}
+        context = {"__typename": "StatusContext", "context": 3, "state": 5}
+        rollup = {"state": "BOGUS", "contexts": {"nodes": [check, context]}}
+        node = self.node(commits={"nodes": [{"commit": {"oid": self.sha, "statusCheckRollup": rollup}}]})
+        result = self.reply(self.data(node))
+        self.assertEqual(result["data"]["list"][0]["checks"], {"state": "unavailable", "total": 2, "items": [
+            {"name": "", "status": "unknown", "conclusion": "", "url": "", "repo": "", "run": ""},
+            {"name": "", "status": "unknown", "conclusion": "", "url": "", "repo": "", "run": ""}]})
+        body = self.data(None, node)
+        body["errors"] = [{"path": ["search", "nodes", 1, "commits"], "message": "private node"},
+                          {"message": "private pathless"}]
+        result = self.reply(body)
+        self.assertTrue(result["data"]["partial"])
+        self.assertEqual(result["data"]["list"][0]["checks"], {"state": "unavailable"})
+        self.assertNotIn("private", json.dumps(result))
+        body["errors"] = [{"path": ["search", "nodes", 1], "message": "private node"}]
+        result = self.reply(body)
+        self.assertFalse(result["data"]["partial"])
+        self.assertEqual(result["data"]["list"][0]["checks"], {"state": "unavailable"})
+        body["errors"] = [{"type": "RATE_LIMITED", "message": "private rate"}]
+        result = self.reply(body, code=1)
+        self.assertEqual((result["errorType"], len(result["data"]["list"])), ("rate", 1))
+
+    def test_known_enums(self):
+        statuses = ("queued", "in_progress", "completed", "waiting", "pending", "requested")
+        conclusions = ("success", "failure", "neutral", "cancelled", "timed_out", "action_required",
+                       "skipped", "stale", "startup_failure")
+        checks = [{"__typename": "CheckRun", "name": "CI", "status": status.upper(),
+                   "conclusion": conclusion.upper()} for status, conclusion in zip(statuses, conclusions)]
+        checks += [{"__typename": "CheckRun", "name": "CI", "status": "completed",
+                    "conclusion": conclusion} for conclusion in conclusions[6:]]
+        checks += [{"__typename": "StatusContext", "context": "CI", "state": state}
+                   for state in ("SUCCESS", "FAILURE", "ERROR", "PENDING", "EXPECTED", "other")]
+        rollup = {"state": "PENDING", "contexts": {"totalCount": -1, "nodes": checks}}
+        node = self.node(commits={"nodes": [{"commit": {"oid": self.sha, "statusCheckRollup": rollup}}]})
+        items = self.reply(self.data(node))["data"]["list"][0]["checks"]
+        self.assertEqual((items["state"], items["total"]), ("pending", len(checks)))
+        self.assertEqual([item["status"] for item in items["items"][:6]], list(statuses))
+        self.assertEqual([item["conclusion"] for item in items["items"][:9]], list(conclusions))
+        self.assertEqual([(item["status"], item["conclusion"]) for item in items["items"][-6:]],
+                         [("completed", "success"), ("completed", "failure"), ("completed", "failure"),
+                          ("pending", ""), ("pending", ""), ("unknown", "")])
+
+    def test_graphql_errors_and_invalid_data(self):
+        for error, expected in (({"type": "RATE_LIMITED"}, "rate"), ({"type": "FORBIDDEN"}, "permission"),
+                                ({"type": "SAML_ENFORCED"}, "permission"), ({"message": "SAML denied"}, "permission"),
+                                ({"message": "private validation"}, "network")):
+            result = self.reply({"errors": [error]}, code=1)
+            self.assertEqual(result["errorType"], expected)
+            self.assertNotIn("private", json.dumps(result))
+        for body in ("invalid", {}, {"errors": {}}, {"errors": ["bad"]},
+                     {"data": {"search": {"nodes": "bad"}}},
+                     self.data(self.node(commits={"nodes": [{"commit": {"oid": self.sha,
+                        "statusCheckRollup": {"state": "SUCCESS", "contexts": {"nodes": "bad"}}}}]}))):
+            with self.subTest(body=body):
+                result = self.reply(body)
+                self.assertEqual(result["errorType"], "network")
+                self.assertIsNone(result["data"])
 
 
 if __name__ == "__main__":

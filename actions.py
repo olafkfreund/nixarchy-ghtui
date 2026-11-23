@@ -19,6 +19,21 @@ from urllib.parse import urlsplit, parse_qs
 ACTIVE = ("queued", "in_progress", "waiting", "pending", "requested")
 ACTIONS = {"rerun": "rerun", "rerun-failed": "rerun-failed-jobs", "cancel": "cancel"}
 UNKNOWN = "Outcome unknown; check GitHub before retrying"
+PRS_SEARCH = "is:pr is:open archived:false sort:updated-desc (author:@me OR user-review-requested:@me)"
+PRS_QUERY = """query($q: String!) {
+  search(query: $q, type: ISSUE_ADVANCED, first: 50) {
+    issueCount
+    nodes { ... on PullRequest {
+      number title isDraft headRefName headRefOid url
+      repository { nameWithOwner }
+      commits(last: 1) { nodes { commit { oid statusCheckRollup { state
+        contexts(first: 50) { totalCount nodes { __typename
+          ... on CheckRun { name status conclusion detailsUrl
+            checkSuite { repository { nameWithOwner } workflowRun { databaseId } } }
+          ... on StatusContext { context state targetUrl } } } } } } }
+    } }
+  }
+}"""
 # ZWNJ and ZWJ are Cf but kept: emoji sequences and several scripts need them, and they cannot reorder text (#32).
 JOINERS = "\u200c\u200d"
 
@@ -61,10 +76,11 @@ def clean_run(row):
     return row
 
 
-def request(endpoint, include=False, method=None):
+def request(endpoint, include=False, method=None, fields=None):
     child = subprocess.Popen(
         ["gh", "api", "--hostname", "github.com"] + (["--include"] if include else [])
-        + (["--method", method] if method else []) + [endpoint],
+        + (["--method", method] if method else []) + [endpoint]
+        + [part for name, value in (fields or {}).items() for part in ("-f", f"{name}={value}")],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     try:
@@ -188,7 +204,163 @@ def rate_limited(result, status, body):
             or "rate limit" in message.lower() or "secondary rate" in message.lower())
 
 
+def pull_request(node, unavailable=False):
+    if not isinstance(node, dict) or type(node.get("number")) is not int or node["number"] < 1:
+        return None
+    repository = node.get("repository")
+    try:
+        repo = repo_name(repository.get("nameWithOwner") if isinstance(repository, dict) else None)
+    except ValueError:
+        return None
+    number = node["number"]
+    url = node.get("url")
+    sha = node.get("headRefOid")
+    sha = sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha) else ""
+    row = {"repo": repo, "number": number,
+           "title": plain(node.get("title"))[:200] if isinstance(node.get("title"), str) else "",
+           "branch": plain(node.get("headRefName"))[:100] if isinstance(node.get("headRefName"), str) else "",
+           "draft": node.get("isDraft") is True,
+           "url": url if url == f"https://github.com/{repo}/pull/{number}" else "",
+           "sha": sha}
+    commits = node.get("commits")
+    commit_nodes = commits.get("nodes") if isinstance(commits, dict) else None
+    last = commit_nodes[0] if isinstance(commit_nodes, list) and commit_nodes else None
+    commit = last.get("commit") if isinstance(last, dict) else None
+    if unavailable or not sha or not isinstance(commit, dict) or commit.get("oid") != sha:
+        row["checks"] = {"state": "unavailable"}
+        return row
+    if "statusCheckRollup" in commit and commit["statusCheckRollup"] is None:
+        row["checks"] = {"state": "none"}
+        return row
+    rollup = commit.get("statusCheckRollup")
+    contexts = rollup.get("contexts") if isinstance(rollup, dict) else None
+    if contexts is not None and (not isinstance(contexts, dict) or not isinstance(contexts.get("nodes"), list)):
+        raise ValueError("Invalid check contexts")
+    nodes = contexts["nodes"] if contexts else []
+    items = []
+    for check in nodes:
+        if not isinstance(check, dict):
+            continue
+        kind = check.get("__typename")
+        if kind not in ("CheckRun", "StatusContext"):
+            continue
+        if kind == "CheckRun":
+            name = check.get("name")
+            status = check.get("status")
+            conclusion = check.get("conclusion")
+            suite = check.get("checkSuite")
+            suite = suite if isinstance(suite, dict) else {}
+            check_repo = suite.get("repository")
+            try:
+                check_repo = repo_name(check_repo.get("nameWithOwner") if isinstance(check_repo, dict) else None)
+            except ValueError:
+                check_repo = ""
+            workflow = suite.get("workflowRun")
+            run = workflow.get("databaseId") if isinstance(workflow, dict) else None
+            status = status.lower() if isinstance(status, str) else ""
+            conclusion = conclusion.lower() if isinstance(conclusion, str) else ""
+            status = status if status in ("queued", "in_progress", "completed", "waiting", "pending", "requested") else "unknown"
+            conclusion = conclusion if conclusion in ("success", "failure", "neutral", "cancelled", "timed_out", "action_required", "skipped", "stale", "startup_failure") else ""
+            link = check.get("detailsUrl")
+        else:
+            name = check.get("context")
+            state = check.get("state")
+            status = "completed" if state in ("SUCCESS", "FAILURE", "ERROR") else "pending" if state in ("PENDING", "EXPECTED") else "unknown"
+            conclusion = "success" if state == "SUCCESS" else "failure" if state in ("FAILURE", "ERROR") else ""
+            check_repo, run = "", None
+            link = check.get("targetUrl")
+        items.append({"name": plain(name)[:100] if isinstance(name, str) else "",
+                      "status": status, "conclusion": conclusion,
+                      "url": link if isinstance(link, str) and plain(link) == link else "",
+                      "repo": check_repo,
+                      "run": str(run) if type(run) is int and run >= 1 else ""})
+    state = rollup.get("state") if isinstance(rollup, dict) else None
+    state = "success" if state == "SUCCESS" else "failure" if state in ("FAILURE", "ERROR") else "pending" if state in ("PENDING", "EXPECTED") else "unavailable"
+    total = contexts.get("totalCount") if contexts else None
+    row["checks"] = {"state": state, "total": total if type(total) is int and total >= 0 else len(items), "items": items}
+    return row
+
+
+def read_prs(task):
+    if (set(task) != {"kind", "page", "requestId"} or task["kind"] != "prs"
+            or type(task["page"]) is not int or task["page"] != 1
+            or type(task["requestId"]) is not int or task["requestId"] < 1):
+        raise ValueError("Invalid page operation")
+    result = {"requestId": task["requestId"], "httpStatus": 0, "nextPage": 0,
+              "data": None, "error": "", "errorType": "", "retryAt": 0,
+              "remaining": None, "resetAt": 0, "resource": "graphql"}
+    try:
+        stdout, stderr, code = request("graphql", include=True, fields={"query": PRS_QUERY, "q": PRS_SEARCH})
+        if not stdout.strip() and "auth login" in stderr.lower():
+            result.update(errorType="auth", error="Authenticate with gh auth login")
+            return result
+        if not stdout.strip() and code:
+            result.update(errorType="network", error="GitHub request failed; check connection and gh auth status")
+            return result
+        status, headers, raw_body = http_reply(stdout)
+        rate_headers(result, status, headers)
+        try:
+            body = json.loads(raw_body) if raw_body.strip() else None
+        except ValueError:
+            body = None
+        if status >= 400:
+            if rate_limited(result, status, body):
+                result.update(errorType="rate", error="GitHub rate limit")
+            elif status == 401:
+                result.update(errorType="auth", error="Authenticate with gh auth login")
+            elif status in (403, 404):
+                result.update(errorType="permission", error="Pull requests unavailable; token cannot search them")
+            else:
+                result.update(errorType="network", error="GitHub request failed")
+            return result
+        if status != 200 or not isinstance(body, dict):
+            raise ValueError("Invalid pull request response")
+        errors = body.get("errors", [])
+        if not isinstance(errors, list) or any(not isinstance(error, dict) for error in errors):
+            raise ValueError("Invalid GraphQL errors")
+        data = body.get("data")
+        search = data.get("search") if isinstance(data, dict) else None
+        usable = isinstance(search, dict) and isinstance(search.get("nodes"), list)
+        def error_kind(error):
+            kind = error.get("type")
+            kind = kind if isinstance(kind, str) else ""
+            message = error.get("message")
+            message = message if isinstance(message, str) else ""
+            return "rate" if kind == "RATE_LIMITED" else "permission" if kind == "FORBIDDEN" or "SAML" in kind.upper() or "SAML" in message.upper() else "network"
+        if not usable:
+            if errors:
+                kind = error_kind(errors[0])
+                result.update(errorType=kind, error={"rate": "GitHub rate limit", "permission": "Pull requests unavailable; token or SSO refused", "network": "GitHub returned an error for pull requests"}[kind])
+                return result
+            raise ValueError("Invalid pull request data")
+        unavailable = set()
+        partial = False
+        for error in errors:
+            kind = error_kind(error)
+            if kind == "rate":
+                result.update(errorType="rate", error="GitHub rate limit")
+            path = error.get("path")
+            if isinstance(path, list) and len(path) >= 3 and path[:2] == ["search", "nodes"] and type(path[2]) is int:
+                unavailable.add(path[2])  # only that row; partial is for errors with no row
+            elif kind != "rate":
+                partial = True
+        rows = []
+        for i, node in enumerate(search["nodes"]):
+            row = pull_request(node, i in unavailable)
+            if row is not None:
+                rows.append(row)
+        total = search.get("issueCount")
+        result["data"] = {"list": rows, "total": total if type(total) is int and total >= 0 else len(rows), "partial": partial}
+    except FileNotFoundError:
+        result.update(errorType="setup", error="Install gh (GitHub CLI)")
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+        result.update(errorType="network", error="GitHub request timed out or returned invalid data", data=None)
+    return result
+
+
 def read_page(task):
+    if isinstance(task, dict) and task.get("kind") == "prs":
+        return read_prs(task)
     endpoint = page_endpoint(task)
     result = {"requestId": task["requestId"], "httpStatus": 0, "nextPage": 0,
               "data": None, "error": "", "errorType": "", "retryAt": 0,
