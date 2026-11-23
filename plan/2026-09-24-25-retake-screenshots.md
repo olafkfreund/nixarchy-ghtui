@@ -286,6 +286,25 @@ keybindings decision (step 11), and the text-size comparisons by eye
   - The `status()` call is
     `omarchy-shell shell call olafkfreund.github-actions status ""`.
 
+- **Step 9, owner-approved:**
+  - The first GIF failed the gate: with the `nixarchy` filter, the list
+    showed the private `olafkfreund/nixos_config`. One of its recent runs
+    was titled "chore(nixarchy): pin nixarchy-ghtui…". OCR misread it, and
+    the eye check caught it.
+  - The GIF was deleted and retaken with the filter
+    `olafkfreund/nixarchy`. That filter matches 31 repositories, all
+    public, and the panel showed exactly 31 rows.
+  - The retake waited until all 123 repositories had been checked, so the
+    rows show results. The final GIF is 578,611 bytes.
+- **Control:** it went `off` at 10:40:37, before the GIF retake. On the
+  owner's answer it was requested once more and granted (generation 5).
+- **Keys sheet:** its new height is 687 px, against 722 before; the width
+  is 1000 px. AE is 14429 (2.1 %), and by eye the keys changed (pull
+  requests, zoom), so the file is replaced.
+- **Step order:** `herdr-team` refuses a dirty worktree, so the images
+  (step 17) were committed as `e3fd10b` before agy's README entry (step
+  16). The final diff is the same.
+
 ## Rollback
 
 - **Images:** revert the docs commit, or don't merge the PR.
