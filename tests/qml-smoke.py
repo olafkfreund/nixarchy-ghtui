@@ -251,6 +251,7 @@ ShellRoot {
             panel.polling.account="bob"; panel.polling.accountVerified=true; panel.polling.repos=[]; panel.adopt()
             check(panel.titleText.indexOf("bob@github.com")>=0 && panel.repos.length===0,"title follows the verified account and the cleared data in one adopt()")
             panel.polling.account=""; panel.polling.accountVerified=false
+            panel.adoptedAccount=""  // the synthetic logins above are not a real account change for later stages
             panel.polling.repos=[{repo:"one/repo"},{repo:"two/repo"}]; reseed()
             check(panel.entries.length===2 && panel.titleText.indexOf("@github.com")<0,"seed restored")
             panel.polling.repos[0].runs=[{id:7,name:"CI",status:"in_progress",run_attempt:1,html_url:"https://github.com/one/repo/actions/runs/7"}]
