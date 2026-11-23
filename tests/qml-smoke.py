@@ -1216,9 +1216,9 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     # Keep it the only text argument: wtype prefixes later text arguments with a space.
                     ('G', ['G'], lambda p, s: s['cursor'] == s['rows'] - 1, 400),
                     ('j to run', K('g', 'j'), lambda p, s: s['cursor'] == 1 and s['selected'].startswith('one/repo:'), 400),
-                    ('c asks to cancel', K('c'), lambda p, s: s['confirm'] is not None, 300),
-                    ('p during confirmation', K('p'), lambda p, s: s['confirm'] is not None and s['view'] == 'repos', 300),
-                    ('n dismisses confirmation', K('n'), lambda p, s: s['confirm'] is None, 300),
+                    # p changes no state during a confirmation, so it rides with c; n then proves the view stayed.
+                    ('c then p', K('c', 'p'), lambda p, s: s['confirm'] is not None and s['view'] == 'repos', 300),
+                    ('n dismisses confirmation', K('n'), lambda p, s: s['confirm'] is None and s['view'] == 'repos', 300),
                     ('Return on run', K('Return'), lambda p, s: s['rows'] > p['rows'] and s['selected'] == p['selected'], 4500),
                     ('Escape closes', K('Escape'), lambda p, s: not s['opened'], 2000),
                 ]
