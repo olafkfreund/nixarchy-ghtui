@@ -41,7 +41,7 @@ if os.environ.get('FAKE_LOG'):
 if os.environ.get('FAKE_MODE')=='block':
     with open(os.environ['FAKE_PID'],'w') as pid: pid.write(str(os.getpid()))
     signal.pause()
-if os.path.exists(os.environ['HOME']+'/run-done'): open(os.environ['HOME']+'/closed-kinds.log','a').write(kind+'\\n')
+if os.path.exists(os.environ['HOME']+'/run-done') and not os.path.exists(os.environ['HOME']+'/reopened'): open(os.environ['HOME']+'/closed-kinds.log','a').write(kind+'\\n')
 time.sleep(0.1)
 run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'main','run_number':1,'html_url':'https://github.com/one/repo/actions/runs/7',
      'head_sha':'0123456789abcdef0123456789abcdef01234567','event':'push','actor':'octo','triggering_login':'octo','path':'.github/workflows/ci.yml'}
@@ -171,6 +171,8 @@ ShellRoot {
     FileView { id: launchFile; path: Quickshell.env("HOME") + "/omarchy-launch-tui.log"; printErrors: false }
     FileView { id: requestLog; path: Quickshell.env("FAKE_LOG"); printErrors: false }
     // The fake answers the account request with this login once the file exists.
+    // Ends the closed-panel request log before the pull-request stages reopen the panel.
+    FileView { id: reopenedMark; path: Quickshell.env("HOME") + "/reopened"; blockWrites: true; printErrors: false }
     FileView { id: switchLogin; path: Quickshell.env("HOME") + "/switch-login"; blockWrites: true; printErrors: false }
     function requested(run) {
         requestLog.reload()
@@ -612,6 +614,7 @@ ShellRoot {
                 stage=12
             } else if(stage===12 && Date.now()-closedAt>1200) {
                 check(panel.polling.requests===closedRequests,"polling stops once nothing is watched")
+                reopenedMark.setText("1")
                 panel.open()
                 check(JSON.parse(panel.status()).view==="repos" && JSON.parse(panel.status()).prs===-1,"reopen starts in repositories before login")
                 stage=30
