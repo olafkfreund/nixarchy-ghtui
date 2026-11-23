@@ -4,13 +4,13 @@ A flat, keyboard-driven Quickshell popup for repositories → workflow runs → 
 
 ## Screenshots
 
-![The panel opening on a search for nixarchy, narrowing it, then drilling into a running workflow down to the steps of its install job and back out](docs/img/github-actions.gif)
+![The panel opening filtered to olafkfreund/nixarchy, then drilling into a running workflow down to the steps of its prepare job and back out](docs/img/github-actions.gif)
 
 Press **Super+Alt+A**. Repositories sort failing first, then running; each row shows the last result on its default branch and its age. `/` searches repositories and workflows. `l` or Enter opens a repository to its runs, a run to its jobs, and a job to its steps, with live status and timers. `h` goes back up, `o` opens the selected row on GitHub, and Esc closes.
 
 | Repositories, failing then running first | A running job's steps | Search |
 | --- | --- | --- |
-| ![Repositories matching nixarchy, the one with two running workflows first](docs/img/github-actions-list.webp) | ![A running install check expanded to its jobs, and the install job to its eight steps](docs/img/github-actions-steps.webp) | ![The search narrowed to nixarchy-p, leaving two repositories](docs/img/github-actions-search.webp) |
+| ![Repositories matching nixarchy, the one with a running workflow first](docs/img/github-actions-list.webp) | ![A running omarchy-edge run expanded to its prepare job, and the job to its steps](docs/img/github-actions-steps.webp) | ![The search narrowed to nixarchy-p, leaving six repositories](docs/img/github-actions-search.webp) |
 
 **Super+Ctrl+Alt+A** lists every key:
 
