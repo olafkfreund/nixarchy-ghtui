@@ -156,27 +156,38 @@ The plugin uses your existing **`gh auth login`** authentication. It never extra
 
 The panel title shows the active `gh` login as `login@github.com` once it has been checked on this open. A `gh auth switch` while the popup is open is not noticed until the next open.
 
+## Pull requests
+
+Press **p** to switch between repositories and open pull requests. Each view remembers its own search filter and selected row while you switch back and forth, and reopening the panel stays on the view you left.
+
+- **Scope and caps:** lists up to 50 open pull requests across github.com (archived repositories excluded, most recently updated first) that you authored or were directly asked to review (`author:@me OR user-review-requested:@me`). Team review requests are not included. Expanding a pull request shows up to 50 check runs and commit status contexts from its latest commit's status check rollup. When GitHub reports higher totals, a `"N more checks on GitHub"` or `"N more on GitHub"` row at the end opens the rest in the browser with **o**.
+- **States:** a pull request row shows the rollup state (`passed`, `failed`, `running`), `no checks` when the head commit has no status check rollup, or `checks unavailable` when the commit or rollup could not be read. Draft pull requests start with `Draft ·`. When the list is older than its refresh target, the row count adds `checked Ns ago` or `checked Nm ago`.
+- **Jumping to an Actions run:** pressing **Enter**, **Space**, **→ / l** or clicking a check row jumps straight to that workflow run in the repositories view, expands the repository and the run, and fetches the run and its jobs if it is older than the runs already loaded. Non-Actions checks (external CI or commit status contexts), checks from repositories not in your repository list, and checks in archived, disabled or unavailable repositories cannot be jumped into and explain why in the footer.
+- **External links:** **o** and **y** only open or copy `https://github.com/…` links. On an external check (such as a third-party CI link), they refuse and tell you to press **o** on the pull request row instead.
+- **Login and token permissions:** the pull requests view waits for a verified `gh` login before loading or showing cached rows. The default `gh auth login` OAuth token (`repo` scope) covers everything. A fine-grained token needs **Pull requests**, **Checks** and **Commit statuses** read access; without them, or when an organisation requires SSO authorization that has not been granted to the token, affected rows show `checks unavailable` (or the view reports that the token or SSO was refused).
+
 ## Keyboard
 
 | Key | Action |
 | --- | --- |
 | ↑ / ↓ or k / j | Select a row |
-| Enter / Space | Expand or collapse a repository, run or job |
-| → / l | Open a collapsed row; on an open row, move to its first child |
+| Enter / Space | Expand or collapse a repository, pull request, run or job; on a check, jump to its Actions run |
+| → / l | Open a collapsed row; on an open row, move to its first child; on a check, jump to its Actions run |
 | ← / h | Collapse, or move to parent |
-| Click | Select a row and expand or collapse it, like Enter |
+| Click | Select a row and expand or collapse it (or jump on a check), like Enter |
 | Page Up / Down | Move one screenful |
 | Home / End, g / G | First or last row |
 | Ctrl + = / Ctrl + - / Ctrl + 0 | Bigger, smaller, theme text size: 70% to 150% (fonts never below 9 px), kept until the shell restarts, works in the search field too |
-| / | Filter repositories/runs by name, branch or state; `branch:x`, `actor:x`, `is:failed` |
+| p | Switch between the repositories view and the pull requests view |
+| / | Filter repositories/runs (with `branch:x`, `actor:x`, `is:failed`) or pull requests/checks by repository, title, branch, check name or status |
 | ↑ / ↓ while filtering | Select a search result |
-| Enter while filtering | Expand selected result and resume navigation |
+| Enter while filtering | Expand selected result (or jump on a check) and resume navigation |
 | Tab while filtering | Resume navigation without expanding |
 | Esc | Close run details, then clear filter, then close |
-| r | Restart the selected repository's summary (unless a load-more is running) and the jobs of the inspected expanded run, from the start |
-| Shift + R | Rediscover repositories from GitHub |
+| r | Restart the selected repository's summary (unless a load-more is running) and the jobs of the inspected expanded run, from the start; in the pull requests view, refresh pull requests |
+| Shift + R | Rediscover repositories from GitHub; in the pull requests view, refresh pull requests |
 | m | Load 30 more recent runs (up to 100) for the selected repository |
-| o | Open selected repository/run/job on GitHub |
+| o | Open selected repository/pull request/run/job or github.com check on GitHub |
 | i | Show or hide run details (commit, event, actor, attempt, start, duration) |
 | v | Open the log of a failed run or finished job (failed steps only for a failed job; needs `omarchy-launch-tui`, `less`) |
 | w | Watch the selected unfinished run: it polls while the panel is closed and a notification arrives when it finishes (needs `notify-send`); `w` again stops, up to 5 runs |
@@ -203,6 +214,7 @@ While open, one scheduler fetches a single API page at a time. Selecting a repos
 | Other known running repositories | `TIMING.active` |
 | Selected full workflow summary | `TIMING.summary` |
 | Previously checked idle repositories | `TIMING.idle` |
+| Pull requests (in the pull requests view) | `TIMING.prs` (60 s), or `TIMING.prsActive` (15 s) while checks are running; best effort, and on `r` / `Shift+R` |
 
 The values are the `TIMING` block at the top of `Polling.js`.
 
@@ -212,7 +224,7 @@ Cached data remains usable during refresh. The activity check reads up to 30 rec
 
 GitHub retry/reset headers pause all work. Secondary rate limits without a deadline start with a `TIMING.rateBase` wait and back off up to `TIMING.rateMax`. Network/server errors back off the affected resource from `TIMING.retryBase` up to `TIMING.retryMax`; a permission failure leaves that repository unavailable until a catalogue or manual refresh, and a catalogue permission failure stops catalogue requests until `r`, `R` or reopen. Authentication failures pause polling until retry/reopen. Manual refresh never bypasses a server cooldown. Closing cancels the read helper and its gh child; a write already sent finishes, and its result stays in the footer for 10 seconds, so a quick reopen still shows it; reopening retains cached data, local request history and cooldowns. A shell restart clears local memory; GitHub’s quota remains authoritative.
 
-Below 1,000 remaining requests (`TIMING.quotaEase`) background checks of non-selected repositories slow 3x, and below 300 (`TIMING.quotaTight`) 10x, until GitHub's reset time. The selected repository and the inspected run keep full pace; watched runs slow the same way. On open the panel makes one extra request for the `gh` login: cached data shows first and is cleared, with any watches, if the login differs from the cached one. A switch while the panel is open is not detected.
+Below 1,000 remaining requests (`TIMING.quotaEase`) background checks of non-selected repositories slow 3x, and below 300 (`TIMING.quotaTight`) 10x, until GitHub's reset time. The selected repository and the inspected run keep full pace; watched runs slow the same way. The pull requests view tracks GitHub's GraphQL quota separately (shown as remaining `GraphQL points` in the status strip) and slows pull-request refreshes by the same 3x / 10x thresholds when GraphQL points run low, without slowing REST repository polling (or vice versa). On open the panel makes one extra request for the `gh` login: cached data shows first and is cleared, with any watches, if the login differs from the cached one. A switch while the panel is open is not detected.
 
 Writes (rerun, cancel) do not count toward that request ceiling and respect a GitHub cooldown. An outcome the panel could not confirm is never retried: check GitHub first.
 

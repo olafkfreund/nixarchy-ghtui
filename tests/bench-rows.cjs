@@ -51,6 +51,23 @@ for (const n of [100, 500, 1000, 2000, 5000]) {
   const tick = time(() => null, (_, i) => m.syncRows(model, m.rows(data, expanded, {}, '', now + (i + 1) * 1000)), 15);
   console.log(`\nCapped (100 of 5000 queued fetched): ${base.length} rows, tick ${tick} ms`);
 }
+{
+  // #63: 50 pull requests x 50 checks, all expanded (2,550 rows); budget is < 15 ms (1,650-row budget scaled by row count).
+  const list = [], open = {};
+  for (let i = 0; i < 50; i++) {
+    const number = i + 1, repo = 'o/r';
+    open[`pr:${repo}#${number}`] = true;
+    const items = [];
+    for (let j = 0; j < 50; j++) items.push({name: 'check-' + j, status: j % 2 ? 'completed' : 'in_progress',
+      conclusion: j % 2 ? 'success' : '', url: `https://github.com/${repo}/runs/${j}`, repo, run: String(j + 1)});
+    list.push({repo, number, title: 'PR #' + number, branch: 'feat-' + number, draft: i % 5 === 0,
+      url: `https://github.com/${repo}/pull/${number}`, checks: {state: 'pending', total: 50, items}});
+  }
+  const data = {list, total: 50, at: now - 20000}, base = m.prRows(data, open, '', now), model = fresh(base);
+  const tick = time(() => null, (_, i) => m.syncRows(model, m.prRows(data, open, '', now + (i + 1) * 1000)), 15);
+  console.log(`PRs (50 of 50 PRs x 50 checks expanded): ${base.length} rows, tick ${tick} ms`);
+  if (base.length !== 2550 || Number(tick) >= 15) throw new Error(`PR bench failed: ${base.length} rows, ${tick} ms`);
+}
 const base = m.rows(repos(5000), expanded, {}, '', now);
 for (const [name, next] of [['unchanged', base.slice()], ['one removed', removed(base)], ['one moved to top', toTop(base)]]) {
   const x = fresh(base); ops = 0; m.syncRows(x, next);

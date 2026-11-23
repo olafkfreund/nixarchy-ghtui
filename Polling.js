@@ -2,13 +2,15 @@
 var phases = ["recent", "in_progress", "queued", "waiting", "pending", "requested"];
 var ACTIVITY_PAGE = 30; // Must match actions.py's activity per_page=30.
 var TIMING = {settle:250, catalogue:300000, summary:60000, selected:10000, active:15000,
+    prs:60000, prsActive:15000,
     idle:600000, followup:15000, jobs:5000, window:60000, perWindow:60, gap:1000, reseed:1000,
     rateBase:60000, rateMax:900000, retryBase:5000, retryMax:300000, quotaEase:1000, quotaTight:300, watch:30000};
 function create() {
     return {opened:false, generation:0, serial:0, order:0, slot:0, starts:[], cooldown:0,
         rateFailures:0, auth:false, tasks:{}, flight:null, repos:[], details:{}, selected:"", inspected:"",
         stableAt:0, expanded:{}, catalogueAt:0, catalogueComplete:false, countsAt:undefined, discover:true, catalogueBlocked:"",
-        account:"", accountChecked:false, accountVerified:false, remaining:null, resetAt:0, error:"", log:null, watches:{}, notices:[], paused:false,
+        account:"", accountChecked:false, accountVerified:false, remaining:null, resetAt:0, gqlRemaining:null, gqlResetAt:0,
+        prView:false, prs:{list:null,total:0,at:undefined,error:"",partial:false}, error:"", log:null, watches:{}, notices:[], paused:false,
         requests:0, lastRequest:"", lastStarted:0, wakeAt:0, seeds:0};
 }
 function key(kind, repo, run) { return kind + ":" + (repo || "") + ":" + (run || ""); }
@@ -16,6 +18,9 @@ function age(at, interval) { return at === undefined ? -Infinity : at + interval
 function pace(s, now) {
     if (typeof s.remaining!=="number" || now>=s.resetAt || s.remaining>=TIMING.quotaEase) return 1;
     return s.remaining>=TIMING.quotaTight ? 3 : 10;
+}
+function gqlPace(s, now) {
+    return pace({remaining:s.gqlRemaining,resetAt:s.gqlResetAt},now);
 }
 function repoFor(s, name) { return s.repos.filter(function(r) { return r.repo === name })[0]; }
 function runFor(s, repo, id) {
@@ -68,9 +73,31 @@ function select(s, repo, run, expanded, now, immediate) {
     else if (immediate) s.stableAt = now;
     s.selected = repo || ""; s.inspected = String(run || ""); s.expanded = expanded || {};
 }
+function view(s, on, now) {
+    s.wakeAt=0; s.prView=on;
+    var id=key("prs");
+    if (!on && (!s.flight || s.flight.key!==id)) delete s.tasks[id];
+}
+function jump(s,repo,run,expanded,now) {
+    view(s,false,now);
+    var cached=runFor(s,repo,run);
+    if (cached) delete cached.lookupError;  // a new lookup decides; an old failure must not end the jump
+    select(s,repo,run,expanded,now,true);
+    touch(s,repo,run,now);
+}
 function manual(s, now, catalogue) {
     s.wakeAt=0;
     s.auth = false;
+    if (s.prView) {
+        if (!s.accountChecked) {
+            var account=ensure(s,"account","","","interactive",now);
+            account.due=Math.min(account.due,now);
+        }
+        var prs=s.tasks[key("prs")];
+        if (prs && (!s.flight || s.flight.key!==prs.key)) restart(s,prs,now);
+        else ensure(s,"prs","","","interactive",now);
+        return;
+    }
     if (s.catalogueBlocked) { s.catalogueBlocked = ""; s.discover = true; }
     if (!s.accountChecked) {
         var account=ensure(s,"account","","","interactive",now);
@@ -122,10 +149,13 @@ function restart(s,t,now) {
     t.due=now;
 }
 function seed(s, now) {
+    var prsKey=key("prs");
+    if ((!s.prView || !s.accountVerified) && (!s.flight || s.flight.key!==prsKey)) delete s.tasks[prsKey];
     if (s.opened && !s.accountChecked) { ensure(s,"account","","","interactive",now); return; }
     Object.keys(s.tasks).forEach(function(id) {
         var t = s.tasks[id];
         if (s.flight && s.flight.key === id) return;
+        if (t.kind==="prs") return;
         var owner=repoFor(s,t.repo);
         if (owner && owner.blocked && t.kind!=="log") { delete s.tasks[id]; return; }
         if ((t.kind === "summary" && t.repo !== s.selected) ||
@@ -137,11 +167,16 @@ function seed(s, now) {
         ensure(s,"run",w.repo,w.run,"active",Math.max(age(w.at,TIMING.watch*pace(s,now)),age((runFor(s,w.repo,w.run)||{}).followupAt,TIMING.followup)));
     });
     if (!s.opened) return;
+    if (s.prView && s.accountVerified) {
+        var pending=(s.prs.list || []).some(function(pr) { return pr && pr.checks && pr.checks.state==="pending" });
+        var due=age(s.prs.at,(pending ? TIMING.prsActive : TIMING.prs)*gqlPace(s,now));
+        if (now>=due) ensure(s,"prs","","","interactive",due);
+    }
     if (s.discover) ensure(s, "catalogue", "", "", "background", now);
     var backgroundQueued=Object.keys(s.tasks).some(function(id) { var t=s.tasks[id]; return t.kind==="activity" && t.group==="background" });
     s.repos.slice().sort(function(a,b) { return (a.activityAt === undefined ? -Infinity : a.activityAt) - (b.activityAt === undefined ? -Infinity : b.activityAt) }).forEach(function(r) {
         if (r.archived || r.disabled || r.blocked) return;
-        var selected = r.repo === s.selected && now >= s.stableAt;
+        var selected = !s.prView && r.repo === s.selected && now >= s.stableAt;
         if (selected && !s.tasks[key("more",r.repo)] && now >= age(r.summaryAt, TIMING.summary)) ensure(s, "summary", r.repo, "", "interactive", age(r.summaryAt,TIMING.summary));
         var summary = s.tasks[key("summary",r.repo)];
         var activityKey = key("activity",r.repo);
@@ -179,7 +214,7 @@ function next(s, now) {
     s.clock=now;
     if (now>=s.wakeAt) {
         seed(s,now); s.seeds++;
-        s.wakeAt=Math.min(now+TIMING.reseed,s.stableAt>now ? s.stableAt : Infinity,s.resetAt>now ? s.resetAt : Infinity);
+        s.wakeAt=Math.min(now+TIMING.reseed,s.stableAt>now ? s.stableAt : Infinity,s.resetAt>now ? s.resetAt : Infinity,s.gqlResetAt>now ? s.gqlResetAt : Infinity);
     }
     var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now && (s.accountChecked || !s.opened || t.kind === "account") });
     if (!s.opened) due=due.filter(function(t) { return t.kind==="run" && s.watches[t.repo+":"+t.run] });
@@ -195,7 +230,8 @@ function next(s, now) {
     if (t.kind==="log") for (var i=0;i<4;i++) s.starts.push(now+i*TIMING.gap);
     else s.starts.push(now);
     s.requests++; s.lastStarted=now; s.lastRequest=t.kind + (t.repo ? " " + t.repo : "");
-    var request = {kind:t.kind,repo:t.repo,run:t.run,page:t.page,requestId:++s.serial};
+    var request = t.kind==="prs" ? {kind:"prs",page:1,requestId:++s.serial}
+        : {kind:t.kind,repo:t.repo,run:t.run,page:t.page,requestId:++s.serial};
     if (t.kind === "summary") request.status = phases[t.phase];
     if (t.kind === "more") request.status = "recent";
     if (request.status === "recent") {
@@ -319,13 +355,35 @@ function complete(s,reply,now) {
 }
 function completeReply(s,reply,now,t) {
     if (!t) return false;
-    if (typeof reply.remaining==="number") { s.remaining=reply.remaining; s.resetAt=reply.resetAt || 0; }
+    if (typeof reply.remaining==="number") {
+        if (reply.resource==="graphql") { s.gqlRemaining=reply.remaining; s.gqlResetAt=reply.resetAt || 0; }
+        else { s.remaining=reply.remaining; s.resetAt=reply.resetAt || 0; }
+    }
     var okData=t.kind==="run" || t.kind==="account" || t.kind==="log" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data)
+        : t.kind==="prs" ? !!reply.data && typeof reply.data==="object" && !Array.isArray(reply.data) && Array.isArray(reply.data.list)
         : Array.isArray(reply.data) && reply.data.every(function(x) { return x && typeof x==="object" });
     if (!reply.errorType && !reply.error && !okData)
         reply={requestId:reply.requestId,error:"Workflow helper returned invalid data",errorType:"setup"};
     cool(s,reply,now);
     if (t.restart) { delete t.restart; restart(s,t,now); return true; }
+    if (t.kind==="prs") {
+        if (okData) {
+            s.prs={list:reply.data.list,total:reply.data.total,at:now,
+                error:reply.data.partial ? "Some checks could not be read" : "",partial:!!reply.data.partial};
+            if (reply.errorType!=="rate") s.rateFailures=0;
+            delete s.tasks[t.key];
+        } else {
+            s.prs.error=reply.error || "Invalid GitHub response";
+            // auth and setup stop every read, so they also carry the shared error the bar and the repositories view show.
+            if (reply.errorType==="auth" || reply.errorType==="setup") { s.auth=true; s.error=s.prs.error; }
+            if (reply.errorType==="permission") { s.prs.at=now; delete s.tasks[t.key]; }
+            else {
+                t.failures++;
+                t.due=reply.errorType==="rate" ? s.cooldown : now+Math.min(TIMING.retryMax,TIMING.retryBase*Math.pow(2,t.failures-1));
+            }
+        }
+        return true;
+    }
     if (t.kind==="log") {
         if (reply.errorType || reply.error) {
             s.log={error:reply.error || "Invalid GitHub response"};
@@ -334,7 +392,9 @@ function completeReply(s,reply,now,t) {
         delete s.tasks[t.key]; return true;
     }
     if (t.kind==="account" && reply.errorType==="permission") {
-        s.accountChecked=true; s.error=""; delete s.tasks[t.key]; return true;
+        s.accountChecked=true; s.error="";
+        s.prs={list:null,total:0,at:undefined,error:"",partial:false};
+        delete s.tasks[t.key]; return true;
     }
     var r=repoFor(s,t.repo);
     if (reply.errorType || reply.error) {
@@ -376,6 +436,7 @@ function completeReply(s,reply,now,t) {
         if (s.account && s.account!==data.login) {
             s.tasks={}; s.repos=[]; s.details={}; s.expanded={}; s.selected=""; s.inspected="";
             s.catalogueComplete=false; s.catalogueBlocked=""; s.discover=true; s.watches={};
+            s.prs={list:null,total:0,at:undefined,error:"",partial:false}; s.gqlRemaining=null; s.gqlResetAt=0;
             delete s.countsAt;
         }
         s.account=data.login; s.accountChecked=true; s.accountVerified=true; delete s.tasks[t.key]; return true;

@@ -679,6 +679,8 @@ console.log('Model: watched rows and notices passed');
   vm.createContext(vmPoll);
   vm.runInContext(fs.readFileSync('Polling.js', 'utf8'), vmPoll);
   assert.equal(model.STALE, 3 * vmPoll.TIMING.idle);
+  assert.equal(model.PR_REFRESH, vmPoll.TIMING.prs);
+  assert.equal(model.PR_REFRESH_ACTIVE, vmPoll.TIMING.prsActive);
   // syncRows: a repository turning failing gives the same rows as a fresh build.
   const healthy = [{repo: 'a/a', checked: 'x', active: 0, last: last('success')}, {repo: 'b/b', checked: 'x', active: 0}];
   const failing = [{...healthy[0], last: last('failure')}, healthy[1]];
@@ -687,3 +689,148 @@ console.log('Model: watched rows and notices passed');
   model.syncRows(sync, model.rows(failing, {}, {}, '', t));
   assert.deepEqual(JSON.parse(JSON.stringify(sync.store.map(r => r.rowData))), JSON.parse(JSON.stringify(model.rows(failing, {}, {}, '', t))));
 }
+
+// #63: pull request rows, check rows, more rows, filtering, empty text, status line and accessible names.
+{
+  const now = new Date(2026, 0, 2, 0, 0, 0).getTime();
+  const resetAt = new Date(2026, 0, 2, 3, 4, 5).getTime();
+  assert.equal(model.quotaText(499, resetAt, resetAt - 1), '499 API requests left · resets 03:04');
+  assert.equal(model.quotaText(499, resetAt, resetAt - 1, 'GraphQL points'), '499 GraphQL points left · resets 03:04');
+  assert.equal(model.quotaText(1234, resetAt, resetAt - 1, 'GraphQL points'), '1,234 GraphQL points left');
+
+  const pr1 = {
+    repo: 'o/r', number: 12, title: 'Add checks', branch: 'feat/checks', draft: false,
+    url: 'https://github.com/o/r/pull/12',
+    checks: {
+      state: 'failure', total: 4,
+      items: [
+        {name: 'build', status: 'completed', conclusion: 'success', url: 'https://github.com/o/r/actions/runs/9001/job/1', repo: 'o/r', run: '9001'},
+        {name: 'test', status: 'completed', conclusion: 'failure', url: 'https://ci.example.com/build/2', repo: '', run: ''},
+        {name: 'lint', status: 'in_progress', conclusion: '', url: '', repo: 'o/r', run: '9002'}
+      ]
+    }
+  };
+  const pr2 = {
+    repo: 'o/r', number: 13, title: 'WIP work', branch: 'draft-branch', draft: true,
+    url: '',
+    checks: {
+      state: 'pending', total: 2,
+      items: [
+        {name: 'ci/check', status: 'pending', conclusion: '', url: 'https://github.com/o/r/runs/1', repo: 'o/r', run: ''}
+      ]
+    }
+  };
+  const prPass = {repo: 'a/b', number: 1, title: 'Green', branch: 'main', draft: false, url: 'https://github.com/a/b/pull/1',
+    checks: {state: 'success', total: 1, items: []}};
+  const prNone = {repo: 'a/b', number: 2, title: 'Docs', branch: 'docs', draft: false, url: 'https://github.com/a/b/pull/2',
+    checks: {state: 'none'}};
+  const prUnavail = {repo: 'a/b', number: 3, title: 'SSO', branch: 'sso', draft: false, url: 'https://evil.example/pull/3',
+    checks: {state: 'unavailable'}};
+
+  assert.deepEqual(JSON.parse(JSON.stringify(model.prRows(null, {}, '', now))), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(model.prRows({list: null, total: 0}, {}, '', now))), []);
+
+  const allStates = model.prRows({list: [prPass, pr1, pr2, prNone, prUnavail], total: 5, at: now}, {}, '', now);
+  assert.deepEqual(Array.from(allStates, r => [r.key, r.title, r.subtitle, r.status, r.statusText, r.info, r.url]), [
+    ['pr:a/b#1', 'a/b #1 Green', 'main', 'success', 'passed', '1 checks', 'https://github.com/a/b/pull/1'],
+    ['pr:o/r#12', 'o/r #12 Add checks', 'feat/checks', 'failure', 'failed', '4 checks', 'https://github.com/o/r/pull/12'],
+    ['pr:o/r#13', 'Draft · o/r #13 WIP work', 'draft-branch', 'in_progress', 'running', '2 checks', ''],
+    ['pr:a/b#2', 'a/b #2 Docs', 'docs', '', 'no checks', '', 'https://github.com/a/b/pull/2'],
+    ['pr:a/b#3', 'a/b #3 SSO', 'sso', 'error', 'checks unavailable', '', '']
+  ]);
+
+  // Age in seconds (when a PR is pending, interval is 15s) and minutes (when >= 60s or interval is 60s).
+  assert.equal(model.prRows({list: [pr2], total: 1, at: now - 15000}, {}, '', now)[0].info, '2 checks');
+  assert.equal(model.prRows({list: [pr2], total: 1, at: now - 40000}, {}, '', now)[0].info, '2 checks · checked 40s ago');
+  assert.equal(model.prRows({list: [pr2], total: 1, at: now - 180000}, {}, '', now)[0].info, '2 checks · checked 3m ago');
+  assert.equal(model.prRows({list: [prPass], total: 1, at: now - 40000}, {}, '', now)[0].info, '1 checks', 'no pending PR uses 60s interval');
+  assert.equal(model.prRows({list: [prPass], total: 1, at: now - 60000}, {}, '', now)[0].info, '1 checks');
+  assert.equal(model.prRows({list: [prPass], total: 1, at: now - 180000}, {}, '', now)[0].info, '1 checks · checked 3m ago');
+
+  // Expanded check rows, both "more" rows (with and without PR link), parent and depth.
+  const open = {'pr:o/r#12': true, 'pr:o/r#13': true};
+  const expandedRows = JSON.parse(JSON.stringify(model.prRows({list: [pr1, pr2], total: 5, at: now}, open, '', now)));
+  assert.deepEqual(expandedRows.map(r => [r.kind, r.key, r.parent, r.depth]), [
+    ['pr', 'pr:o/r#12', '', 0],
+    ['check', 'pr:o/r#12:0:build', 'pr:o/r#12', 1],
+    ['check', 'pr:o/r#12:1:test', 'pr:o/r#12', 1],
+    ['check', 'pr:o/r#12:2:lint', 'pr:o/r#12', 1],
+    ['more', 'pr:o/r#12:more', 'pr:o/r#12', 1],
+    ['pr', 'pr:o/r#13', '', 0],
+    ['check', 'pr:o/r#13:0:ci/check', 'pr:o/r#13', 1],
+    ['more', 'pr:o/r#13:more', 'pr:o/r#13', 1],
+    ['more', 'prs:more', '', 0]
+  ]);
+  assert.deepEqual(expandedRows[1], {
+    kind: 'check', key: 'pr:o/r#12:0:build', parent: 'pr:o/r#12', depth: 1,
+    title: 'build', subtitle: '', status: 'success', statusText: 'passed', info: '',
+    repo: 'o/r', run: '9001', url: 'https://github.com/o/r/actions/runs/9001/job/1', external: false
+  });
+  assert.deepEqual(expandedRows[2], {
+    kind: 'check', key: 'pr:o/r#12:1:test', parent: 'pr:o/r#12', depth: 1,
+    title: 'test', subtitle: '', status: 'failure', statusText: 'failed', info: '',
+    repo: '', run: '', url: '', external: true
+  });
+  assert.deepEqual(expandedRows[3], {
+    kind: 'check', key: 'pr:o/r#12:2:lint', parent: 'pr:o/r#12', depth: 1,
+    title: 'lint', subtitle: '', status: 'in_progress', statusText: 'running', info: '',
+    repo: 'o/r', run: '9002', url: '', external: false
+  });
+  assert.equal(expandedRows[4].title, '1 more checks on GitHub');
+  assert.equal(expandedRows[4].url, 'https://github.com/o/r/pull/12/checks');
+  assert.equal(expandedRows[7].title, '1 more checks on GitHub');
+  assert.equal(expandedRows[7].url, '', 'pull request without a link gives an empty checks-more url');
+  assert.equal(expandedRows[8].title, '3 more on GitHub');
+  assert.equal(expandedRows[8].url, 'https://github.com/pulls');
+
+  // Filter on repository, title, branch, status and check name.
+  const filterRows = q => Array.from(model.prRows({list: [pr1, pr2, prNone], total: 5, at: now}, open, q, now), r => r.key);
+  assert.deepEqual(filterRows('Add checks'), ['pr:o/r#12', 'pr:o/r#12:0:build', 'pr:o/r#12:1:test', 'pr:o/r#12:2:lint', 'pr:o/r#12:more']);
+  assert.deepEqual(filterRows('draft-branch'), ['pr:o/r#13', 'pr:o/r#13:0:ci/check', 'pr:o/r#13:more']);
+  assert.deepEqual(filterRows('no checks'), ['pr:a/b#2']);
+  assert.deepEqual(filterRows('lint'), ['pr:o/r#12', 'pr:o/r#12:2:lint'], 'PR with a matching check is shown with that check');
+  assert.deepEqual(filterRows('queued'), ['pr:o/r#13', 'pr:o/r#13:0:ci/check']);
+  assert.deepEqual(filterRows('nomatch'), []);
+
+  // prEmptyText states.
+  assert.equal(model.prEmptyText({accountChecked: false, accountVerified: false, prs: {list: null, error: 'err'}}),
+    'Verifying your GitHub login…');
+  assert.equal(model.prEmptyText({accountChecked: true, accountVerified: false, prs: {list: null, error: 'err'}}),
+    'Pull requests need a verified GitHub login; check gh auth status');
+  assert.equal(model.prEmptyText({accountChecked: true, accountVerified: true, prs: {list: null, error: 'token refused'}}),
+    'token refused');
+  assert.equal(model.prEmptyText({accountChecked: true, accountVerified: true, prs: {list: null, error: ''}}),
+    'Loading pull requests…');
+  assert.equal(model.prEmptyText({accountChecked: true, accountVerified: true, prs: {list: [], error: ''}}),
+    'No open pull requests');
+  assert.equal(model.prEmptyText({accountChecked: true, accountVerified: true, prs: {list: [pr1], error: ''}, filter: 'xyz'}),
+    'No match for "xyz"');
+
+  // prStatusLine with notice, error, cooldown and GraphQL quota label.
+  const prBase = {notice: 'note', noticeUntil: now + 1, cooldown: 0,
+    prs: {list: [pr1, pr2], total: 5, error: ''}, gqlRemaining: 499, gqlResetAt: resetAt};
+  assert.deepEqual(JSON.parse(JSON.stringify(model.prStatusLine(prBase, now))), {
+    text: 'note · 5 open pull requests',
+    urgent: false,
+    quota: '499 GraphQL points left · resets 03:04'
+  });
+  assert.equal(model.prStatusLine({...prBase, notice: '', prs: {list: null, total: 0, error: ''}}, now).text, '',
+    'no count before the first list');
+  assert.deepEqual(JSON.parse(JSON.stringify(model.prStatusLine({...prBase, notice: '', prs: {...prBase.prs, error: 'Some checks could not be read'}}, now))), {
+    text: 'Some checks could not be read',
+    urgent: true,
+    quota: '499 GraphQL points left · resets 03:04'
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(model.prStatusLine({...prBase, cooldown: now + 60000, prs: {...prBase.prs, error: 'GitHub rate limit'}}, now))), {
+    text: 'note · GitHub rate limit · GitHub paused until 00:01:00',
+    urgent: true,
+    quota: '499 GraphQL points left · resets 03:04'
+  });
+  assert.equal(model.prStatusLine({...prBase, notice: '', cooldown: now + 60000}, now).urgent, true);
+
+  // accessibleName for pr and check rows.
+  assert.equal(model.accessibleName(expandedRows[0], false), 'pull request: o/r #12 Add checks, failed, collapsed');
+  assert.equal(model.accessibleName(expandedRows[0], true), 'pull request: o/r #12 Add checks, failed, expanded');
+  assert.equal(model.accessibleName(expandedRows[1], false), 'check: build, passed');
+}
+console.log('Model: pull request rows, filter, empty text, status line and accessible names passed');

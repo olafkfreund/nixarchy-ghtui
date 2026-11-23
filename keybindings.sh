@@ -7,25 +7,26 @@ SUPER ALT + A → Open or close GitHub Actions
 SUPER CTRL ALT + A → GitHub Actions keybindings
 ↓ / j → Next row (j only outside search editing)
 ↑ / k → Previous row (k only outside search editing)
-Enter / Space → Expand or collapse repository, run or job
-→ / l → Open a collapsed row, or enter an open one
+Enter / Space → Expand or collapse repository, pull request, run or job; on a check, jump to its Actions run
+→ / l → Open a collapsed row, or enter an open one; on a check, jump to its Actions run
 ← / h → Collapse or select parent
 Page Down / Page Up → Move one screenful
 Home / End / g / G → First or last row
 Ctrl + = / Ctrl + - → Bigger or smaller text (10% a step, 70% to 150% of the theme size)
 Ctrl + 0 → Theme text size
-Click → Select a row and expand or collapse it
-/ → Search repositories and workflows; select existing query
-branch:x actor:x is:failed → Filter the runs already loaded
+Click → Select a row and expand or collapse it (or jump on a check)
+p → Switch between repositories and pull requests
+/ → Search repositories and workflows, or pull requests and checks; select existing query
+branch:x actor:x is:failed → Filter the runs already loaded (repositories view)
 ↑ / ↓ while searching → Select a result without leaving search
-Enter while searching → Expand selected result and resume navigation
+Enter while searching → Expand selected result (or jump on a check) and resume navigation
 Tab while searching → Resume navigation without expanding
 Esc while searching → Close run details, otherwise clear search and resume navigation
 Esc → Close run details, then clear filter, then close
-r → Refresh selected repository, expanded run and activity
-Shift + R → Rediscover accessible repositories
+r → Refresh selected repository, expanded run and activity; in pull requests, refresh pull requests
+Shift + R → Rediscover accessible repositories; in pull requests, refresh pull requests
 m → Load 30 more recent runs for the selected repository
-o → Open selected repository, run or job on GitHub
+o → Open selected repository, pull request, run, job or github.com check on GitHub
 i → Show or hide run details
 v → Open the log of a failed run or finished job (failed steps only for a failed job)
 w → Watch the selected unfinished run and get a notification when it finishes (up to 5)

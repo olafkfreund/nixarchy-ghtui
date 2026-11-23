@@ -19,6 +19,11 @@ Item {
     property var expanded: ({})
     property var entries: []
     property int cursor: 0
+    property string view: "repos"
+    property var viewState: ({repos: {filter: "", key: ""}, prs: {filter: "", key: ""}})
+    property bool switching: false
+    property string jumpKey: ""
+    property string adoptedAccount: ""
     property alias filterText: searchField.text
     readonly property bool filtering: searchField.activeFocus
     property string error: ""
@@ -71,7 +76,9 @@ Item {
     readonly property bool discoveryComplete: polling.catalogueComplete
     property string notice: ""
     property double noticeUntil: 0
-    readonly property var statusInfo: Model.statusLine({notice: notice, noticeUntil: noticeUntil, error: root.error, repos: repos,
+    readonly property var statusInfo: view === "prs" ? Model.prStatusLine({notice: notice, noticeUntil: noticeUntil,
+        prs: polling.accountVerified ? polling.prs : {list: null, total: 0, error: ""}, cooldown: polling.cooldown,
+        gqlRemaining: polling.accountVerified ? polling.gqlRemaining : null, gqlResetAt: polling.gqlResetAt}, now) : Model.statusLine({notice: notice, noticeUntil: noticeUntil, error: root.error, repos: repos,
         cooldown: polling.cooldown, discoveryComplete: discoveryComplete, checkedCount: checkedCount, repoCount: repos.length,
         remaining: polling.remaining, resetAt: polling.resetAt}, now)
     readonly property var coverage: Model.coverage(repos)
@@ -85,10 +92,13 @@ Item {
     readonly property real rowMin: Math.max(sp(40), fBody + sp(12))
     readonly property var detailRun: current && ["run", "job", "step"].indexOf(current.kind) >= 0 ? Polling.runFor(polling, current.repo, current.run) : null
     readonly property var detailRows: detail ? Model.detail(detailRun, now) : []
-    readonly property string titleText: "GitHub Actions  ·  " + repos.length + (repos.length === 1 ? " repository" : " repositories") + (account ? "  ·  " + account + "@github.com" : "") + (watching ? "  ·  " + Object.keys(polling.watches).length + " watched" : "")
+    readonly property string titleText: view === "prs" ? "Pull requests" + (polling.accountVerified && polling.prs.list ? "  ·  " + polling.prs.total + " open" : "") + (account ? "  ·  " + account : "")
+        : "GitHub Actions  ·  " + repos.length + (repos.length === 1 ? " repository" : " repositories") + (account ? "  ·  " + account + "@github.com" : "") + (watching ? "  ·  " + Object.keys(polling.watches).length + " watched" : "")
     readonly property string detailAccessibleName: "Run details: " + detailRows.map(function(r) { return (r.label ? r.label + " " : "") + r.value }).join(", ")
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
     onFilterTextChanged: {
+        if (switching) return
+        jumpKey = ""  // typing takes over the selection from a pending jump
         rebuild(filterText !== "")
         if (filterText === "") list.positionViewAtIndex(cursor, ListView.Contain)
         selectionChanged(false)
@@ -101,7 +111,11 @@ Item {
         targetScreen = null
         for (var i = 0; i < Quickshell.screens.length; i++)
             if (monitor && Quickshell.screens[i].name === monitor.name) targetScreen = Quickshell.screens[i]
-        if (!opened) { Polling.open(polling, Date.now()); account = ""; publishStatus() }
+        if (!opened) {
+            Polling.open(polling, Date.now()); Polling.view(polling, view === "prs", Date.now()); account = ""
+            polling = Object.assign({}, polling)  // notify bindings such as the empty state that the login is unchecked again
+            publishStatus()
+        }
         opened = true
         rebuild()
         selectionChanged(true)
@@ -115,6 +129,7 @@ Item {
         requestProc.running = false
         confirm = null
         detail = false
+        jumpKey = ""
     }
     function toggle() { opened ? close() : open() }
     function publishStatus() {
@@ -135,6 +150,7 @@ Item {
             requests: polling.requests, inFlight: workerBusy, cooldown: polling.cooldown,
             lastRequest: polling.lastRequest, lastStarted: polling.lastStarted,
             filter: filterText, editing: filtering, selected: current ? current.key : "", scrollY: list.contentY,
+            view: view, prs: polling.accountVerified && polling.prs.list ? polling.prs.list.length : -1, jumpKey: jumpKey,
             textStep: textStep, pollSelected: polling.selected, pollInspected: polling.inspected, remaining: polling.remaining, resetAt: polling.resetAt,
             action: actionText, actionBusy: actionBusy,
             confirm: confirm ? {action: confirm.action, repo: confirm.repo, run: confirm.run} : null})
@@ -146,18 +162,35 @@ Item {
             pane: pane.visible ? {y: pane.y - list.y, h: pane.height} : null, footerY: footer.y - list.y})
     }
 
-    function rebuild(resetSelection) {
-        var key = current ? current.key : ""
+    function switchView(target, filter, key) {
+        viewState[view] = {filter: filterText, key: current ? current.key : ""}
+        detail = false
+        switching = true
+        try {
+            view = target
+            Polling.view(polling, target === "prs", Date.now())
+            filterText = filter
+        } finally { switching = false }
+        rebuild(false, key)
+    }
+    function rebuild(resetSelection, selectKey) {
+        if (jumpKey) selectKey = jumpKey
+        var key = selectKey || (current ? current.key : "")
         var topIndex = list.indexAt(1, list.contentY + 1)
         var topItem = list.itemAtIndex(topIndex)
         var topKey = entries[topIndex] ? entries[topIndex].key : ""
         var topOffset = topItem ? topItem.y - list.contentY : 0
-        var next = Model.rows(repos, expanded, details, filterText, now,
-            polling.selected && polling.inspected ? polling.selected + ":" + polling.inspected : "", polling.watches)
+        var next = view === "prs" ? Model.prRows(polling.accountVerified ? polling.prs : null, expanded, filterText, now)
+            : Model.rows(repos, expanded, details, filterText, now,
+                polling.selected && polling.inspected ? polling.selected + ":" + polling.inspected : "", polling.watches)
         var structureChanged = Model.syncRows(visibleRows, next)
         entries = next
-        cursor = resetSelection ? 0 : Model.selection(entries, key, cursor)
-        if (resetSelection) {
+        cursor = selectKey ? Math.max(0, entries.findIndex(function(row) { return row.key === selectKey }))
+            : resetSelection ? 0 : Model.selection(entries, key, cursor)
+        if (selectKey) {
+            list.forceLayout()
+            list.positionViewAtIndex(cursor, ListView.Contain)
+        } else if (resetSelection) {
             list.forceLayout()
             list.positionViewAtBeginning()
         } else if (structureChanged && topKey) {
@@ -171,8 +204,13 @@ Item {
                 list.returnToBounds()
             }
         }
+        if (jumpKey && entries.some(function(row) { return row.key === jumpKey })) {
+            jumpKey = ""
+            selectionChanged(true)
+        }
     }
     function move(delta) {
+        jumpKey = ""
         cursor = Math.max(0, Math.min(entries.length - 1, cursor + delta))
         list.positionViewAtIndex(cursor, ListView.Contain)
         selectionChanged(false)
@@ -186,6 +224,7 @@ Item {
     }
     function click(index) {
         if (confirm) return
+        jumpKey = ""
         cursor = index
         selectionChanged(false)
         keys.forceActiveFocus()
@@ -197,9 +236,11 @@ Item {
     readonly property alias footerItem: footer
     function enter() {
         var row = current
-        if (!row || ["repo", "run", "job"].indexOf(row.kind) < 0) return
+        if (row && row.kind === "check") { jump(); return }
+        if (!row || ["repo", "pr", "run", "job"].indexOf(row.kind) < 0) return
         if (!expanded[row.key]) { expand(false); return }
         if (entries[cursor + 1] && entries[cursor + 1].parent === row.key) {
+            jumpKey = ""
             cursor++
             list.positionViewAtIndex(cursor, ListView.Contain)
             selectionChanged(false)
@@ -208,6 +249,7 @@ Item {
     function expand(collapse) {
         var row = current
         if (!row) return
+        if (!collapse && row.kind === "check") { jump(); return }
         var next = Object.assign({}, expanded)
         if (collapse) {
             if (next[row.key]) delete next[row.key]
@@ -217,7 +259,7 @@ Item {
                 selectionChanged(false)
                 return
             }
-        } else if (["repo", "run", "job"].indexOf(row.kind) >= 0) {
+        } else if (["repo", "pr", "run", "job"].indexOf(row.kind) >= 0) {
             next[row.key] = !next[row.key]
         }
         expanded = next
@@ -239,10 +281,21 @@ Item {
     }
     function selectionChanged(immediate) {
         if (!polling) return
-        Polling.select(polling, current ? current.repo : "", current ? current.run : "", expanded, Date.now(), immediate)
+        Polling.select(polling, view === "prs" ? "" : current ? current.repo : "",
+            view === "prs" ? "" : current ? current.run : "", expanded, Date.now(), immediate)
         rebuild()
     }
     function adopt() {
+        // The first verified login is not a change; only a different login resets the views.
+        var accountChanged = !!adoptedAccount && !!polling.account && polling.account !== adoptedAccount
+        if (polling.account) adoptedAccount = polling.account
+        if (accountChanged) {
+            viewState = {repos: {filter: "", key: ""}, prs: {filter: "", key: ""}}
+            switching = true
+            try { filterText = "" } finally { switching = false }
+            jumpKey = ""
+            detail = false
+        }
         repos = polling.repos.slice()
         account = polling.accountVerified && polling.account ? polling.account : ""
         details = Object.assign({}, polling.details)
@@ -260,7 +313,33 @@ Item {
         publishStatus()
         if (!opened) return
         rebuild()
-        selectionChanged(false)
+        if (jumpKey) {
+            var jumpRepo = jumpKey.slice(0, jumpKey.lastIndexOf(":"))
+            var jumpRun = jumpKey.slice(jumpKey.lastIndexOf(":") + 1)
+            var run = Polling.runFor(polling, jumpRepo, jumpRun)
+            if ((run && run.lookupError) || !polling.tasks["run:" + jumpRepo + ":" + jumpRun]) {
+                jumpKey = ""
+                showNotice("Run unavailable")
+            }
+        }
+        if (!jumpKey) selectionChanged(false)
+    }
+    function jump() {
+        var row = current
+        if (!row || row.kind !== "check") return
+        if (!row.run) { showNotice("Not an Actions check" + (Model.browsable(row.url) ? "; o opens it" : "")); return }
+        var repo = Polling.repoFor(polling, row.repo)
+        if (!repo) { showNotice("Repository not in your list"); return }
+        if (repo.archived || repo.disabled || repo.blocked) { showNotice("Repository is archived, disabled or unavailable"); return }
+        var next = Object.assign({}, expanded)
+        next["repo:" + row.repo] = true
+        next[row.repo + ":" + row.run] = true
+        expanded = next
+        Polling.jump(polling, row.repo, row.run, expanded, Date.now())
+        jumpKey = row.repo + ":" + row.run
+        switchView("repos", "", jumpKey)
+        adopt()
+        pump()
     }
     // One notify-send at a time; the argv is an array, never a shell string.
     function drainNotices() {
@@ -325,6 +404,14 @@ Item {
         return Commons.Color.menu.text
     }
     function openBrowser() {
+        if (current && current.kind === "check" && current.external) {
+            showNotice("Link is not on github.com; o on the pull request opens it")
+            return
+        }
+        if (current && current.kind === "check" && !Model.browsable(current.url)) {
+            showNotice("No link")
+            return
+        }
         if (current && Model.browsable(current.url))
             Quickshell.execDetached(["xdg-open", current.url])
     }
@@ -364,6 +451,14 @@ Item {
     }
     function copyLink() {
         if (copyProc.copyBusy) { showNotice("Copy in progress"); return }
+        if (current && current.kind === "check" && current.external) {
+            showNotice("Link is not on github.com; o on the pull request opens it")
+            return
+        }
+        if (current && current.kind === "check" && !Model.browsable(current.url)) {
+            showNotice("No link")
+            return
+        }
         if (!current || current.kind === "message" || current.kind === "more" || !Model.browsable(current.url)) {
             showNotice("Nothing to copy")
             return
@@ -577,7 +672,7 @@ Item {
                         return
                     }
                     event.accepted = true
-                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?" || event.text === "m" || event.text === "w")) return
+                    if (event.isAutoRepeat && (event.text === "y" || event.text === "?" || event.text === "m" || event.text === "w" || event.text === "p")) return
                     if (event.key === Qt.Key_Escape) root.handleEscape(false)
                     else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) root.move(1)
                     else if (event.key === Qt.Key_Up || event.key === Qt.Key_K) root.move(-1)
@@ -590,14 +685,23 @@ Item {
                     else if ([Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space].indexOf(event.key) >= 0) root.expand(false)
                     else if (event.text === "g") root.move(-root.entries.length)
                     else if (event.text === "G") root.move(root.entries.length)
+                    else if (event.text === "p") {
+                        root.jumpKey = ""
+                        var target = root.view === "prs" ? "repos" : "prs"
+                        var saved = root.viewState[target]
+                        root.switchView(target, saved.filter, saved.key)
+                        root.selectionChanged(true)
+                        root.pump()
+                    }
                     else if (event.text === "y") root.copyLink()
-                    else if (event.text === "w") root.toggleWatch()
+                    else if (event.text === "w") root.view === "prs" ? root.showNotice("Not available on pull requests") : root.toggleWatch()
                     else if (event.text === "?") Quickshell.execDetached(["bash", decodeURIComponent(Qt.resolvedUrl("keybindings.sh").toString().replace(/^file:\/\//, ""))])
                     else if (event.key === Qt.Key_Slash) { searchField.forceActiveFocus(); searchField.selectAll() }
                     else if (event.key === Qt.Key_R) {
                         root.refresh(!!(event.modifiers & Qt.ShiftModifier))
                     }
                     else if (event.key === Qt.Key_O) root.openBrowser()
+                    else if (root.view === "prs" && (event.key === Qt.Key_I || event.key === Qt.Key_V || event.key === Qt.Key_A || event.key === Qt.Key_F || event.key === Qt.Key_C || event.text === "m")) root.showNotice("Not available on pull requests")
                     else if (event.key === Qt.Key_I) root.toggleDetail()
                     else if (event.key === Qt.Key_V) root.viewLog()
                     else if (event.key === Qt.Key_A) root.askAction("rerun")
@@ -628,8 +732,8 @@ Item {
                         selectByMouse: true
                         selectionColor: Commons.Color.menu.selectedBackground
                         selectedTextColor: Commons.Color.menu.selectedText
-                        Accessible.name: "Search repositories"
-                        rightPadding: coverageNote.implicitWidth + Style.spacing.md
+                        Accessible.name: root.view === "prs" ? "Search pull requests…" : "Search repositories"
+                        rightPadding: coverageNote.visible ? coverageNote.implicitWidth + Style.spacing.md : 0
                         Keys.onPressed: function(event) {
                             if (root.textKey(event)) { event.accepted = true; return }
                             if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
@@ -647,7 +751,7 @@ Item {
                         Text {
                             anchors.fill: parent
                             visible: searchField.text.length === 0
-                            text: "Search repositories…"
+                            text: root.view === "prs" ? "Search pull requests…" : "Search repositories…"
                             color: Commons.Color.menu.text
                             opacity: 0.75
                             font: searchField.font
@@ -656,6 +760,7 @@ Item {
                         }
                         Text {
                             id: coverageNote
+                            visible: root.view !== "prs"
                             anchors.right: parent.right
                             text: "recent runs loaded for " + root.coverage.loaded + " of " + root.coverage.total + " repositories"
                             color: Commons.Color.menu.text
@@ -724,9 +829,9 @@ Item {
                                     anchors.verticalCenter: parent.verticalCenter
                                     Text {
                                         width: parent.width
-                                        text: (["repo", "run", "job"].indexOf(modelData.kind) >= 0 ? (root.expanded[modelData.key] ? "▾ " : "▸ ") : "") + modelData.title
+                                        text: (["repo", "pr", "run", "job"].indexOf(modelData.kind) >= 0 ? (root.expanded[modelData.key] ? "▾ " : "▸ ") : "") + modelData.title
                                         color: index === root.cursor ? Commons.Color.menu.selectedText : Commons.Color.menu.text
-                                        font { family: Style.font.menuFamily; pixelSize: root.fBody; bold: modelData.kind === "repo" }
+                                        font { family: Style.font.menuFamily; pixelSize: root.fBody; bold: modelData.kind === "repo" || modelData.kind === "pr" }
                                         elide: Text.ElideRight
                                         textFormat: Text.PlainText
                                     }
@@ -757,7 +862,8 @@ Item {
                         Text {
                             anchors.centerIn: parent
                             visible: root.entries.length === 0
-                            text: Model.emptyText({repoCount: root.repos.length, error: root.error, discoveryComplete: root.discoveryComplete, filter: root.filterText})
+                            text: root.view === "prs" ? Model.prEmptyText(root.polling, root.filterText)
+                                : Model.emptyText({repoCount: root.repos.length, error: root.error, discoveryComplete: root.discoveryComplete, filter: root.filterText})
                             color: Commons.Color.menu.text
                             font { family: Style.font.menuFamily; pixelSize: root.fBody }
                             textFormat: Text.PlainText
@@ -765,7 +871,7 @@ Item {
                     }
                     Flickable {
                         id: pane
-                        visible: root.detail
+                        visible: root.detail && root.view !== "prs"
                         width: parent.width
                         // Column skips invisible items, so the spacing term depends on visibility.
                         readonly property real avail: parent.height - list.y - footer.height - Style.spacing.md * (visible ? 2 : 1)
@@ -808,7 +914,9 @@ Item {
                     Text {
                         id: footer
                         width: parent.width
-                        text: root.confirm ? root.confirm.text : root.actionText || "↑↓ move  ←→ expand  / search  r refresh  R repos  o GitHub  i details  v log  w watch  y copy  ? keys  Esc close"
+                        text: root.confirm ? root.confirm.text : root.actionText || (root.view === "prs"
+                            ? "↑↓ move  ←→ expand  / search  p repositories  r refresh  o GitHub  y copy  ? keys  Esc close"
+                            : "↑↓ move  ←→ expand  / search  p pull requests  r refresh  R repos  o GitHub  i details  v log  w watch  y copy  ? keys  Esc close")
                         color: root.actionError && !root.confirm && root.actionText ? Commons.Color.urgent : Commons.Color.menu.text
                         opacity: root.confirm || root.actionText ? 1 : 0.65
                         font { family: Style.font.menuFamily; pixelSize: root.fCaption }
