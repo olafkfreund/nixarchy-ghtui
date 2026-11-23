@@ -269,6 +269,23 @@ Also: zero names outside the allow-list per file (step 13), the
 keybindings decision (step 11), and the text-size comparisons by eye
 (steps 8 and 10).
 
+## Deviations
+
+- **Step 2, owner-approved (2026-11-23):**
+  - razer had no shell at all. The earlier stuck restart had stopped the
+    old one, and nothing started a new one. The lead started it with
+    `omarchy-restart-shell` (process start time 10:13:51).
+  - The new shell then loaded v0.4.0 from the backup
+    `olafkfreund.github-actions.bak-0.4.0`, because it was still in
+    `~/.config/omarchy/plugins/` with the same plugin ID.
+  - The backup was moved, not deleted, to
+    `~/.local/share/nixarchy-ghtui-checkout-0.4.0`, followed by
+    `omarchy-shell shell reloadPlugins`.
+  - Readiness 3 then passed: `view: "repos"`, `textStep: 0`.
+  - The plan's "the backup is never touched" now means its new path.
+  - The `status()` call is
+    `omarchy-shell shell call olafkfreund.github-actions status ""`.
+
 ## Rollback
 
 - **Images:** revert the docs commit, or don't merge the PR.
