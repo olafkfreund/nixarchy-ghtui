@@ -1450,3 +1450,139 @@ console.log('Polling: merge pruning, capped reseeding and dropped-flight retry p
   assert.equal(s.countsAt,123,'a closed watch updates cached counts without moving the activity timestamp');
 }
 console.log('Polling: bar counts timestamp lifecycle passed');
+
+// #63: pull requests use one interactive GraphQL task and a separate quota.
+{
+  const make=() => {
+    const s=polling.create(); reopen(s,0); s.accountVerified=true;
+    s.catalogueComplete=true; s.discover=false; polling.view(s,true,0);
+    return s;
+  };
+  const gql=(request,list=[],extra={}) => ({...response(request,{list,total:list.length,partial:false}),
+    resource:'graphql',remaining:4000,resetAt:0,...extra});
+  const prsKey=polling.key('prs');
+  const off=polling.create(); reopen(off,0); off.accountVerified=true; off.discover=false;
+  assert.equal(polling.next(off,0),null,'view off does not schedule PRs');
+  polling.view(off,true,0); polling.close(off);
+  assert.equal(polling.next(off,0),null,'closed panel does not schedule PRs');
+  polling.open(off,100); off.accountChecked=true; off.discover=false;
+  assert.equal(polling.next(off,100),null,'unverified login does not schedule PRs');
+  polling.ensure(off,'prs','','','interactive',100);
+  polling.seed(off,100); assert.equal(off.tasks[prsKey],undefined,'unverified login drops queued PRs');
+
+  const s=make();
+  let req=polling.next(s,0);
+  assert.deepEqual({...req},{kind:'prs',page:1,requestId:1});
+  assert.equal(polling.complete(s,gql(req,[{checks:{state:'success'}}]),100),true);
+  assert.equal(s.tasks[prsKey],undefined); assert.equal(s.prs.at,100);
+  assert.equal(polling.next(s,60099),null,'normal refresh waits 60 s');
+  req=polling.next(s,61100); assert.equal(req.kind,'prs');
+  polling.complete(s,gql(req,[{checks:{state:'pending'}}]),61200);
+  assert.equal(polling.next(s,76199),null,'pending refresh waits 15 s');
+  req=polling.next(s,77200); assert.equal(req.kind,'prs');
+  polling.complete(s,gql(req,[]),77300);
+  assert.equal(s.prs.list.length,0);
+
+  const quota=make();
+  quota.prs.at=100; quota.gqlRemaining=100; quota.gqlResetAt=300000;
+  quota.remaining=4000; quota.resetAt=0;
+  assert.equal(polling.gqlPace(quota,1000),10);
+  assert.equal(polling.pace(quota,1000),1,'GraphQL quota does not slow REST');
+  assert.equal(polling.next(quota,60100),null,'low GraphQL quota defers refresh');
+  quota.gqlResetAt=60100;
+  req=polling.next(quota,61100); assert.equal(req.kind,'prs','quota reset advances the deadline');
+  polling.complete(quota,gql(req,[],{remaining:500,resetAt:100000}),61200);
+  assert.equal(quota.gqlRemaining,500); assert.equal(quota.gqlResetAt,100000);
+  assert.equal(quota.remaining,4000); assert.equal(quota.resetAt,0);
+  assert.equal(polling.gqlPace(quota,61200),3);
+  const rest=polling.ensure(quota,'run','a/b','7','interactive',62000);
+  polling.completeReply(quota,{...response({requestId:0},{id:7,status:'completed'}),remaining:12,resetAt:90000},62000,rest);
+  assert.equal(quota.remaining,12); assert.equal(quota.resetAt,90000);
+  assert.equal(quota.gqlRemaining,500);
+
+  const manual=make(); manual.catalogueBlocked='permission'; manual.discover=false;
+  manual.selected='a/b'; manual.repos=[{repo:'a/b',runs:[],summaryAt:0}];
+  polling.manual(manual,1000,false);
+  assert.equal(manual.tasks[prsKey].due,1000);
+  assert.equal(manual.tasks[polling.key('summary','a/b')],undefined);
+  assert.equal(manual.discover,false);
+  polling.manual(manual,1100,true);
+  assert.equal(manual.tasks[prsKey].due,1100);
+  assert.equal(manual.discover,false,'catalogue flag is ignored in PR view');
+  manual.accountChecked=false; manual.accountVerified=false;
+  polling.manual(manual,1150,true);
+  assert.equal(manual.tasks[polling.key('account')].due,1150,'manual refresh checks an unverified login');
+  manual.accountChecked=true; manual.accountVerified=true;
+  polling.seed(manual,1200);
+  assert.equal(manual.tasks[polling.key('summary','a/b')],undefined,'selected summary is suppressed');
+  polling.view(manual,false,1200);
+  assert.equal(manual.tasks[prsKey],undefined,'view off removes a queued task');
+
+  const partial=make(); req=polling.next(partial,0);
+  polling.complete(partial,gql(req,[{checks:{state:'unavailable'}}],{data:{list:[{checks:{state:'unavailable'}}],total:2,partial:true}}),100);
+  assert.equal(partial.prs.error,'Some checks could not be read');
+  assert.equal(partial.prs.total,2); assert.equal(partial.prs.partial,true);
+  assert.equal(partial.error,'');
+  const rate=make(); req=polling.next(rate,0);
+  polling.complete(rate,gql(req,[{checks:{state:'success'}}],{errorType:'rate',error:'GitHub rate limit',remaining:0,resetAt:60000}),100);
+  assert.equal(rate.prs.list.length,1); assert.equal(rate.prs.at,100);
+  assert.equal(rate.cooldown,60000); assert.equal(rate.rateFailures,1);
+  assert.equal(rate.error,''); assert.equal(rate.tasks[prsKey],undefined);
+
+  for (const kind of ['permission','network','rate','auth','setup']) {
+    const failed=make(); failed.repos=[{repo:'a/b'}];
+    failed.prs.list=[{checks:{state:'success'}}];
+    const task=polling.ensure(failed,'prs','','','interactive',0);
+    polling.completeReply(failed,{data:null,error:'PR denied',errorType:kind,remaining:4000},100,task);
+    assert.equal(failed.prs.error,'PR denied'); assert.equal(failed.error,'');
+    assert.equal(failed.prs.list.length,1,'an error keeps cached PR rows');
+    assert.equal(failed.repos[0].blocked,undefined);
+    assert.equal(failed.auth,kind==='auth'||kind==='setup');
+    assert.equal(failed.tasks[prsKey]===undefined,kind==='permission');
+    if (kind==='permission') assert.equal(failed.prs.at,100);
+    if (kind==='network') assert.equal(task.due,5100);
+    if (kind==='rate') assert.equal(task.due,failed.cooldown);
+  }
+  const invalid=make();
+  const invalidTask=polling.ensure(invalid,'prs','','','interactive',0);
+  polling.completeReply(invalid,{data:{total:0},error:'',errorType:''},100,invalidTask);
+  assert.equal(invalid.prs.error,'Workflow helper returned invalid data'); assert.equal(invalid.auth,true);
+  assert.equal(invalid.error,'');
+
+  const account=make(); account.account='first'; account.prs={list:[{checks:{state:'success'}}],total:1,at:1,error:'old',partial:true};
+  account.gqlRemaining=23; account.gqlResetAt=90000;
+  const accountTask=polling.ensure(account,'account','','','interactive',0);
+  polling.completeReply(account,response({requestId:0},{login:'second'}),100,accountTask);
+  assert.equal(account.prView,true); assert.equal(account.prs.list,null);
+  assert.equal(account.gqlRemaining,null); assert.equal(account.gqlResetAt,0);
+  account.prs.list=[{checks:{state:'success'}}];
+  const denied=polling.ensure(account,'account','','','interactive',200);
+  polling.completeReply(account,{data:null,error:'denied',errorType:'permission'},200,denied);
+  assert.equal(account.prs.list,null,'account permission clears old rows');
+
+  const stale=make(); req=polling.next(stale,0);
+  polling.close(stale); polling.open(stale,1000);
+  assert.equal(polling.complete(stale,gql(req,[{}]),1000),false);
+  assert.equal(stale.prs.list,null,'old generation cannot publish rows');
+
+  const jump=make(); jump.repos=[{repo:'a/b',runs:Array.from({length:12},(_,i)=>({id:i+2,status:'completed'}))}];
+  polling.jump(jump,'a/b','1',{'a/b:1':true},100);
+  assert.equal(jump.prView,false); assert.equal(jump.selected,'a/b'); assert.equal(jump.inspected,'1');
+  assert.equal(jump.tasks[polling.key('run','a/b','1')].due,100);
+  req=polling.next(jump,100); assert.equal(req.kind,'run');
+  polling.complete(jump,response(req,{id:1,status:'completed'}),200);
+  assert.ok(polling.runFor(jump,'a/b',1),'jumped run survives the ten newest completed runs');
+
+  const loaded=make(); loaded.prs.at=0; loaded.slot=3;
+  let seen=-1;
+  for (let i=0;i<5;i++) {
+    const at=60000+i*1000;
+    polling.ensure(loaded,'run',`a/r${i}`,'1',i%2?'background':'active',at);
+    req=polling.next(loaded,at);
+    assert.ok(req);
+    if (req.kind==='prs') { seen=i; break; }
+    polling.complete(loaded,response(req,{id:1,status:'completed'}),at+100);
+  }
+  assert.ok(seen>=0 && seen<5,'PR task starts within five starts after its deadline');
+}
+console.log('Polling: pull request scheduling, quota, errors and jump passed');
