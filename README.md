@@ -12,6 +12,10 @@ Press **Super+Alt+A**. Repositories sort failing first, then running; each row s
 | --- | --- | --- |
 | ![Repositories matching nixarchy, the one with a running workflow first](docs/img/github-actions-list.webp) | ![A running omarchy-edge run expanded to its prepare job, and the job to its steps](docs/img/github-actions-steps.webp) | ![The search narrowed to nixarchy-p, leaving six repositories](docs/img/github-actions-search.webp) |
 
+**p** switches to open pull requests and their status checks:
+
+![Pull requests view filtered to olafkfreund/nixarchy-hyprflip, with pull request #12 expanded to its four passing status checks](docs/img/github-actions-prs.webp)
+
 **Super+Ctrl+Alt+A** lists every key:
 
 ![The GitHub Actions keybindings sheet in the Omarchy menu](docs/img/github-actions-keys.webp)
