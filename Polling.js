@@ -80,6 +80,8 @@ function view(s, on, now) {
 }
 function jump(s,repo,run,expanded,now) {
     view(s,false,now);
+    var cached=runFor(s,repo,run);
+    if (cached) delete cached.lookupError;  // a new lookup decides; an old failure must not end the jump
     select(s,repo,run,expanded,now,true);
     touch(s,repo,run,now);
 }

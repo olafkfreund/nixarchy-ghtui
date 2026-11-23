@@ -1572,6 +1572,9 @@ console.log('Polling: bar counts timestamp lifecycle passed');
   req=polling.next(jump,100); assert.equal(req.kind,'run');
   polling.complete(jump,response(req,{id:1,status:'completed'}),200);
   assert.ok(polling.runFor(jump,'a/b',1),'jumped run survives the ten newest completed runs');
+  polling.runFor(jump,'a/b',1).lookupError='Resource unavailable';
+  polling.jump(jump,'a/b','1',{'a/b:1':true},300);
+  assert.equal(polling.runFor(jump,'a/b',1).lookupError,undefined,'a new jump clears an old lookup failure');
 
   const loaded=make(); loaded.prs.at=0; loaded.slot=3;
   let seen=-1;

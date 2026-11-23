@@ -183,7 +183,7 @@ function prStatusLine(s, now) {
     var paused = now < s.cooldown;
     if (paused) parts.push("GitHub paused until " + clock(s.cooldown, true));
     var count = typeof prs.total === "number" ? prs.total : Array.isArray(prs.list) ? prs.list.length : 0;
-    if (!error && !paused) parts.push(count + " open pull requests");
+    if (!error && !paused && Array.isArray(prs.list)) parts.push(count + " open pull requests");
     return {text: parts.join(" · "), urgent: !!(error || paused), quota: quotaText(s.gqlRemaining, s.gqlResetAt, now, "GraphQL points")};
 }
 

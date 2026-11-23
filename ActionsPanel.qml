@@ -91,12 +91,13 @@ Item {
     readonly property real rowMin: Math.max(sp(40), fBody + sp(12))
     readonly property var detailRun: current && ["run", "job", "step"].indexOf(current.kind) >= 0 ? Polling.runFor(polling, current.repo, current.run) : null
     readonly property var detailRows: detail ? Model.detail(detailRun, now) : []
-    readonly property string titleText: view === "prs" ? "Pull requests  ·  " + (polling.accountVerified ? polling.prs.total : 0) + " open" + (account ? "  ·  " + account : "")
+    readonly property string titleText: view === "prs" ? "Pull requests" + (polling.accountVerified && polling.prs.list ? "  ·  " + polling.prs.total + " open" : "") + (account ? "  ·  " + account : "")
         : "GitHub Actions  ·  " + repos.length + (repos.length === 1 ? " repository" : " repositories") + (account ? "  ·  " + account + "@github.com" : "") + (watching ? "  ·  " + Object.keys(polling.watches).length + " watched" : "")
     readonly property string detailAccessibleName: "Run details: " + detailRows.map(function(r) { return (r.label ? r.label + " " : "") + r.value }).join(", ")
     readonly property string helper: decodeURIComponent(Qt.resolvedUrl("actions.py").toString().replace(/^file:\/\//, ""))
     onFilterTextChanged: {
         if (switching) return
+        jumpKey = ""  // typing takes over the selection from a pending jump
         rebuild(filterText !== "")
         if (filterText === "") list.positionViewAtIndex(cursor, ListView.Contain)
         selectionChanged(false)

@@ -814,6 +814,8 @@ console.log('Model: watched rows and notices passed');
     urgent: false,
     quota: '499 GraphQL points left · resets 03:04'
   });
+  assert.equal(model.prStatusLine({...prBase, notice: '', prs: {list: null, total: 0, error: ''}}, now).text, '',
+    'no count before the first list');
   assert.deepEqual(JSON.parse(JSON.stringify(model.prStatusLine({...prBase, notice: '', prs: {...prBase.prs, error: 'Some checks could not be read'}}, now))), {
     text: 'Some checks could not be read',
     urgent: true,
