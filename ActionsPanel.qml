@@ -76,8 +76,9 @@ Item {
     readonly property bool discoveryComplete: polling.catalogueComplete
     property string notice: ""
     property double noticeUntil: 0
-    readonly property var statusInfo: view === "prs" ? Model.prStatusLine({notice: notice, noticeUntil: noticeUntil, prs: polling.prs,
-        cooldown: polling.cooldown, gqlRemaining: polling.gqlRemaining, gqlResetAt: polling.gqlResetAt}, now) : Model.statusLine({notice: notice, noticeUntil: noticeUntil, error: root.error, repos: repos,
+    readonly property var statusInfo: view === "prs" ? Model.prStatusLine({notice: notice, noticeUntil: noticeUntil,
+        prs: polling.accountVerified ? polling.prs : {list: null, total: 0, error: ""}, cooldown: polling.cooldown,
+        gqlRemaining: polling.accountVerified ? polling.gqlRemaining : null, gqlResetAt: polling.gqlResetAt}, now) : Model.statusLine({notice: notice, noticeUntil: noticeUntil, error: root.error, repos: repos,
         cooldown: polling.cooldown, discoveryComplete: discoveryComplete, checkedCount: checkedCount, repoCount: repos.length,
         remaining: polling.remaining, resetAt: polling.resetAt}, now)
     readonly property var coverage: Model.coverage(repos)
@@ -110,7 +111,11 @@ Item {
         targetScreen = null
         for (var i = 0; i < Quickshell.screens.length; i++)
             if (monitor && Quickshell.screens[i].name === monitor.name) targetScreen = Quickshell.screens[i]
-        if (!opened) { Polling.open(polling, Date.now()); Polling.view(polling, view === "prs", Date.now()); account = ""; publishStatus() }
+        if (!opened) {
+            Polling.open(polling, Date.now()); Polling.view(polling, view === "prs", Date.now()); account = ""
+            polling = Object.assign({}, polling)  // notify bindings such as the empty state that the login is unchecked again
+            publishStatus()
+        }
         opened = true
         rebuild()
         selectionChanged(true)

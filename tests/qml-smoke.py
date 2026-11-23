@@ -636,9 +636,7 @@ ShellRoot {
                 panel.detail=true
                 switchTo("prs")
                 check(!panel.detail && panel.filterText==="Feature" && panel.current.key==="pr:one/repo#101","pull request filter and key restored; details closed")
-                panel.filterText="p"
-                check(panel.filterText==="p" && panel.view==="prs","p in search remains text")
-                panel.filterText=""
+                // p typed in search is covered with real keys in the keys run.
                 at("pr:one/repo#101")
                 panel.expand(false)
                 at("pr:one/repo#101:2:External")

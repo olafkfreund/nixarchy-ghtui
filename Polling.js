@@ -214,7 +214,7 @@ function next(s, now) {
     s.clock=now;
     if (now>=s.wakeAt) {
         seed(s,now); s.seeds++;
-        s.wakeAt=Math.min(now+TIMING.reseed,s.stableAt>now ? s.stableAt : Infinity,s.resetAt>now ? s.resetAt : Infinity);
+        s.wakeAt=Math.min(now+TIMING.reseed,s.stableAt>now ? s.stableAt : Infinity,s.resetAt>now ? s.resetAt : Infinity,s.gqlResetAt>now ? s.gqlResetAt : Infinity);
     }
     var due = Object.keys(s.tasks).map(function(id) { return s.tasks[id] }).filter(function(t) { return t.due <= now && (s.accountChecked || !s.opened || t.kind === "account") });
     if (!s.opened) due=due.filter(function(t) { return t.kind==="run" && s.watches[t.repo+":"+t.run] });
@@ -374,7 +374,8 @@ function completeReply(s,reply,now,t) {
             delete s.tasks[t.key];
         } else {
             s.prs.error=reply.error || "Invalid GitHub response";
-            if (reply.errorType==="auth" || reply.errorType==="setup") s.auth=true;
+            // auth and setup stop every read, so they also carry the shared error the bar and the repositories view show.
+            if (reply.errorType==="auth" || reply.errorType==="setup") { s.auth=true; s.error=s.prs.error; }
             if (reply.errorType==="permission") { s.prs.at=now; delete s.tasks[t.key]; }
             else {
                 t.failures++;

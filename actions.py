@@ -345,7 +345,7 @@ def read_prs(task):
             elif kind != "rate":
                 partial = True
         rows = []
-        for i, node in enumerate(search["nodes"]):
+        for i, node in enumerate(search["nodes"][:50]):
             row = pull_request(node, i in unavailable)
             if row is not None:
                 rows.append(row)
