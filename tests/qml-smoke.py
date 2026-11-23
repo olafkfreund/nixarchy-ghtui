@@ -71,10 +71,8 @@ elif kind=='run' and request.get('run')=='9001':
     data=dict(run,id=9001,run_number=9001,html_url='https://github.com/one/repo/actions/runs/9001',status='completed',conclusion='success')
 elif kind=='run': data=dict(run,status='completed',conclusion='success') if os.path.exists(os.environ['HOME']+'/run-done') else runs[0]
 elif kind=='account':
-    path=os.environ['HOME']+'/account-count'
-    count=int(open(path).read())+1 if os.path.exists(path) else 1
-    open(path,'w').write(str(count))
-    login='other' if count>=5 else 'tester'
+    switch=os.environ['HOME']+'/switch-login'
+    login=open(switch).read().strip() if os.path.exists(switch) else 'tester'
     open(os.environ['HOME']+'/account-login','w').write(login)
     data={'login':login}
 else: data=runs if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
@@ -172,6 +170,8 @@ ShellRoot {
     }
     FileView { id: launchFile; path: Quickshell.env("HOME") + "/omarchy-launch-tui.log"; printErrors: false }
     FileView { id: requestLog; path: Quickshell.env("FAKE_LOG"); printErrors: false }
+    // The fake answers the account request with this login once the file exists.
+    FileView { id: switchLogin; path: Quickshell.env("HOME") + "/switch-login"; blockWrites: true; printErrors: false }
     function requested(run) {
         requestLog.reload()
         return requestLog.text().split("\\n").some(function(line) {
@@ -659,6 +659,7 @@ ShellRoot {
                 switchTo("prs")
                 panel.filterText="Feature"
                 check(panel.entries.some(function(row) { return row.key==="pr:one/repo#101" }),"old login rows present before reopen")
+                switchLogin.setText("other")
                 panel.close()
                 panel.open()
                 panel.jumpKey="old:9001"
