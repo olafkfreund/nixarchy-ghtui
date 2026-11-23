@@ -301,6 +301,13 @@ keybindings decision (step 11), and the text-size comparisons by eye
 - **Keys sheet:** its new height is 687 px, against 722 before; the width
   is 1000 px. AE is 14429 (2.1 %), and by eye the keys changed (pull
   requests, zoom), so the file is replaced.
+- **Pull-request still not last (agy review):**
+  - `github-actions-prs.webp` (about 10:28) was not retaken after the
+    later GIF retake.
+  - The rule exists so the GIF starts in the repositories view. Each
+    retake's `status()` lines confirm `view: repos` before recording.
+  - The still was kept. It passed the gate, and a retake would change
+    nothing the rule protects.
 - **Step order:** `herdr-team` refuses a dirty worktree, so the images
   (step 17) were committed as `e3fd10b` before agy's README entry (step
   16). The final diff is the same.
@@ -318,4 +325,5 @@ keybindings decision (step 11), and the text-size comparisons by eye
 
   If control was lost before step 1, tell the owner that the panel may be
   left on pull requests. One `p` on razer fixes it. The plugin link and
-  the `.bak-0.4.0` checkout are never touched.
+  the old checkout (now
+  `~/.local/share/nixarchy-ghtui-checkout-0.4.0`) are never touched.
