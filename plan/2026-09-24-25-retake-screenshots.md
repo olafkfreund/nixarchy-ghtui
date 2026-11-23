@@ -3,91 +3,141 @@ status: draft
 issue: 25
 spec: spec/2026-09-24-25-retake-screenshots.md
 coders:
-  16: agy    # README Screenshots entry for the PR still: mechanical text; the lead copies images and runs every capture
+  16: agy    # README entry for the PR still: a two-line conditional text edit, given the image and its verified rows; captures, copies and commits stay with the lead
 reviewers:
-  - codex    # fresh review of the image commit against this plan
-  - agy      # second, independent review
+  - codex    # fresh review of the whole PR against this plan, including agy's README edit
+  - agy      # independent review of the capture and gate evidence (not of its own README edit)
 ---
 
 # Plan: Retake the screenshots and GIF at the theme text size
 
 **Revised 2026-11-23.** This replaces the plan approved on 2026-09-24. The
 spec was revised and approved again (`8be1bc0`). Capture is from v1.3.0,
-the plugin on razer comes from Nix, and there is a new pull-request still.
+razer's plugin comes from Nix, and there is a new pull-request still.
 
 ## Approved decisions
 
 - **Source:** v1.3.0 (`main` at `cdc49ac`). Work happens on branch
   `docs/25-screenshots-v13` in `/mnt/code/Source-home/GitHub/nixarchy-ghtui-25`.
-- **What changes:** only `docs/img/` and the README.
+- **What changes:** only `docs/img/` and the README, with no code.
   - `github-actions.gif`, `github-actions-list.webp`,
     `github-actions-steps.webp` and `github-actions-search.webp` are
     replaced under the same names.
-  - `github-actions-keys.webp` is replaced only if a fresh capture
-    differs.
-  - The new `github-actions-prs.webp` is added, together with a README
-    entry, but only if it passes the gate.
-  - The README alt text changes only if it is wrong. There are no code
-    changes.
-- **razer readiness (spec §0):** capture starts only when all four hold.
-  1. razer's quickshell started after the owner's restart.
-  2. The plugin link's `manifest.json` says 1.3.0.
-  3. `status()` has a `view` field.
-  4. `p` switches `view` to `prs` and back to `repos`, and `textStep` is 0.
-
-  The lead never restarts razer's shell; the owner does.
-- **Plugin on razer:** `~/.config/omarchy/plugins/olafkfreund.github-actions`
-  is the Nix link. Nothing pulls or edits it, or the
-  `olafkfreund.github-actions.bak-0.4.0` checkout.
-- **Who:** the lead runs the captures on razer. The owner approves the
-  ai-mirror control grant on razer's desktop. Nothing is captured on p620.
-- **Agent bus:** read `#agents`, then post a CLAIM for razer's desktop.
-  Post "done" only at the end of the restore (step 14). If razer is
-  claimed and not released, wait.
+  - `github-actions-keys.webp` is replaced only if its keys or layout
+    changed.
+  - The new `github-actions-prs.webp` is added, with a README entry, but
+    only if it passes the gate.
+  - README alt text changes only if it is wrong.
+- **razer readiness (spec §0):** all four must hold, or capture stops and
+  the owner is told.
+  1. razer's quickshell started after the owner's restart. Its
+     `ps -o lstart=` is later than 2026-11-23 09:50, when the stuck restart
+     was abandoned and PID 5512 was still running.
+  2. The plugin link `~/.config/omarchy/plugins/olafkfreund.github-actions`
+     resolves to `/nix/store/…-nixarchy-ghtui`, and its `manifest.json`
+     says 1.3.0.
+  3. `razer.sh omarchy-shell plugin call olafkfreund.github-actions status`
+     returns JSON with a `view` field.
+  4. Pressing `p` makes `view` read `prs`, and pressing `p` again makes it
+     `repos`. `textStep` is 0.
+- **Deviation from spec §0:** checks 1-3 are read-only and run before the
+  claim. Check 4 sends keys, so it runs after the claim, with control and
+  the `foot` target ready (step 7). It still runs before any capture.
+- **Plugin on razer:** nothing reads, pulls or edits the
+  `olafkfreund.github-actions.bak-0.4.0` checkout. Only the link and
+  manifest in check 2 are read. The lead never restarts razer's shell.
+- **Who:** the lead drives razer, captures, copies images, runs the gate,
+  restores and commits. The owner approves the ai-mirror control grant on
+  razer's desktop. Nothing is captured on p620.
+- **Agent bus:**
+  - Read `#agents` first. If there is any open claim on razer, older ones
+    included, wait.
+  - Post the CLAIM.
+  - Post "done" only after the restore is verified (step 15).
 - **Driving:**
-  - A scratch helper, `$SCRATCH/razer.sh`, runs `ssh razer` with the whole
-    environment of razer's quickshell, read from `/proc/<pid>/environ`.
-  - Keys go to a throwaway `foot` window on an empty workspace
-    (olafkfreund/ai-mirror#29). `status()` over IPC confirms that they
-    landed.
+  - `$SCRATCH/razer.sh` runs `ssh razer`, exporting every variable from
+    the `/proc/<pid>/environ` of razer's quickshell first.
+  - Keys go to a throwaway `foot` window on an empty workspace, because
+    ai-mirror sends keys only to a named window and mis-tracks focus while
+    the panel is open (olafkfreund/ai-mirror#29).
+  - Every key's effect is confirmed through `status()`.
   - On `not_owner` or `stale_generation`, stop and ask. Never retry.
-- **Framing of the existing four** is the same as #20:
-  - the stills are the card region at native size, as WebP;
-  - list: search `nixarchy`, running first;
-  - steps: a running run expanded to a job's steps;
-  - search: narrowed to `nixarchy-p`;
-  - GIF: opens filtered to `nixarchy`, drills from a run to its job and on
-    to its steps, collapses back, and closes with Super+Alt+A. It is
-    trimmed and cropped to the card.
-- **Pull-request still (spec §3)**, taken last of the stills with no
-  recording running:
-  1. Press `p`, then search the full `owner/name` of one public repository
-     on the allow-list. Expand one pull request to its checks.
-  2. Before taking it, check every visible row: its full repository name is
-     on the allow-list, and no title, branch or check name shows anything
-     private.
-  3. If any row cannot be verified, or no such pull request is open, skip
-     the still and say so in the PR. Never open a pull request to make one.
-  4. Then press `p` to go back to repositories.
-
-  The total count of open pull requests in the header is accepted.
-- **Tools:**
-  `nix shell nixpkgs#wf-recorder nixpkgs#ffmpeg nixpkgs#tesseract nixpkgs#imagemagick`
-  on razer, with nothing installed. `grim` is already there.
-- **GIF budget:** at most about 1 MB.
-  - Start from #20's settings: 1.8× speed, 7 fps, 680 px, 32 colours.
-  - If it's over, lower the fps first, then the colours.
-  - Make it narrower only if the text stays readable by eye.
-- **Keybindings sheet:** compare a fresh capture with the current file using
-  `magick compare -metric AE -fuzz 5%` at the same size, and check by eye.
-  Replace the file only if it differs, and say which in the PR.
+- **Framing (inherited from #20 plan steps 15-16, written out here):**
+  - **Stills:**
+    - `grim -g <card geometry>` at the card's native size: 900 px wide,
+      and 1000 px for the keybindings sheet. Never wider, because the
+      desktop around the card shows calendar and tasks.
+    - Converted to WebP with `ffmpeg` (`-c:v libwebp -lossless 0
+      -quality 90`).
+    - The card geometry comes from the panel's `layout()` IPC plus the
+      monitor offset.
+    - Shots:
+      - list: search `nixarchy`, running first;
+      - steps: a running run expanded to its job, and the job to its
+        steps;
+      - search: narrowed to `nixarchy-p`.
+  - **GIF:**
+    - A `wf-recorder -g <card geometry>` recording that opens already
+      filtered to `nixarchy`. The filter survives Super+Alt+A.
+    - It drills from a run to its job and to its steps, collapses back,
+      and closes with Super+Alt+A (Esc would clear the filter).
+    - The recording is trimmed to the time the card is on screen, found by
+      sampling its border pixel at 10 fps, plus a margin, and cropped to
+      the card.
+- **GIF encode and budget:**
+  - ffmpeg palettegen/paletteuse, starting at 1.8× speed, 7 fps, 680 px
+    and 32 colours (#20's result was 1.06 MB).
+  - The target is at most about 1,050,000 bytes. If it is over, lower the
+    fps first, then the colours, then the width, but only while the text
+    stays readable by eye. Each try re-encodes from the same recording.
+  - If it is still over while readable, record the size and ask the owner
+    in the PR.
+- **Keybindings sheet:**
+  - Capture it at 1000 px, then run
+    `magick compare -metric AE -fuzz 5%` against the decoded current file
+    at the same size.
+  - Replace the file only if its keys or layout changed, judged by eye.
+    A pixel difference alone, such as from anti-aliasing or the theme,
+    keeps the old file.
+  - The PR records the AE number and the decision.
+- **Pull-request still (spec §3), the last still:**
+  - Two traps:
+    - The view lists pull requests from every repository you can see,
+      private ones included.
+    - Its search is a plain substring match over repository, title,
+      branch, status and check names, with no visibility filter. Typing
+      `owner/name` can still show a private pull request that mentions
+      it.
+  - So:
+    1. Press `p`.
+    2. Search the full `owner/name` of one allow-listed public repository.
+    3. Expand one pull request so its checks are visible.
+    4. Check every visible row by its full repository name, title, branch
+       and check names.
+    5. Capture only if every row is verified. Otherwise, or if no such
+       pull request is open, skip the still and record why. Never open a
+       pull request to make one.
+    6. On both paths, press `p` again to return to repositories.
+  - The total count of open pull requests, private ones included, shows in
+    the header and in the status strip. It is accepted.
+  - If an earlier image has to be retaken after this still, take the
+    pull-request still again (or skip it) afterwards, so it stays last.
 - **Privacy gate:**
-  - `tesseract` reads each still and one GIF frame every 0.5 s. Every
-    `owner/name` it finds is diffed against the public allow-list.
-  - Every file is checked by eye. For the pull-request still, that
-    includes every title, branch and check name.
-  - No calendar, task or notification text may appear.
-  - A file that fails is not committed.
+  - **Allow-list:** every public repository on the account whose name
+    contains `nixarchy`, plus the one chosen for the pull-request still:
+    `gh repo list olafkfreund --visibility public --limit 200 --json nameWithOwner`,
+    filtered to `nixarchy`. #20 had 14 of them.
+  - **OCR:** `tesseract` reads each still and one GIF frame every 0.5 s.
+    Every `owner/name` it finds is normalised (lowercase, trailing
+    punctuation stripped).
+  - **Pass:** each file has **zero names outside the allow-list**, it
+    passes the eye check, and it shows no calendar, task or notification
+    text.
+    - For the pull-request still, the eye check also covers every title,
+      branch and check name.
+    - OCR misses elided text, so the rows identified at capture time are
+      what count.
+  - A file that fails is retaken or dropped, never committed.
 - **Read-only on GitHub:** nothing is re-run and no pull request is opened
   to create activity.
 - **nixarchy:** its copies and pin are a separate nixarchy issue and PR,
@@ -95,129 +145,141 @@ the plugin on razer comes from Nix, and there is a new pull-request still.
 
 ## Steps
 
-### A. Preconditions (no razer changes)
+### A. Local (no razer changes)
 
-0. **Readiness:** run readiness checks 1 to 3 over `ssh razer` → verify
-   that each holds. Until the owner has restarted razer's shell, stop here
-   and tell the owner. Check 4 needs control, so it runs in step 5.
-1. **Branch:** `git fetch origin` and check that the branch is based on
-   `origin/main` → verify with `git merge-base --is-ancestor origin/main HEAD`.
-   Only the three artifact files differ from `origin/main`.
-
-### B. Prepare razer (lead)
-
-2. **Agent bus:** `read_new` on `#agents`, then post
-   `CLAIM razer desktop: #25 screenshots (nixarchy-ghtui)` → verify that
-   it appears and no newer open claim exists for razer.
-3. **Helper:** write `$SCRATCH/razer.sh`, which takes razer's quickshell
-   PID and exports every variable in its `/proc/<pid>/environ` → verify
-   that `razer.sh 'echo $OMARCHY_PATH'` is non-empty and
+0. **Branch:** `git fetch origin`. Check that `cdc49ac` is an ancestor of
+   `HEAD` (`git merge-base --is-ancestor cdc49ac HEAD`) and that
+   `git diff --stat origin/main` lists only the intent, spec and plan
+   files.
+1. **Helper:** write `$SCRATCH/razer.sh` (local scratch; it doesn't change
+   razer) → verify that `razer.sh 'echo $OMARCHY_PATH'` is non-empty and
    `razer.sh hyprctl monitors` lists monitors.
-4. **Plugin:** read the plugin link and its `manifest.json` → verify that
-   it is the Nix store link at 1.3.0, and that the `.bak-0.4.0` checkout
-   is untouched (same mtime as before).
+2. **Readiness 1-3:** run checks 1, 2 and 3 → verify each one. If any
+   fails, stop and tell the owner. That includes the shell not yet being
+   restarted.
+
+### B. Prepare razer
+
+3. **Agent bus:** run `read_new` on `#agents`. With no open claim on
+   razer, post `CLAIM razer desktop: #25 screenshots (nixarchy-ghtui)` →
+   verify that it appears.
+4. **Allow-list:** build it as in the decisions, and confirm with
+   `gh repo view <repo> --json visibility` that the chosen pull-request
+   repository is `PUBLIC`. Check for a running workflow with
+   `gh run list -R <repo> --status in_progress --limit 1` on the
+   `nixarchy` repositories → verify that the list is non-empty and at least
+   one run is in progress. If none is, wait and re-check; never re-run
+   anything.
 5. **Control:** run `razer.sh ai-mirror control agent`; the owner approves
-   on razer → verify that `owner: agent`. If it is `off`, stop and tell
-   the owner. Then run readiness check 4.
+   on razer → verify that `ai-mirror status` reports `owner: agent`. If it
+   reports `off`, stop and tell the owner.
 6. **Desktop:** record the silencing state, silence notifications, move to
-   an empty workspace on one monitor, and open `foot` → verify with a
-   screenshot: only `foot`, no notification.
-7. **Allow-list:** run `gh repo view <repo> --json visibility` for each
-   `nixarchy` repository, and for the one public repository chosen for the
-   pull-request still → verify that each is `PUBLIC`, and that at least one
-   `nixarchy` repository has a running workflow. If none does, wait; never
-   re-run anything.
+   an empty workspace on one monitor, and open `foot` → verify with an
+   ai-mirror screenshot that only `foot` is there and no notification
+   shows.
+7. **Readiness 4:** open the panel with Super+Alt+A, press `p`, then `p`
+   again → verify through `status()` that `view` was `prs` and is now
+   `repos`, and that `textStep` is 0. If `textStep` is not 0, press
+   Ctrl+0 and check again. If anything else fails, stop.
 
-### C. Takes (lead, under control)
+### C. Takes (under control)
 
-8. **Stills (list, steps, search):** `grim` the card region of each, then
-   convert to WebP at native size → verify that three files are in
-   `$SCRATCH/shots/` and the card fills each.
-9. **GIF:** check that `status().view` is `repos`, then take the
-   `wf-recorder` region recording of the Framing sequence. Trim, crop and
-   encode with ffmpeg palettegen/paletteuse at #20's settings → verify the
-   size with `stat -c %s`.
-10. **GIF budget:** if it is over about 1,050,000 bytes, lower the fps, then
-    the colours, then the width, re-encoding from the same recording each
-    time → verify that it is at most about 1,050,000 bytes and readable by
-    eye. Otherwise record the size and ask in the PR.
-11. **Keybindings sheet:** open it with Super+Ctrl+Alt+A and capture it with
-    #20's crop. Run `magick compare -metric AE -fuzz 5%` against the decoded
-    current file at the same size → verify that the AE count and the eye
-    check agree, then record "unchanged" or "changed".
-12. **Pull-request still,** last, with no recording running:
-    1. Press `p` and search the chosen full `owner/name`.
-    2. Expand one pull request.
-    3. Check every visible row by its full repository name, title, branch
-       and check names (see the decision above). Then `grim` the card and
-       convert it to WebP.
-    4. Press `p` to go back.
-
-    → verify that `status().view` is `repos`, and that the still exists or
-    a skip reason is recorded.
+8. **Stills:** take list, steps and search, as in Framing → verify that
+   three WebP files are in `$SCRATCH/shots/`, each 900 px wide and filling
+   with the card. Compare their text size by eye with the old
+   `docs/img/` files; the new ones should be smaller, at the theme size.
+9. **GIF recording:** `status().view` must be `repos` and no recording may
+   be running. Record the Framing sequence, then trim and crop it → verify
+   that the recording file exists and covers the whole sequence.
+10. **GIF encode:** encode, and apply the budget rules → verify with
+    `stat -c %s` that it is at most about 1,050,000 bytes, or record the
+    size for the owner. Check that the text is readable and theme-sized by
+    eye, compared with the old GIF.
+11. **Keybindings sheet:** Super+Ctrl+Alt+A, capture at 1000 px, then close
+    it → verify that the AE number is recorded, keys and layout are judged
+    by eye, and the decision is "unchanged" or "changed".
+12. **Pull-request still:** follow the decision steps exactly, with no
+    recording running. Before `grim`, check that the expanded pull
+    request's checks are visible → verify that `github-actions-prs.webp` is
+    in `$SCRATCH/shots/` or a skip reason is recorded, and that
+    `status().view` is `repos` on both paths.
 
 ### D. Privacy gate
 
-13. **Gate:** run `tesseract` on each still and on GIF frames every 0.5 s,
-    extract every `owner/name`, and diff them against the step 7
-    allow-list. Check every file by eye; for the pull-request still that
-    includes titles, branches and check names → verify that the diff is
-    empty and the eye check passes. A file that fails goes back to its
-    step and is not committed.
+13. **Gate:** run the allow-list check on every file → verify that each
+    has zero names outside the allow-list, passes the eye check, and shows
+    no calendar, task or notification text. A failing file is retaken:
+    steps 8 to 11, then step 12 again. Otherwise it is dropped. If the
+    pull-request still fails, skip it and record why.
 
 ### E. Restore razer
 
-14. **Restore:**
+14. **Restore** (control still held):
+    - close the panel if it is open (Super+Alt+A), first checking that
+      `view` is `repos`;
     - close `foot`;
     - set silencing back to the step 6 state;
-    - leave the panel in the repositories view;
-    - run `razer.sh ai-mirror control off`;
-    - then post `done: razer desktop free (#25)` on `#agents`.
+    - run `razer.sh ai-mirror control off`.
 
     → verify that `owner: off`, silencing matches step 6, `status().view`
-    is `repos`, the plugin link and `.bak-0.4.0` are unchanged, and the
-    post appears.
+    is `repos` with the panel closed, and the plugin link from check 2 is
+    unchanged.
+15. **Release:** only after step 14 is verified, post
+    `done: razer desktop free (#25)` on `#agents` → verify that the post
+    appears.
 
 ### F. Publish
 
-15. **Images:** copy the files that passed into `docs/img/`. Fix the README
+16. **README entry** (agy; only if `github-actions-prs.webp` passed): add it
+    after the Screenshots table (`README.md` lines 11-13) and before the
+    keybindings line (line 15). Use descriptive alt text and a one-line
+    caption in the style of lines 15-17, written from the image and the
+    rows verified in step 12 → verify that the image path exists locally
+    and the Markdown is well formed.
+17. **Images:** copy the files that passed into `docs/img/`. Fix existing
     alt text only if it is wrong → verify that `git status` shows only
-    `docs/img/*` and possibly `README.md`.
-16. **README entry** (agy): only if `github-actions-prs.webp` passed, add it
-    under the Screenshots table, with descriptive alt text and a one-line
-    caption, as the keybindings sheet is shown (`README.md` lines 13-17)
-    → verify that the image path exists and the Markdown renders in the PR
-    view.
-17. **Commit:** commit `docs: retake screenshots at theme text size (#25)`,
-    push, and open a PR. The PR links the intent, spec and plan, and states
-    the GIF size, the keys result from step 11, the gate result from step
-    13, and whether the pull-request still was taken → verify that the
-    image commit's `git diff --stat` shows only `docs/img/*` and the README,
-    and that CI passes. The PR is not merged without the owner.
+    `docs/img/*` and, only for those two reasons, `README.md`.
+18. **Commit and PR:**
+    1. Run the Tests below.
+    2. Commit `docs: retake screenshots at theme text size (#25)` and
+       push.
+    3. Open a PR that links the intent, spec and plan, and states:
+       - the GIF size;
+       - the keybindings AE number and decision;
+       - the gate result per file;
+       - whether the pull-request still was taken, or why it was skipped.
+
+    → verify that the image commit's `git diff --stat` shows only
+    `docs/img/*` and the allowed README change, CI passes, and every image
+    renders in the PR's README view. The PR is not merged without the
+    owner.
 
 ## Tests
 
-There are no code changes. The existing suites only confirm that nothing
-moved:
+There are no code changes. The suites only confirm that nothing moved:
 
 ```sh
 python3 -m unittest discover -s tests
 node tests/model.cjs && node tests/polling.cjs && node tests/bar.cjs
 nix flake check
-stat -c %s docs/img/github-actions.gif  # <= ~1050000
+stat -c %s docs/img/github-actions.gif  # <= ~1050000, or the owner accepted the recorded size
 ```
 
-Also: the empty OCR allow-list diff (step 13) and the `compare` result
-(step 11).
+Also: zero names outside the allow-list per file (step 13), the
+keybindings decision (step 11), and the text-size comparisons by eye
+(steps 8 and 10).
 
 ## Rollback
 
 - **Images:** revert the docs commit, or don't merge the PR.
-- **razer:**
-  - run `ai-mirror control off` (or press Super+Shift+Esc);
-  - set silencing back to the recorded state;
-  - close `foot`;
-  - press `p` if the panel is left on pull requests;
-  - post "done" on the bus even if the capture was abandoned.
+- **razer**, in this order:
+  1. If control is still held, check that the panel is on repositories,
+     pressing `p` if it shows pull requests, then close the panel and
+     `foot`.
+  2. Set silencing back to the recorded state.
+  3. Run `ai-mirror control off` (or press Super+Shift+Esc).
+  4. Post "done" on the bus, even if the capture was abandoned.
 
-  The plugin link and the `.bak-0.4.0` checkout are never touched.
+  If control was lost before step 1, tell the owner that the panel may be
+  left on pull requests. One `p` on razer fixes it. The plugin link and
+  the `.bak-0.4.0` checkout are never touched.
