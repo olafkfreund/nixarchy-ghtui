@@ -47,12 +47,39 @@ run={'id':7,'name':'CI','status':'in_progress','run_attempt':1,'head_branch':'ma
      'head_sha':'0123456789abcdef0123456789abcdef01234567','event':'push','actor':'octo','triggering_login':'octo','path':'.github/workflows/ci.yml'}
 started=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(time.time()-5))
 runs=[run] if not os.environ.get('FAKE_RUNS') else [dict(run,id=i,run_number=i,run_started_at=started,html_url='https://github.com/one/repo/actions/runs/%d'%i) for i in range(7,7+int(os.environ['FAKE_RUNS']))]
+error=''; error_type=''; resource='rest'; remaining=4000; reset_at=0
 if kind=='catalogue': data=[{'repo':'one/repo'},{'repo':'two/repo'}]
 elif kind=='jobs': data=[{'id':8,'name':'build','status':'in_progress','html_url':'https://github.com/one/repo/actions/runs/7/job/8','steps':[{'number':1,'name':'Checkout','status':'completed','conclusion':'success'}]}]
+elif kind=='prs':
+    resource='graphql'; remaining=4500; reset_at=int(time.time()*1000)+3600000
+    login=open(os.environ['HOME']+'/account-login').read() if os.path.exists(os.environ['HOME']+'/account-login') else 'tester'
+    if login!='tester': time.sleep(0.6)  # Let the 250 ms feature timer inspect the cleared state before this reply.
+    if login=='tester':
+        data={'list':[
+            {'repo':'one/repo','number':101,'title':'Feature','branch':'feature','draft':False,'url':'https://github.com/one/repo/pull/101','sha':'a'*40,
+             'checks':{'state':'pending','total':3,'items':[
+                 {'name':'CI 9001','status':'completed','conclusion':'success','url':'https://github.com/one/repo/actions/runs/9001','repo':'one/repo','run':'9001'},
+                 {'name':'CI 9002','status':'completed','conclusion':'failure','url':'https://github.com/one/repo/actions/runs/9002','repo':'one/repo','run':'9002'},
+                 {'name':'External','status':'pending','conclusion':'','url':'https://example.com/check','repo':'','run':''}]}},
+            {'repo':'two/repo','number':102,'title':'Draft work','branch':'draft','draft':True,'url':'https://github.com/two/repo/pull/102','sha':'b'*40,'checks':{'state':'none'}}],
+              'total':2,'partial':False}
+    else:
+        data={'list':[{'repo':'one/repo','number':201,'title':'Other login','branch':'other','draft':False,'url':'https://github.com/one/repo/pull/201','sha':'c'*40,'checks':{'state':'none'}}], 'total':1,'partial':False}
+elif kind=='run' and request.get('run')=='9002':
+    data=None; error='Run unavailable'; error_type='permission'
+elif kind=='run' and request.get('run')=='9001':
+    data=dict(run,id=9001,run_number=9001,html_url='https://github.com/one/repo/actions/runs/9001',status='completed',conclusion='success')
 elif kind=='run': data=dict(run,status='completed',conclusion='success') if os.path.exists(os.environ['HOME']+'/run-done') else runs[0]
-elif kind=='account': data={'login':'tester'}
+elif kind=='account':
+    path=os.environ['HOME']+'/account-count'
+    count=int(open(path).read())+1 if os.path.exists(path) else 1
+    open(path,'w').write(str(count))
+    login='other' if count>=5 else 'tester'
+    open(os.environ['HOME']+'/account-login','w').write(login)
+    data={'login':login}
 else: data=runs if request['repo']=='one/repo' and request.get('status','in_progress') in ('recent','in_progress') else []
-reply=json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':'','errorType':'','remaining':4000,'padding':'x'*200000}).encode()+b'\\n'
+reply=json.dumps({'requestId':request['requestId'],'data':data,'nextPage':0,'error':error,'errorType':error_type,
+                  'resource':resource,'remaining':remaining,'resetAt':reset_at,'padding':'x'*200000}).encode()+b'\\n'
 for i in range(0,len(reply),4096): os.write(1,reply[i:i+4096])
 os._exit(0)
 '''
@@ -144,6 +171,19 @@ ShellRoot {
         panel.adopt()
     }
     FileView { id: launchFile; path: Quickshell.env("HOME") + "/omarchy-launch-tui.log"; printErrors: false }
+    FileView { id: requestLog; path: Quickshell.env("FAKE_LOG"); printErrors: false }
+    function requested(run) {
+        requestLog.reload()
+        return requestLog.text().split("\\n").some(function(line) {
+            try { var entry=JSON.parse(line); return entry.kind==="run" && entry.run===run } catch (e) { return false }
+        })
+    }
+    function switchTo(target) {
+        var saved=panel.viewState[target]
+        panel.switchView(target,saved.filter,saved.key)
+        panel.selectionChanged(true)
+        panel.pump()
+    }
     function notified() { notifyFile.reload(); return notifyFile.text().split("\\n").length > 3 }
     FileView { id: notifyFile; path: Quickshell.env("HOME") + "/notify-send.log"; printErrors: false }
     property bool flagReady: false
@@ -571,6 +611,66 @@ ShellRoot {
                 stage=12
             } else if(stage===12 && Date.now()-closedAt>1200) {
                 check(panel.polling.requests===closedRequests,"polling stops once nothing is watched")
+                panel.open()
+                check(JSON.parse(panel.status()).view==="repos" && JSON.parse(panel.status()).prs===-1,"reopen starts in repositories before login")
+                stage=30
+            } else if(stage===30 && panel.polling.accountVerified && !panel.workerBusy) {
+                at("one/repo:7")
+                panel.filterText="repo"
+                var repoKey=panel.current.key
+                switchTo("prs")
+                check(panel.view==="prs" && !panel.detail && panel.polling.selected==="","switch to pull requests clears repository selection")
+                stage=31
+            } else if(stage===31 && panel.polling.prs.list && panel.polling.prs.list.length===2) {
+                var prState=JSON.parse(panel.status())
+                check(prState.view==="prs" && prState.prs===2 && panel.titleText.indexOf("Pull requests")===0 && panel.titleText.indexOf("tester")>0,"pull request header and status")
+                check(panel.statusInfo.quota.indexOf("GraphQL points")>0,"GraphQL quota shown")
+                panel.filterText="Feature"
+                at("pr:one/repo#101")
+                switchTo("repos")
+                check(panel.filterText==="repo" && panel.current.key==="one/repo:7","repository filter and key restored")
+                panel.detail=true
+                switchTo("prs")
+                check(!panel.detail && panel.filterText==="Feature" && panel.current.key==="pr:one/repo#101","pull request filter and key restored; details closed")
+                panel.filterText="p"
+                check(panel.filterText==="p" && panel.view==="prs","p in search remains text")
+                panel.filterText=""
+                at("pr:one/repo#101")
+                panel.expand(false)
+                at("pr:one/repo#101:2:External")
+                panel.expand(false)
+                check(panel.notice==="Not an Actions check","non-Actions check cannot jump")
+                panel.openBrowser()
+                check(panel.notice.indexOf("Link is not on github.com")===0,"external check link is refused")
+                at("pr:one/repo#101:0:CI 9001")
+                panel.expand(false)
+                check(panel.view==="repos" && panel.jumpKey==="one/repo:9001","Actions check starts jump")
+                stage=32
+            } else if(stage===32 && requested("9001") && panel.jumpKey==="" && panel.current && panel.current.key==="one/repo:9001") {
+                panel.listView.forceLayout()
+                var item=panel.itemAt(panel.cursor)
+                check(item && item.y>=panel.listView.contentY && item.y<panel.listView.contentY+panel.listView.height,"jumped run is visible")
+                switchTo("prs")
+                at("pr:one/repo#101:1:CI 9002")
+                panel.enter()
+                check(panel.jumpKey==="one/repo:9002","second Actions check starts jump")
+                stage=33
+            } else if(stage===33 && requested("9002") && panel.jumpKey==="" && panel.notice==="Run unavailable") {
+                switchTo("prs")
+                panel.filterText="Feature"
+                check(panel.entries.some(function(row) { return row.key==="pr:one/repo#101" }),"old login rows present before reopen")
+                panel.close()
+                panel.open()
+                panel.jumpKey="old:9001"
+                check(panel.view==="prs" && JSON.parse(panel.status()).prs===-1,"reopen retains pull request view but hides cached rows")
+                stage=34
+            } else if(stage===34 && panel.polling.accountVerified && panel.polling.account==="other" && panel.polling.prs.list===null) {
+                check(panel.filterText==="" && panel.jumpKey==="" && panel.entries.length===0,"account change clears filter, jump and old rows before refresh")
+                check(panel.viewState.repos.filter==="" && panel.viewState.prs.filter==="","account change clears both saved views")
+                check(JSON.parse(panel.status()).prs===-1,"new login is loading")
+                stage=35
+            } else if(stage===35 && panel.polling.prs.list && panel.polling.prs.list.length===1) {
+                check(panel.view==="prs" && panel.current.key==="pr:one/repo#201" && JSON.parse(panel.status()).prs===1,"new login rows replace old rows in same view")
                 stage=3
             } else if(stage===3 && !panel.workerBusy) {
                 console.log("QML_CHECKS_PASSED")
@@ -614,6 +714,7 @@ ShellRoot {
             }
             var state = Object.assign(JSON.parse(panel.status()), {
                 cursor: panel.cursor, info: panel.current ? panel.current.info : "",
+                notice: panel.notice, title: panel.titleText, quota: panel.statusInfo.quota,
                 auth: panel.polling.auth, layout: JSON.parse(panel.layout()),
                 stubBackground: Commons.Color.background.toString()
             })
@@ -957,7 +1058,7 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
 
             # --- Run 1: programmatic feature checks ---
             (root / 'shell.qml').write_text(FEATURES_QML)
-            env = {**base_env, **menu_path_env, 'EXPECTED_BACKGROUND': STUB_BACKGROUND,
+            env = {**base_env, **menu_path_env, 'EXPECTED_BACKGROUND': STUB_BACKGROUND, 'FAKE_LOG': str(root / 'fake.log'),
                    'PATH': str(bin_dir) + (os.pathsep + base_env['PATH'] if scenario == 'fresh' else '')}
             try:
                 result = subprocess.run([QUICKSHELL, '-p', str(root), '--no-color'], capture_output=True, text=True,
@@ -1057,6 +1158,9 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                 one, two = 'repo:one/repo', 'repo:two/repo'
                 sel = lambda key: lambda p, s: s['selected'] == key
                 steps = [
+                    ('p to pull requests', K('p'), lambda p, s: s['view'] == 'prs' and s['prs'] >= 0 and s['title'].startswith('Pull requests') and 'GraphQL points' in s['quota'], 2200),
+                    ('v in pull requests', K('v'), lambda p, s: s['notice'] == 'Not available on pull requests', 300),
+                    ('p back to repositories', K('p'), lambda p, s: s['view'] == 'repos' and s['selected'] == one, 400),
                     ('readiness: probe j', K('j'), lambda p, s: s['cursor'] == 1 and s['selected'] == two, 500),
                     ('readiness: probe k', K('k'), lambda p, s: s['cursor'] == 0 and s['selected'] == one, 2000),
                     # r and R change no state line by themselves; the request log checks them after the run.
@@ -1071,11 +1175,16 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     ('Return', K('Return'), lambda p, s: s['rows'] > 2 and s['selected'] == one, 500),
                     ('Left again', K('Left'), lambda p, s: s['rows'] == 2, 500),
                     ('/', K('slash'), lambda p, s: s['editing'], 400),
+                    ('p in search', K('p'), lambda p, s: s['editing'] and s['filter'] == 'p' and s['view'] == 'repos', 300),
+                    ('clear search p', K('BackSpace'), lambda p, s: s['editing'] and s['filter'] == '', 300),
                     ('type one', K('o', 'n', 'e'), lambda p, s: s['filter'] == 'one' and s['editing'], 400),
                     ('Escape in search', K('Escape'), lambda p, s: s['filter'] == '' and not s['editing'] and s['opened'], 400),
                     ('/ one Return', K('slash', 'o', 'n', 'e', 'Return'),
                      lambda p, s: s['filter'] == 'one' and not s['editing'] and s['rows'] > 1, 500),
                     ('i', K('i'), lambda p, s: s['layout']['pane'] is not None and s['filter'] == 'one', 500),
+                    ('p closes details', K('p'), lambda p, s: s['view'] == 'prs' and s['layout']['pane'] is None, 500),
+                    ('p restores filtered repositories', K('p'), lambda p, s: s['view'] == 'repos' and s['filter'] == 'one', 500),
+                    ('i again', K('i'), lambda p, s: s['layout']['pane'] is not None, 500),
                     ('Escape closes the pane first', K('Escape'),
                      lambda p, s: s['layout']['pane'] is None and s['filter'] == 'one' and s['opened'], 500),
                     ('Escape with filter', K('Escape'), lambda p, s: s['filter'] == '' and s['opened'] and s['rows'] > 2, 500),
@@ -1102,6 +1211,9 @@ if test "$(wc -l < "$HOME/wl-copy.log")" -eq 1; then exit 0; else exit 3; fi
                     # Keep it the only text argument: wtype prefixes later text arguments with a space.
                     ('G', ['G'], lambda p, s: s['cursor'] == s['rows'] - 1, 400),
                     ('j to run', K('g', 'j'), lambda p, s: s['cursor'] == 1 and s['selected'].startswith('one/repo:'), 400),
+                    ('c asks to cancel', K('c'), lambda p, s: s['confirm'] is not None, 300),
+                    ('p during confirmation', K('p'), lambda p, s: s['confirm'] is not None and s['view'] == 'repos', 300),
+                    ('n dismisses confirmation', K('n'), lambda p, s: s['confirm'] is None, 300),
                     ('Return on run', K('Return'), lambda p, s: s['rows'] > p['rows'] and s['selected'] == p['selected'], 4500),
                     ('Escape closes', K('Escape'), lambda p, s: not s['opened'], 2000),
                 ]
